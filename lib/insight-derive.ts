@@ -90,19 +90,47 @@ export function bucketEducation(text: string | null): string | null {
 //    "Internal Communications Specialist"）—— 旧规则是靠 Internal 碰巧算对的，现在落 unknown。
 const INTERN_RE = /实习|\bintern(?:ship)?s?\b/;
 
-// 只看 job_type + 标题的关键词：实习 → 校招/应届 → 社招；都不命中 = unknown（不臆测）。
+// 关键词判法：只看 job_type + 标题，实习 → 校招/应届 → 社招；都不命中 = unknown（不臆测）。
+// 只给 recruitBucket 当「列还没算出来」时的退路用，三桶的正主是岗位库那一列。
 // 📌 纠错（2026-10-11）：此处原写「与 crawler/normalizer.py 三桶同口径」，不成立。normalizer 里没有三桶函数
-//    （extract_job_type 判的是细分类型）；岗位库的三桶是 china-keyword-expansion 的 recruitmentCategory，
-//    结果物化在 jobs.recruitment_category（还看经验年限、url 渠道，判不出默认社招）。同日全库对拍：
-//    这里判校招而列判社招 2,205 岗（比亚迪 1,587：job_type 写校招、正文写着 N 年经验）；
-//    这里 unknown 而列判校招 23,878 岗（23,023 岗靠校招门户 url，这里看不到 url）。
-//    夜间物化的同名指标（crawler/bu_signals.py 的 bucket_share）直接读那一列，与这里不是一个口径。
+//    （extract_job_type 判的是细分类型）；岗位库的三桶是 china-keyword-expansion 的 recruitmentCategory。
 export function classifyRecruitment(jobType: string | null, title: string | null): RecruitBucket {
   const t = `${jobType || ""} ${title || ""}`.toLowerCase();
   if (INTERN_RE.test(t)) return "intern";
   if (/校招|校园招聘|应届|campus|graduate|new\s?grad/.test(t)) return "campus";
   if (/社招|社会招聘|experienced|professional/.test(t)) return "social";
   return "unknown";
+}
+
+// 抽屉里的招聘类型三桶：认岗位库物化的那一列（jobs.recruitment_category，七层判定，还看经验年限、url 渠道）。
+//   · 列判校招 / 实习 → 照列；
+//   · 列判社招且有依据（recruitment_explicit = true）→ 社招；
+//   · 列判社招但只是兜底（没有任何标记、默认社招）→ unknown，不进占比的分母（2026-10-11 创始人选定）；
+//   · 列为空（刚入库 / 依据变了等重算；或走 Supabase 兜底表，那张表没有这两列）→ 退回关键词判法。
+//
+// ❌ 此前占比与招聘节奏直接用关键词判法。2026-10-11 全库 441,123 个在招岗（在招 ≥3 的公司 1,450 家）对拍，
+//    关键词判法 × 列：判不出而列判校招 23,606（大多靠校招门户 url，这里取不到 url）、列判实习 204、
+//    列判有依据的社招 116,351；判校招而列判社招 2,221；判实习而列判社招 38（实习频道里挂的蓝领社招岗）。
+//    后果：137 家没有「类型」这一行，470 家的百分比是按不到一半的在招岗算的，103 家只写「实习 100%」
+//    （岚图 1,389 个在招岗里判得出 2 个，写的是「校招 50%·实习 50%」）。
+//    改后「类型」行会变的 700 家（新出现 131 / 文字变 569 / 消失 0）：社招占比升 475 家降 50 家、
+//    校招升 154 降 318、实习升 9 降 360；「招聘节奏」那句话变 546 家（新出现 203 / 文字变 343）。
+// ⚠️ 比亚迪从「校招 100%」变成「社招 99%·校招 1%」：它有 1,587 个岗来源标校招、链接在社招门户、正文写
+//    「应届硕士生 / 本科 2 年 / 大专 3 年以上相关工作经验」，列按经验门判了社招。这类岗算不算校招归分类器定，这里跟列走。
+// ⚠️ 「有依据」是岗位库的定义（来源填了 job_type 就算，哪怕填的是职能），不等于「写明了招聘类型」：
+//    同日快照里有依据的社招 254,367 个，其中 60,026 个是这种。兜底社招 73,943 个全部没有 job_type，集中在
+//    外企 ATS（Target 4,105 个在招岗里 3,603 个是兜底）—— 这些公司的占比只在剩下的岗里算，实习 / 校招偏高。
+//    改后仍有 6 家没有这一行、140 家按不到一半的在招岗算。
+// ⚠️ 夜间物化的同名指标（crawler/bu_signals.py 的 bucket_share，洞察库用）读同一列，但兜底社招也算社招：
+//    同一家公司两处的数字可以不同（同日 89 家差 10 个百分点以上、25 家占比最高的类别不同）。
+//    要统一得两边一起定，别只改一边。
+export function recruitBucket(
+  jb: Pick<Job, "job_type" | "title" | "recruitment_category" | "recruitment_explicit">,
+): RecruitBucket {
+  if (jb.recruitment_category === "校招") return "campus";
+  if (jb.recruitment_category === "实习") return "intern";
+  if (jb.recruitment_category === "社招") return jb.recruitment_explicit === true ? "social" : "unknown";
+  return classifyRecruitment(jb.job_type, jb.title);
 }
 
 // 解析岗位薪资文本为「月薪 K」区间。仅解析明示区间（k/千 或 4–6 位元）；
@@ -226,7 +254,7 @@ export function deriveTiming(jobs: Job[], nowIso: string): InsightItemView | nul
     campus: [], intern: [], social: [],
   };
   for (const jb of dated) {
-    const b = classifyRecruitment(jb.job_type, jb.title);
+    const b = recruitBucket(jb);
     if (b === "unknown") continue;
     const mo = monthOf(jb.posted_at || jb.first_seen_at);
     if (mo) byBucket[b].push(mo);
@@ -388,7 +416,7 @@ export function deriveHiring(
     3,
   );
   const mix = { campus: 0, intern: 0, social: 0, unknown: 0 };
-  for (const jb of active) mix[classifyRecruitment(jb.job_type, jb.title)]++;
+  for (const jb of active) mix[recruitBucket(jb)]++;
   // 趋势只接受外部注入的快照派生值；本函数手里只有「当前 active」，算不出无偏趋势（见上方 F4 注释）。
   const trend = typeof opts.trendPct === "number" ? opts.trendPct : null;
   const signal = classifyHiringSignal(active.length, trend, opts.headcountBand);
@@ -418,7 +446,7 @@ export function deriveHiring(
       ? Object.fromEntries(topN(eduBuckets, 5).map(({ key, count }) => [key, count]))
       : undefined;
 
-  // 校招/实习/社招占比（仅含非 unknown 的桶，避免「unknown=40%」误导）
+  // 校招/实习/社招占比（仅含非 unknown 的桶，避免「unknown=40%」误导；unknown = 兜底社招，见 recruitBucket）
   const knownTotal = mix.campus + mix.intern + mix.social;
   const bucket_share: Record<string, number> | undefined =
     knownTotal > 0

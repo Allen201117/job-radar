@@ -129,6 +129,111 @@ test("deriveHiring：标题里的 Internal / International 不得进「实习」
   assert.equal(v.payload.bucket_share.social, 100);
 });
 
+// ── 三桶认岗位库那一列（2026-10-11 创始人选定：兜底社招不计入） ──────────────────────────────
+// 列的两个字段：recruitment_category（社招 / 校招 / 实习，没算出来是 null）、recruitment_explicit（有没有明确依据）。
+const col = (cat, explicit, over = {}) => j({ recruitment_category: cat, recruitment_explicit: explicit, ...over });
+
+test("recruitBucket：列判校招 / 实习就照列，哪怕 job_type 和标题里一个关键词都没有", () => {
+  // 靠校招门户 url 判出来的校招：读时派生取不到 url，关键词判法只能给 unknown
+  const campus = col("校招", true, { job_type: null, title: "硬件工程师" });
+  assert.equal(D.classifyRecruitment(campus.job_type, campus.title), "unknown");
+  assert.equal(D.recruitBucket(campus), "campus");
+  // 按来源频道标注的实习
+  assert.equal(D.recruitBucket(col("实习", true, { job_type: "市场营销类", title: "海外电商运营" })), "intern");
+});
+
+test("recruitBucket：列判社招且有依据 → 社招，来源把它标成校招 / 实习也不改", () => {
+  // 来源标校招、正文写了年限，岗位库的经验门判成社招
+  const labelled = col("社招", true, { job_type: "校招", title: "高级机械工程师" });
+  assert.equal(D.classifyRecruitment(labelled.job_type, labelled.title), "campus");
+  assert.equal(D.recruitBucket(labelled), "social");
+  // 实习频道里挂的蓝领社招岗
+  assert.equal(D.recruitBucket(col("社招", true, { job_type: "操作职系 实习", title: "电工" })), "social");
+  // job_type 填的是职能：没有任何关键词，但列有依据
+  assert.equal(D.recruitBucket(col("社招", true, { job_type: "直营事业部", title: "销售顾问" })), "social");
+});
+
+test("recruitBucket：兜底社招（列判社招但没有依据）记 unknown，不回头看关键词", () => {
+  assert.equal(D.recruitBucket(col("社招", false, { job_type: null, title: "Store Team Member" })), "unknown");
+  // 标题里有 Graduate / Professional 这类关键词也一样：列已经判过，这里不再另判一遍
+  assert.equal(D.recruitBucket(col("社招", false, { job_type: null, title: "Graduate Analyst 2027" })), "unknown");
+  assert.equal(D.recruitBucket(col("社招", false, { job_type: null, title: "Professional Services Lead" })), "unknown");
+  // 只认明确的 true：依据那一列缺失 / 为 null 时不当成有依据
+  assert.equal(D.recruitBucket(col("社招", null, { job_type: null, title: "销售顾问" })), "unknown");
+  assert.equal(D.recruitBucket(j({ recruitment_category: "社招", job_type: null, title: "销售顾问" })), "unknown");
+});
+
+test("recruitBucket：列还没算出来（null / 没取到 / 值域外）退回关键词判法", () => {
+  for (const cat of [null, undefined, "", "全职"]) {
+    assert.equal(D.recruitBucket(col(cat, null, { job_type: null, title: "数据分析实习生" })), "intern", String(cat));
+    assert.equal(D.recruitBucket(col(cat, null, { job_type: "校园招聘", title: "后端工程师" })), "campus", String(cat));
+    assert.equal(D.recruitBucket(col(cat, null, { job_type: "社招", title: "后端工程师" })), "social", String(cat));
+    assert.equal(D.recruitBucket(col(cat, null, { job_type: null, title: "资深产品经理" })), "unknown", String(cat));
+    // 退路里的整词规则照旧
+    assert.equal(D.recruitBucket(col(cat, null, { job_type: null, title: "International Legal Counsel" })), "unknown", String(cat));
+  }
+});
+
+test("deriveHiring：占比只在「列判得出」的岗里算，兜底社招不进分母", () => {
+  const jobs = [
+    ...Array.from({ length: 2 }, () => col("校招", true, { job_type: null, title: "硬件工程师" })),
+    ...Array.from({ length: 6 }, () => col("社招", true, { job_type: "直营事业部", title: "销售顾问" })),
+    ...Array.from({ length: 12 }, () => col("社招", false, { job_type: null, title: "Store Team Member" })),
+  ];
+  const v = D.deriveHiring(jobs, NOW_ISO);
+  assert.deepEqual(v.payload.mix, { campus: 2, intern: 0, social: 6, unknown: 12 });
+  assert.deepEqual(v.payload.bucket_share, { campus: 25, intern: 0, social: 75 });
+  // 在招总数不受影响：兜底社招照样是在招岗
+  assert.equal(v.payload.active_count, 20);
+});
+
+test("deriveHiring：来源整批标成校招、列判社招的公司，不再写成「校招 100%」", () => {
+  const jobs = [
+    ...Array.from({ length: 9 }, () => col("社招", true, { job_type: "校招", title: "高级电气工程师" })),
+    col("校招", true, { job_type: "校招", title: "2027届校园招聘-研发" }),
+  ];
+  const v = D.deriveHiring(jobs, NOW_ISO);
+  assert.deepEqual(v.payload.bucket_share, { campus: 10, intern: 0, social: 90 });
+});
+
+test("deriveHiring：全是兜底社招时不输出占比（没有一个岗判得出）", () => {
+  const jobs = Array.from({ length: 5 }, () => col("社招", false, { job_type: null, title: "Store Team Member" }));
+  const v = D.deriveHiring(jobs, NOW_ISO);
+  assert.equal(v.payload.mix.unknown, 5);
+  assert.equal(v.payload.bucket_share, undefined);
+});
+
+test("deriveTiming 与占比用同一个三桶：认列，兜底社招的月份不算", () => {
+  const months = ["01", "02", "03", "04", "05", "06", "07", "08"];
+  const jobs = [
+    // 列判校招、关键词判不出
+    ...["09", "09", "09", "10"].map((m) => col("校招", true, { job_type: null, title: "硬件工程师", posted_at: `2026-${m}-05T00:00:00Z` })),
+    // 兜底社招铺满 8 个月：要是算进去就是「社招全年滚动」
+    ...months.map((m) => col("社招", false, { job_type: null, title: "Store Team Member", posted_at: `2026-${m}-05T00:00:00Z` })),
+  ];
+  const v = D.deriveTiming(jobs, NOW_ISO);
+  assert.match(v.content, /校招集中在 9、10 月/);
+  assert.doesNotMatch(v.content, /社招/);
+  // 换成有依据的社招，同样的月份就该出「全年滚动」
+  const explicit = jobs.map((jb) => (jb.recruitment_explicit === false ? { ...jb, recruitment_explicit: true } : jb));
+  assert.match(D.deriveTiming(explicit, NOW_ISO).content, /社招全年滚动/);
+});
+
+test("占比与招聘节奏都经 recruitBucket，没有哪一处还直接用关键词判法", () => {
+  const src = fs.readFileSync(DERIVE_PATH, "utf8");
+  const body = (name) => {
+    const start = src.indexOf(`export function ${name}(`);
+    assert.ok(start >= 0, "找不到 " + name);
+    return src.slice(start, src.indexOf("\n}\n", start));
+  };
+  for (const name of ["deriveHiring", "deriveTiming"]) {
+    assert.match(body(name), /recruitBucket\(jb\)/, name);
+    assert.equal(body(name).includes("classifyRecruitment("), false, name + " 里还在直接调关键词判法");
+  }
+  // 关键词判法只剩 recruitBucket 这一个调用方（定义 1 处 + 调用 1 处）
+  assert.equal(src.match(/classifyRecruitment\(/g).length, 2);
+});
+
 test("parseSalaryText 只解析明示月薪区间；歧义/无值返回 null", () => {
   assert.deepEqual(D.parseSalaryText("15-30K"), { minK: 15, maxK: 30 });
   assert.deepEqual(D.parseSalaryText("15k-30k"), { minK: 15, maxK: 30 });

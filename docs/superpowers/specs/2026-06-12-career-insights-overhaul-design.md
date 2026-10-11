@@ -81,7 +81,7 @@
 ### 4.1 数据源（已具备，见 §1 schema 核对）
 `jobs` 表每行带：`company / title / location / job_type / salary_text / posted_at / first_seen_at / last_seen_at / status`。`job_type` 经 `crawler/normalizer.py` 可归一为三桶（校招 / 实习 / 社招，与前端 `recruitmentCategory` 同口径）。
 
-> 📌 更正（2026-10-11）：上面「经 normalizer 归一为三桶、与 recruitmentCategory 同口径」落地时没有做到——`lib/insight-derive.ts` 的 `classifyRecruitment` 是只看 job_type + 标题关键词的独立实现；岗位库的三桶物化在 `jobs.recruitment_category`。两者的差距与数字见 `classifyRecruitment` 上方的注释。
+> 📌 更正（2026-10-11）：上面「经 normalizer 归一为三桶、与 recruitmentCategory 同口径」落地时没有做到——`lib/insight-derive.ts` 的 `classifyRecruitment` 是只看 job_type + 标题关键词的独立实现；岗位库的三桶物化在 `jobs.recruitment_category`。同日已改：占比与招聘节奏的三桶改认 `jobs.recruitment_category`（`recruitBucket`），其中「兜底社招」（列判社招但没有依据）不计入占比，列还没算出来才退回关键词；差距与数字见 `recruitBucket` 上方的注释。
 
 ### 4.2 派生维度（纯函数 `lib/insight-derive.ts`，仿 `lib/scoring.ts` 风格，可单测）
 
