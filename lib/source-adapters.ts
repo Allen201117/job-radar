@@ -52,6 +52,7 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
   { value: "jd_campus", label: "京东 校招 / 实习（campus.jd.com）", origin: "domestic" },
   { value: "bytedance", label: "字节跳动", origin: "domestic" },
   { value: "bytedance_campus", label: "字节跳动 校招 / 实习", origin: "domestic" },
+  { value: "bytedance_global", label: "字节跳动 全球站（joinbytedance.com）", origin: "domestic" },
   { value: "nio_feishu", label: "蔚来（飞书系）", origin: "domestic" },
   { value: "xpeng_feishu", label: "小鹏（飞书系）", origin: "domestic" },
   { value: "horizon_feishu", label: "地平线（飞书系）", origin: "domestic" },

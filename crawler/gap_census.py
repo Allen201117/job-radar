@@ -99,6 +99,14 @@ def _matches(value, patterns):
     return False
 
 
+class OwnerIndex(list):
+    """`build_owner_index` 的返回值：[(token, 清单规范名)] + `.excludes = {规范名: [排除 token]}`。
+
+    排除跟着索引走而不是读全局清单：索引是用哪份清单建的（整轮 census / 单公司 / 测试里手拼的），
+    排除就只来自那一份。手拼的裸列表没有 `.excludes`，行为与改前一致。
+    """
+
+
 def build_owner_index(companies):
     """[(token, 清单规范名)]，按清单顺序、首次出现者胜。`token` = pattern / 别名去掉 `%`。
 
@@ -110,7 +118,8 @@ def build_owner_index(companies):
     所以 token 仍取 pattern（清单自己声明的「库里怎么写」），只把「最长者胜」这条
     独占规则从 `resolve_owner` 搬过来。
     """
-    index, seen = [], set()
+    index, seen = OwnerIndex(), set()
+    index.excludes = {}
     for company in companies or []:
         name = str((company or {}).get("name") or "").strip()
         if not name:
@@ -120,6 +129,9 @@ def build_owner_index(companies):
             if token and token.lower() not in seen:
                 seen.add(token.lower())
                 index.append((token, name))
+        tokens = must_apply.exclude_tokens(company)
+        if tokens:
+            index.excludes[name] = tokens
     return index
 
 
@@ -142,10 +154,15 @@ def resolve_owner(value, owner_index):
     low = str(value or "").lower()
     if not low:
         return ""
+    excludes = getattr(owner_index, "excludes", None) or {}
     best_key, best_owner = None, ""
     for token, owner in owner_index or []:
         low_token = token.lower()
         if not low_token or not must_apply._token_in_name(low_token, low):
+            continue
+        # 这条清单点名说「这个名字不是我」（`excludes`）→ 不参与竞争，名字还可以归给别的清单公司：
+        # 「连云港新东方国际货柜码头有限公司（中远海运集团）」被新东方排除后回到中远海运。
+        if must_apply.name_hits_excludes(low, excludes.get(owner)):
             continue
         key = (len(low_token), len(owner), low.rfind(low_token))
         if best_key is None or key > best_key:
@@ -204,7 +221,8 @@ def classify_company(company, healthy_jobs, sources_rows, prev_row=None,
     # 「京东」手里抢走。不传（单测 / 单公司调用）就退化成只认这一家 —— 等价于旧的
     # pattern 匹配，但仍享受拉丁词边界（`%ABB%` 不再吃 AbbVie）。
     index = owner_index if owner_index is not None else build_owner_index([
-        {"name": base["company"], "pattern": pattern, "aliases": company.get("aliases")},
+        {"name": base["company"], "pattern": pattern, "aliases": company.get("aliases"),
+         "excludes": company.get("excludes")},
     ])
     owned = lambda value: resolve_owner(value, index) == base["company"]  # noqa: E731
     matched_jobs = [
@@ -527,6 +545,8 @@ def load_companies(scope="domestic"):
                     for alias in entry["aliases"]
                     if str(alias).strip()
                 ]
+            if entry.get("excludes"):
+                row["excludes"] = must_apply.company_excludes(entry)
             if entry.get("parentPattern"):
                 row["parentPattern"] = str(entry["parentPattern"]).strip()
             if entry.get("brandTokens"):

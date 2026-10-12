@@ -701,7 +701,8 @@ class CoverageShortfallRuleTest(unittest.TestCase):
 class CrawlRunSelectContractTest(unittest.TestCase):
     """规则 F/G/I/K/L 读 crawl_runs 的每个字段都必须在 main() 的 select 里。"""
 
-    RULE_FUNCS = ("evaluate_dead_sources", "evaluate_unfinished_crawls", "evaluate_adapter_collapse",
+    # _failure_tally：规则 F 读行的地方（2026-10-12 从 evaluate_dead_sources 里抽出来），不登记它规则 F 就被扫出 0 个字段
+    RULE_FUNCS = ("evaluate_dead_sources", "_failure_tally", "evaluate_unfinished_crawls", "evaluate_adapter_collapse",
                   "evaluate_silent_sources", "evaluate_coverage_shortfall", "rows_started_since")
 
     def test_every_crawl_row_field_read_by_rules_is_selected(self):
@@ -758,6 +759,86 @@ class DeadSourceRuleTest(unittest.TestCase):
         rows = self._rows("s1", 10)
         [finding] = W.evaluate_dead_sources(rows, self.SOURCES)
         self.assertEqual(W.issue_title(finding), "[watchdog] 源连续失败：workday / 奥的斯 Otis")
+
+    # ── 第二条口径：每天只跑一轮的源（2026-10-12 加）────────────────────────────────
+    # 2026-10-11 实测：9 条 Moka 源门户关停后连败 21~27 轮，规则 F 一条没报——它们每天只在重档里跑一轮，
+    # 5 天 5 轮，够不到 DEAD_SOURCE_MIN_RUNS=8。
+    @staticmethod
+    def _nightly(sid, nights, status="failed", error="RuntimeError: moka portal closed", after_22utc=timedelta(0)):
+        """每晚一轮，nights = 距今第几晚的列表。默认 UTC 22:00 开跑（北京次日 6 点）；after_22utc 往后挪。"""
+        base = datetime(2026, 10, 11, 22, 0, tzinfo=timezone.utc) + after_22utc
+        return [{"source_id": sid, "status": status, "error_message": error,
+                 "started_at": (base - timedelta(days=n)).isoformat()} for n in nights]
+
+    def test_once_a_day_source_failing_six_nights_is_reported(self):
+        daily = self._nightly("s2", range(6))          # 6 轮、6 个不同日期，远不到 8 轮
+        recent = daily[:5]                             # 5 天窗里只有 5 轮
+        self.assertEqual(W.evaluate_dead_sources(recent, self.SOURCES), [], "只看 ① 时报不出来——这正是盲区")
+        [finding] = W.evaluate_dead_sources(recent, self.SOURCES, daily_rows=daily)
+        self.assertEqual(finding["subject"], "moka / 某公司")
+        self.assertIn("6 个不同日期", finding["summary"])
+        self.assertIn("moka portal closed", finding["evidence"][0])
+        self.assertEqual(W.issue_title(finding), "[watchdog] 源连续失败：moka / 某公司")
+
+    def test_short_outage_is_not_reported(self):
+        # 2026-09 实测两次：阿克苏诺贝尔的 Moka 门户挂 2 天关停页、云顶新耀挂 4 天，之后原样恢复出岗。
+        for nights in (2, 4, W.DEAD_SOURCE_DAILY_MIN_DAYS - 1):
+            with self.subTest(nights=nights):
+                daily = self._nightly("s2", range(nights))
+                self.assertEqual(W.evaluate_dead_sources(daily, self.SOURCES, daily_rows=daily), [])
+
+    def test_one_success_inside_the_week_clears_the_daily_criterion(self):
+        daily = self._nightly("s2", range(6)) + self._nightly("s2", [6], status="success", error=None)
+        self.assertEqual(W.evaluate_dead_sources(daily[:5], self.SOURCES, daily_rows=daily), [])
+
+    def test_round_still_in_flight_does_not_hide_a_dead_source(self):
+        # 看门狗 UTC 00:30 跑，重档常常还没收尾：今晚那一轮还是占位符 running，前 6 晚全失败 → 照报
+        daily = self._nightly("s2", range(1, 7)) + self._nightly("s2", [0], status="running", error=None)
+        [finding] = W.evaluate_dead_sources(daily[:5], self.SOURCES, daily_rows=daily)
+        self.assertIn("6 轮抓取全部失败", finding["summary"])
+        # 只有占位符、没有任何失败 → 不报
+        only_running = self._nightly("s2", range(7), status="running", error=None)
+        self.assertEqual(W.evaluate_dead_sources([], self.SOURCES, daily_rows=only_running), [])
+
+    def test_two_runs_the_same_night_count_as_one_day_in_beijing_time(self):
+        # 重档常跨 UTC 零点：UTC 22:50 与次日 00:18 是同一晚（北京同一天），不能数成两天。
+        # 5 晚 × 2 轮：按北京日期是 5 天（不够 6，不报）；按 UTC 日期会数出 6 天而误报——这条专门分辨这两种数法。
+        first = self._nightly("s2", range(5), after_22utc=timedelta(minutes=50))
+        second = self._nightly("s2", range(5), after_22utc=timedelta(hours=2, minutes=18))
+        daily = first + second
+        utc_dates = {datetime.fromisoformat(r["started_at"]).date() for r in daily}
+        self.assertEqual(len(utc_dates), 6, "造数前提：按 UTC 日期数是 6 天")
+        # 只验口径②：crawl_rows 传空（这 10 轮整批传进去会先满足口径①的「≥8 轮全失败」）
+        self.assertEqual(W.evaluate_dead_sources([], self.SOURCES, daily_rows=daily), [],
+                         "10 轮但只落在 5 个北京日期")
+
+    def test_running_row_still_blocks_the_original_criterion(self):
+        # 口径①一字未动：running 行照旧算在轮数里，9 败 + 1 在飞 ≠ 全部失败
+        rows = self._rows("s1", 9) + self._rows("s1", 1, status="running", error=None)
+        self.assertEqual(W.evaluate_dead_sources(rows, self.SOURCES), [])
+
+    def test_failed_rows_without_start_time_cannot_make_up_the_days(self):
+        # started_at 缺失 / 解析不出的失败行算轮数、不算日期：只会让口径②少报，不会凑出 6 天
+        daily = self._nightly("s2", range(3)) + self._rows("s2", 4)
+        self.assertEqual(W.evaluate_dead_sources([], self.SOURCES, daily_rows=daily), [])
+
+    def test_source_matching_both_criteria_yields_one_finding(self):
+        daily = self._nightly("s1", range(7)) * 2      # 一天两轮：5 天窗里 10 轮（①成立），7 天 7 个日期（②成立）
+        recent = [r for r in daily if r["started_at"] >= self._nightly("s1", [4])[0]["started_at"]]
+        findings = W.evaluate_dead_sources(recent, self.SOURCES, daily_rows=daily)
+        self.assertEqual([f["subject"] for f in findings], ["workday / 奥的斯 Otis"])
+        self.assertIn("近 5 天", findings[0]["summary"], "两条都成立时沿用 ① 的说法")
+
+    def test_disabled_source_is_skipped_by_the_daily_criterion_too(self):
+        daily = self._nightly("s3", range(7))
+        self.assertEqual(W.evaluate_dead_sources([], self.SOURCES, daily_rows=daily), [])
+
+    def test_main_feeds_the_week_window_to_rule_f(self):
+        import inspect
+        src = inspect.getsource(W.main)
+        self.assertIn("daily_rows=rows_started_since(", src)
+        # 一周窗要从同一次取数里截：取数回看天数必须把它算进去，不能靠别的规则的回看恰好更长
+        self.assertIn("crawl_days = max(args.dead_source_days, DEAD_SOURCE_DAILY_WINDOW_DAYS,", src)
 
     def test_daily_crawl_module_has_output_spec(self):
         # run.py 2026-09-03 起写 daily_crawl 台账；没声明口径规则 A 会静默跳过它。
