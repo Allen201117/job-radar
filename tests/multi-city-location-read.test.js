@@ -112,6 +112,44 @@ test("打分的城市 +20：单城市地点的判定与改前相同", () => {
   assert.equal(locationBonus("上海", "长三角"), false);
 });
 
+// 折错城市的纠正（2026-10-12，crawler/normalizer.clean_location）：「黑龙江省·牡丹江市·西安区」此前入库成「西安」，
+// 现在是「牡丹江市」。读侧每条路径都得认它真正所在的城市，且不再认西安。
+test("折错纠正后的写法：每条读路径都认真正所在的城市，不再认折错的那个", () => {
+  const loc = "牡丹江市";
+  for (const city of ["牡丹江", "牡丹江市", "黑龙江", "黑龙江省"]) {
+    assert.ok(matchLocationTargets(loc, [city]), `/today ${city}`);
+    assert.equal(locationMatchesCityFilter(loc, [city]), true, `/jobs ${city}`);
+    assert.ok(ftsHits(loc, cityFtsTerms([city])), `/jobs 全文 ${city}`);
+    assert.ok(ftsHits(loc, locationTargetSqlTerms(city)), `/today 召回 ${city}`);
+    assert.ok(citySqlLikeTokens([city]).some((t) => loc.toLowerCase().includes(t.toLowerCase())), `ilike ${city}`);
+    assert.equal(locationBonus(loc, city), true, `打分 ${city}`);
+  }
+  for (const city of ["西安", "西安市", "陕西", "Xi'an"]) {
+    assert.equal(matchLocationTargets(loc, [city]), null, `/today ${city}`);
+    assert.equal(locationMatchesCityFilter(loc, [city]), false, `/jobs ${city}`);
+    assert.equal(ftsHits(loc, cityFtsTerms([city])), false, `/jobs 全文 ${city}`);
+    assert.equal(locationBonus(loc, city), false, `打分 ${city}`);
+  }
+  const { options, byPattern } = buildCampusFacets([{ pattern: "%x%", jobs: [{ title: "2027届校园招聘-销售", city: loc }] }]);
+  assert.deepEqual(options.cityOptions, ["牡丹江"]);
+  const pick = (city) => selectFacetIndexes({ city, education: "", jobFunction: "", gradClass: null }, options);
+  assert.equal(countMatchingFacets(byPattern.get("%x%"), pick("牡丹江")), 1);
+  assert.equal(countMatchingFacets(byPattern.get("%x%"), pick("西安")), 0);
+});
+
+// 拼音别名按整词认之后，「Changzhou, Jiangsu, China」不再入库成「杭州」，而是原样入库。
+// 今日推荐的两条路径（城市门 + 召回）和岗位库的全文候选门按整词 / 中文匹配，不会再把它当成杭州。
+// ⚠️ 岗位库城市筛选的 JS 判定、location ilike、打分 +20、校招看板分面是按拼音子串比的（hangzhou ⊂ changzhou），
+//    对这类行仍会认成杭州——读侧的既有缺口，这里不钉。
+test("拼音地点原样入库后：今日推荐与全文候选门不再把常州认成杭州", () => {
+  const loc = "Changzhou, Jiangsu, China";
+  for (const city of ["杭州", "杭州市", "浙江", "Hangzhou"]) {
+    assert.equal(matchLocationTargets(loc, [city]), null, `/today ${city}`);
+    assert.equal(ftsHits(loc, locationTargetSqlTerms(city)), false, `/today 召回 ${city}`);
+    assert.equal(ftsHits(loc, cityFtsTerms([city])), false, `/jobs 全文 ${city}`);
+  }
+});
+
 // 必投看板的城市筛选是分面计数（lib/campus-facets），不走上面那几个判定：一个岗一个城市下标、按相等比。
 // 多城市岗如果当成「北京/上海」这一个取值，选「北京」就筛不到它，下拉里还会多出一堆组合项。
 test("校招必投看板：多城市岗算进它列的每个城市，下拉里只有单个城市", () => {

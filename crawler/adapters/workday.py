@@ -322,6 +322,9 @@ class WorkdayAdapter(BaseAdapter):
                                            label=f"workday:{self._host}:search:{q}", splittable=False):
                     any_capped = True
 
+        # 一岗多地的岗先补上主地点原文：下面两步和 parse 都按 _post_location 判地区 / 国家，必须看到同一个值。
+        self._fill_primary_locations(trusted + text_posts)
+
         # 4) 逐岗 detail 抓 jobDescription —— list 接口不含描述，外企卡片 JD 因此全空。
         #    GET {host}{externalPath} → jobPostingInfo.jobDescription（HTML；run.py 的 clean_summary 去标签解实体，
         #    且 summary 有正文后 extract_job_type/experience/education 能从中推断）。只抓将保留的在华岗
@@ -812,19 +815,72 @@ class WorkdayAdapter(BaseAdapter):
 
     @staticmethod
     def _post_location(p: dict) -> Optional[str]:
-        """parse 写进 RawJob.location 的那个地点。问不问国家、按不按 regions 过滤都必须看同一个值。"""
+        """parse 写进 RawJob.location 的那个地点。问不问国家、按不按 regions 过滤都必须看同一个值。
+
+        优先用对方自己写的地点原文，路径只当兜底：
+        ❌ 2026-10-12 以前一律从 externalPath 的地点段还原（见 _loc_from_path）。那一段是原文的 slug——
+           空白换成连字符、逗号等标点直接删掉——还原时分不出哪个连字符原本是分隔、哪个是词间空格，
+           只能全换成逗号：「New York, NY」存成「New, York, NY」，「US - California - Foster City」存成
+           「US, , , California, , , Foster, City」，Target 的「1000 Nicollet Mall, Minneapolis,MN 55403-2542」
+           存成「1000, Nicollet, Mall, MinneapolisMN, 55403, 2542」。
+        ✅ 列表接口每行的 locationsText 就是没被 slug 过的原文；一岗多地时它是「2 Locations」，
+           这时用同一批里别的岗自报过的原文补（_fill_primary_locations），再补不到才回到路径还原。
+        """
+        text = str(p.get("_primary_location") or p.get("locationsText") or "").strip()
+        if text and not _N_LOCATIONS_RE.match(text):
+            # 两边带空格的短横是层级分隔（"US - Austin, TX" / "BR - Remote - Brazil"），统一成逗号：
+            # geo 认「开头两字母国别码 + 逗号」，不换的话这批岗的国家判不出来。词内的连字符（Winston-Salem）不动。
+            text = _TIGHT_COMMA_RE.sub(", ", _SPACED_DASH_RE.sub(", ", text))
+            return _normalize_iso3_country(_normalize_cn_country(text)) or None
         ep = (p.get("externalPath") or "").strip()
-        return WorkdayAdapter._loc_from_path(ep) or (p.get("locationsText") or None)
+        return WorkdayAdapter._loc_from_path(ep) or (text or None)
+
+    @staticmethod
+    def _location_slug(ep: str) -> Optional[str]:
+        parts = [x for x in ep.split("/") if x]
+        return parts[1] if len(parts) >= 2 and parts[0].lower() == "job" else None
+
+    @staticmethod
+    def _fill_primary_locations(posts: List[dict]) -> None:
+        """一岗多地的岗 locationsText 只有「2 Locations」；它的主地点原文从同一批里地点段相同的岗借。
+
+        地点段是主地点原文的 slug，段相同 = 同一个地点名。借不到的不动（_post_location 回到路径还原）。
+        同一个段出现几种写法时取出现最多的，并列取字典序最小的——同一份列表每次算出同一个值。
+        """
+        texts_by_slug: dict = {}
+        waiting = []  # (地点段, 岗)：locationsText 只是「N Locations」的岗
+        for p in posts:
+            if not isinstance(p, dict):
+                continue
+            text = str(p.get("locationsText") or "").strip()
+            slug = WorkdayAdapter._location_slug(str(p.get("externalPath") or "").strip()) if text else None
+            if not slug:
+                continue
+            if _N_LOCATIONS_RE.match(text):
+                waiting.append((slug, p))
+            else:
+                counts = texts_by_slug.setdefault(slug, {})
+                counts[text] = counts.get(text, 0) + 1
+        for slug, p in waiting:
+            counts = texts_by_slug.get(slug)
+            if counts:
+                p["_primary_location"] = min(counts, key=lambda t: (-counts[t], t))
 
     @staticmethod
     def _loc_from_path(ep: str) -> Optional[str]:
         # externalPath: /job/China-Beijing/Title_JRxxxx → 第 2 段 "China-Beijing" → "China, Beijing"
-        parts = [x for x in ep.split("/") if x]
-        if len(parts) >= 2 and parts[0].lower() == "job":
-            seg = _SPLIT_COUNTRY_RE.sub(lambda m: m.group(0).replace("-", " "), parts[1])
+        seg = WorkdayAdapter._location_slug(ep)
+        if seg:
+            seg = _SPLIT_COUNTRY_RE.sub(lambda m: m.group(0).replace("-", " "), seg)
             seg = seg.replace("-", ", ").strip()
             return _normalize_iso3_country(_normalize_cn_country(seg)) or None
         return None
+
+
+# 一岗多地时列表给的不是地点，是「2 Locations」这样的计数。
+_N_LOCATIONS_RE = re.compile(r"^\d+\s+Locations?$", re.I)
+_SPACED_DASH_RE = re.compile(r"\s+[-–—]\s+")
+_TIGHT_COMMA_RE = re.compile(r"\s*,\s*")
 
 
 # 多词国名在路径里是连字符（'United-Kingdom---Remote'），上面的 replace('-', ', ') 会把它劈成

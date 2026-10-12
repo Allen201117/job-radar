@@ -1,0 +1,70 @@
+name: crawl-one-adapter
+
+# 只跑一个 adapter 名下的源（手动触发）。
+# 为什么有它：改完 / 接完一个 adapter 要在真实 CI 环境里跑一遍并回读 crawl_runs（CLAUDE.md 通用红线：
+# 「本机绿 ≠ CI 绿」「接完源必须回读线上 crawl_runs」）。此前验一条浏览器源只有两条路：等当晚重档，
+# 或把整个重档（上千条源、6 片）手动再跑一遍。2026-10-12 修农行 adapter 时卡在这里。
+# ⚠️ 走的就是正式抓取那条 run.py：真 upsert 岗位、真写 crawl_runs、收尾写一行 daily_crawl 台账。
+# ⚠️ 别拿它跑名下源很多的 adapter（moka / beisen / feishu / workday / hotjob 等上百条）：那等于把这一族
+#    整个重抓一遍，还会和在飞的重档同时打同一批主机。它是给「一个 adapter 只有一两条源」的自建门户用的。
+# 没有 cron，不进结构性审计的覆盖率差集。
+
+on:
+  workflow_dispatch:
+    inputs:
+      adapter:
+        description: "adapter 名（sources.adapter_name，如 abchina / cib / byd）"
+        required: true
+      detail_cap:
+        description: "逐岗正文条数上限：留空 = 按 adapter 默认，0 = 只抓列表"
+        required: false
+        default: ""
+
+# 同一个 adapter 不叠跑；不同 adapter 互不影响。
+concurrency:
+  group: crawl-one-adapter-${{ github.event.inputs.adapter }}
+  cancel-in-progress: false
+
+jobs:
+  crawl:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      # Phase 1：jobs 在自建香港 PG；不注入则 crawler/jobs_db.py 回退空 Supabase（见 daily-crawl.yml 注释）。
+      JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+      JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+      JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
+      ADAPTER: ${{ github.event.inputs.adapter }}
+      CRAWL_DETAIL_CAP: ${{ github.event.inputs.detail_cap }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 入库时算招聘类型要调 scripts/classify-recruitment.js（同 daily-crawl.yml）。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: crawler/requirements.txt
+
+      - name: Install crawler dependencies
+        run: pip install -r crawler/requirements.txt
+
+      - name: Install Playwright browser
+        run: python -m playwright install --with-deps chromium
+
+      - name: Crawl the sources of one adapter
+        run: |
+          set -euo pipefail
+          # 输入只经环境变量进来，不拼进脚本；名字只许 adapter_name 用得到的字符。
+          if ! printf '%s' "$ADAPTER" | grep -Eq '^[a-z0-9_]+$'; then
+            echo "::error::adapter 名只许小写字母 / 数字 / 下划线"
+            exit 1
+          fi
+          python crawler/run.py --source "$ADAPTER"
