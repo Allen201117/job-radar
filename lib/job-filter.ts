@@ -292,7 +292,7 @@ export function matchesExperienceBand(
 ): boolean {
   if (!band) return true;
   const years = _minRequiredExperienceYears(
-    [job.experience, job.summary, job.title].filter(Boolean).join(" "),
+    [job.experience, job.summary, job.title].filter(Boolean).join("\n"),
   );
   if (band === "fresh") return years === null || years === 0;
   // 除「应届无经验」外，解析不出年限不能冒充命中：用户主动收窄时，宁可不展示证据不足的岗位。
