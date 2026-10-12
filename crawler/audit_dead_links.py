@@ -56,7 +56,10 @@ _BROWSER_ADAPTERS = (
     # google 已移出：2026-07-14 live 核实其详情页其实是 SSR，httpx 直接拿得到 <main> 正文
     # （活岗 5-6k 字符）+ 软 404 文案判死 → 已进 ENRICH_REGISTRY/liveness-sweep（httpx 快且能补正文），
     # 留在这里只会无头重复探活（与 wt/hotjob 同理：有 httpx 检测的就不走浏览器）。
-    "kuaishou", "byd", "bytedance", "bytedance_campus",
+    # byd 已移出（2026-10-12）：它撤岗后的详情页是空壳——不渲染岗位名和正文，也没有任何「已下线」文案，
+    # classify() 只能落 suspect（375 个真渲染样本里 300 个已撤岗 0 个判 dead），每天巡、只盖戳、从不下架，
+    # 攒过 5,429 个已撤岗。改由 crawler/byd_liveness.py 判（不在全量列表 + 详情接口空骨架），留在这里纯属白烧预算。
+    "kuaishou", "bytedance", "bytedance_campus",
     # 2026-06-25 补：db-report 实测 24h 覆盖=0 的大厂 SPA（alibaba 3789/netease 1177/ctrip 772/huawei 445 岗，
     # 之前不在任何保鲜流）。均为浏览器渲染详情页 → 纳入审计渲染探活（同上：命中 DEAD_MARKERS 才下架，否则只轮转盖戳）。
     "alibaba", "netease", "ctrip",
@@ -90,6 +93,13 @@ DEAD_MARKERS_STRONG = [
     # 全库 46.6 万 active 的标题 / 正文 0 处出现这句）。收整句、不收「已停用」裸词。
     "此职位已停用",
 ]
+# 🚫 Moka 的「当前网页已关停」/ "This website has been shut down" 刻意**不收**（2026-10-12 查实后决定）。
+#   它是租户门户级的状态，不是「这个岗没了」：crawl_runs 里报过这句的 Moka 源共 11 条，其中 2 条挂了几天又原样恢复出岗
+#   （阿克苏诺贝尔 09-19~20 两天后 40 岗照旧、云顶新耀 09-24~27 四天后 188 岗照旧）。收进强信号 = 临时关停期间
+#   每天把轮到的岗置 expired、次日被 purge 永久删除——错杀在招岗，且连带删掉用户对这些岗的收藏 / 投递记录。
+#   现行处置：这类页面落在 unsure（不足 40 字），只盖时间戳；门户真关了由 ops_watchdog 规则 F 的「按天」口径
+#   在连败 6 天后报出来，人看过官网招聘链接现在指到哪，再停用源 + remove-jobs-by-url-prefix 标 removed（可逆）。
+#   回归钉在 test_audit_dead_markers.test_moka_portal_closed_page_is_not_dead。
 # 弱信号：**正常在招页面里也可能出现**，只有在「页面根本没渲染出这个岗的标题」时才敢用。
 #   · "404"    → 职位编号 / 门牌号 / 邮编里都有；真 404 页几乎不会同时渲染出岗位标题
 #   · "已结束" → 页脚「活动已结束」「报名已结束」是常见运营文案
@@ -138,7 +148,7 @@ def is_same_document_nav(previous_url, url):
     自己的「头部达人运营-【电商】」，判定回到 alive。
 
     影响面：byd 6,362 + kuaishou 2,830 个 active 岗的 jd_url 都是「同一个 base + 不同 hash」，
-    两者都在 _BROWSER_ADAPTERS 里、每天带 --apply 跑。
+    立碑时两者都在 _BROWSER_ADAPTERS 里、每天带 --apply 跑（byd 2026-10-12 移出，原因见名单注释）。
     只在真正的同文档跳转上多花一次 reload，其余源一次都不多花。"""
     if not previous_url or not url:
         return False

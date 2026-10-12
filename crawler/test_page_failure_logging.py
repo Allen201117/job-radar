@@ -503,7 +503,9 @@ class BytedanceRootFailureTests(unittest.TestCase):
     def test_root_failure_cause_reaches_error_message(self):
         adapter = BytedanceAdapter()
         err = _status_error("https://jobs.bytedance.com/api/v1/search/job/posts?msToken=SECRET5", 503)
-        with mock.patch.object(adapter, "_request_page", side_effect=err):
+        # 门户探针也要挡住：fetch 现在会先发它，不 patch 就是单测打真网。
+        with mock.patch.object(adapter, "_portal_header_honored", return_value=True), \
+                mock.patch.object(adapter, "_request_page", side_effect=err):
             with self.assertRaises(RuntimeError) as ctx:
                 adapter.fetch("https://jobs.bytedance.com/experienced/position")
         msg = str(ctx.exception)

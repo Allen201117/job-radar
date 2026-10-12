@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabase } from "@/lib/auth";
 import { verifyRequestClaims } from "@/lib/auth-claims";
-import { companyMatches, findCompanyProfile } from "@/lib/insight-match";
+import { buildExactProfileIndex, findCompanyProfile, ownedJobCount } from "@/lib/insight-match";
 import {
   DATA_LAYER_ORIGINS_FILTER,
   ITEM_COLUMNS,
@@ -82,6 +82,9 @@ export async function GET(request: NextRequest) {
     countByCompany.set(row.company, row.job_count || 0);
   }
 
+  // 在招数按「精确优先」归属：别的画像精确登记的名字不算到本画像头上
+  // （改前是门放行求和，中国铁建的徽章把中国铁建国际、中国铁建投资两个画像的岗也加了进来）。
+  const exactIndex = buildExactProfileIndex(allProfiles);
   const now = new Date();
   const availability: Record<string, { real: number; derived: boolean }> = {};
   for (const company of companies) {
@@ -92,9 +95,7 @@ export async function GET(request: NextRequest) {
       real = INSIGHT_DIMENSIONS.reduce((n, d) => n + dimensions[d].length, 0);
     }
     const activeCount = profile
-      ? counts
-          .filter((row) => companyMatches(profile, row.company))
-          .reduce((sum, row) => sum + (row.job_count || 0), 0)
+      ? ownedJobCount(profile, counts, exactIndex)
       : countByCompany.get(company) || 0;
     availability[company] = { real, derived: activeCount >= DERIVED_MIN_ACTIVE };
   }
