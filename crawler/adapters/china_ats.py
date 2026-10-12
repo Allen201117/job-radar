@@ -162,7 +162,8 @@ _MOKA_FLAGS = ("火热招聘", "热招", "急", "热", "新", "HOT", "NEW", "Hot
 _MOKA_GLUED_FLAGS = ("火热招聘", "急")
 # 卡片上的发布日期行：新版「发布于 2026-10-09」、英文门户「Posted on 2026-10-10」、老版「发布时间：2026-05-20」。
 _MOKA_NEW_PUBLISHED_PREFIXES = ("发布于", "Posted on")
-_MOKA_PUBLISHED_RE = re.compile(r"(?:发布于|发布时间[:：]?|Posted on)\s*\d")
+_MOKA_PUBLISHED_LABEL = r"(?:发布于|发布时间[:：]?|Posted on)"
+_MOKA_PUBLISHED_RE = re.compile(_MOKA_PUBLISHED_LABEL + r"\s*\d")
 _MOKA_FIELD_SEP = "|"
 _CJK_RE = re.compile(r"[一-鿿]")
 # 老版卡片标题后面最多几行（标签行 + 地点行；发布时间行不算）。实测带「发布时间」行的 824 张老版卡全部 ≤2 行。
@@ -393,43 +394,48 @@ def _parse_moka_card(text: str):
     return location, title
 
 
-# 卡片上的发布日期 → posted_at。只认「该在的位置上、整行就是发布日期」的那一行，别处出现的日期一律不认：
+# 卡片上的发布日期：年限口径（MokaAdapter._MAX_AGE_DAYS）和写库的 posted_at 都读 _moka_card_published 这一个函数。
+# 只认「该在的位置上、整行就是发布日期」的那一行，别处出现的日期一律不认：
 #   新版 / 英文门户：标题后面第一行（「发布于 2026-10-09」/「Posted on 2026-10-10」）；
 #   老版：卡片最后一行（「发布时间：2026-05-20」），且标题后面连它在内最多 3 行（标签行 + 地点行 + 发布时间）。
 # 2026-10-12 全量 417 条在用源、49,641 张卡片原文逐张量过：42,971 张有发布行（三种写法 36,222 / 201 / 6,548），
 # 全部落在这两个位置、整行匹配、都是合法日期（2018~2026 年，没有晚于抓取日的），没有一张卡上有两条发布行。
 # 其余 6,670 张卡片上没写发布日期（76 个门户整站不展示：特斯拉社招 889 张、康龙化成校招 566 张…）→ None。
-# 🚫 不去正文里找：正文里的日期是截止日 / 报名时间 / 年龄要求（「截止日期：2024年08月29日」），不是发布日。
-# ⚠️ 这个日期是 Moka 的 publishedAt = **最近一次发布**，对方刷新后会变新，不是岗位第一次开放的时间；它按浏览器时区渲染
-#    （CI 是 UTC，北京时间 0~8 点发布的岗会早一天，实测 0.38%）。租户把日期格式配成 dd/MM/yyyy、或门户渲染成别的语言时
-#    认不出 → None（416 个门户全是默认格式）。怎么量的：docs/crawler-adapter-notes.md「moka 卡片上的发布日期」。
+# 🚫 不去正文里找：新版卡片带正文摘要，正文里的日期是截止日 / 报名时间 / 年龄要求（「截止日期：2024年08月29日」），
+#    哪怕正文里有一整行「发布时间：2023-01-05」也不是这个岗的发布日——认了就会把在招岗按超龄下架、把错日期写进库。
+# ⚠️ 这个日期是 Moka 的 publishedAt（门户主文档内嵌的第一页岗位明文里有原始时间戳：416 个门户 3,881 个岗逐个对过，
+#    3,866 个同一天、15 个是抓完之后被对方刷新的）= **最近一次发布**，对方刷新后会变新，不是岗位第一次开放的时间；
+#    它按浏览器时区渲染（CI 是 UTC，北京时间 0~8 点发布的岗会早一天，实测 0.38%）。租户把日期格式配成 dd/MM/yyyy、
+#    或门户渲染成别的语言时认不出 → None（416 个门户全是默认格式）。怎么量的：docs/crawler-adapter-notes.md。
 _MOKA_NEW_POSTED_RE = re.compile(
     "(?:" + "|".join(re.escape(p) for p in _MOKA_NEW_PUBLISHED_PREFIXES) + r")\s*(\d{4})-(\d{2})-(\d{2})")
 _MOKA_OLD_POSTED_RE = re.compile(r"发布时间[:：]\s*(\d{4})-(\d{2})-(\d{2})")
 
 
-def _moka_card_posted_at(text: str, today: Optional[date] = None) -> Optional[str]:
-    """Moka 岗位卡 innerText → 卡片上写的发布日期（YYYY-MM-DD）。卡片上没写、或认不出 → None，不猜。"""
+def _moka_card_published(text: str, today: Optional[date] = None) -> Optional[date]:
+    """Moka 岗位卡 innerText → 卡片上写的发布日期。卡片上没写 / 写法认不出 / 不是合法日期 → None，
+    不猜、不拿卡片上别的数字顶替。"""
     lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
     if not lines:
         return None
-    rest = _split_moka_title(lines)[1]
-    if not rest:
-        return None
-    m = _MOKA_NEW_POSTED_RE.fullmatch(rest[0])
-    if not m and len(rest) <= _MOKA_OLD_LAYOUT_MAX_LINES + 1:
-        m = _MOKA_OLD_POSTED_RE.fullmatch(rest[-1])
+    title, rest, _ = _split_moka_title(lines)
+    # 标题位置上就是发布行 = 这张卡没渲染出标题（全量里没见过）。日期照认：年限口径要能点名它。
+    m = _MOKA_NEW_POSTED_RE.fullmatch(title) or _MOKA_OLD_POSTED_RE.fullmatch(title)
+    if not m and rest:
+        m = _MOKA_NEW_POSTED_RE.fullmatch(rest[0])
+        if not m and len(rest) <= _MOKA_OLD_LAYOUT_MAX_LINES + 1:
+            m = _MOKA_OLD_POSTED_RE.fullmatch(rest[-1])
     if not m:
         return None
     try:
-        posted = date(*(int(g) for g in m.groups()))
+        published = date(*(int(g) for g in m.groups()))
     except ValueError:      # 「2026-02-30」这种不是日期
         return None
     # 发布日不可能晚于今天（留一天余量：卡片按浏览器所在时区渲染，可能比抓取机的日期早翻一天）。全量里没有这样的卡；
     # 真出现了宁可留空：读侧「按发布时间排」会把它一直顶在最前、「最近 N 天发布」永远命中。
-    if posted > (today or date.today()) + timedelta(days=1):
+    if published > (today or date.today()) + timedelta(days=1):
         return None
-    return posted.isoformat()
+    return published
 
 
 _MOKA_INIT_DATA_RES = (
@@ -558,6 +564,25 @@ class MokaAdapter(PlaywrightAdapter):
     # 翻页器认得出来时本来也不靠它。
     _PORTAL_SHORT_MIN = 2
     _PORTAL_SHORT_RATIO = 0.01
+    # 发布年限口径（2026-10-12）：卡片上的发布日期早于 _MAX_AGE_DAYS 天前的岗不收，
+    # 库里已有的由 run.py 按链接下架成 removed（可逆；岗被重新发布、日期变新后又会被收回来）。
+    # 起因：老版门户翻页修好当晚新入库 5,324 个岗，其中 1,698 个是 2024 年及以前发布的（最早 2019 年），
+    # 门户仍列着，分不清是常年在招还是没人撤；它们在库里的首见时间却是当晚。
+    # 谁定的：设年限口径是创始人同意的（提的建议是「设年限口径、超龄的标成可恢复的下架」，原话回复「按你的建议来」）；
+    # 730 这个数是做的人按下面的全集数据取的，创始人没有逐字确认过，可否决——改成 0 即关掉，下一轮抓取会把下架的行收回来。
+    # 为什么是 730 天而不是百胜那条的 365 天（_SSR_TENANT_POLICY）：全量 43,400 张带日期的卡片里，超过 365 天的
+    # 7,402 张、超过 730 天的 3,737 张。安踏（1,602 张）、岚图（1,352 张）这类有人维护的门户各有四百多个 1~2 年的岗、
+    # 却没有一个超过 2 年；超过 2 年的集中在猿辅导（740 张里 606）、万科（1,307 张里 864）、科兴、云从、知道创宇
+    # 这类整个门户多年没动的。365 天会把前一类一起下掉。
+    # 卡片上没有发布日期的照收（76 条源整个门户都不显示日期，没有证据说它旧）。
+    # 筛在列表翻完之后做：fetch_complete / reported_total 不受影响（与百胜那条同理，规则 G 只看 coverage_complete）。
+    # ⚠️ 以后要给 moka 开「列表缺席即撤岗」，得先把这批岗排除掉：它们在列表里、只是我们不收，
+    #    按缺席判会变成 expired、次日被永久删除。
+    # ⚠️ 已知边界：首屏列表没渲染出来、只读到右栏那几张没有日期的小卡时，超龄岗会被当成有效岗收一次（把已下架的行
+    #    写回 active），下一轮读到带日期的完整卡片再下架。只在门户总数也读不到的单页门户上可能发生，没见过实例。
+    _MAX_AGE_DAYS = 730
+    # 这一轮在门户上见到、但超出年限口径没收的岗的链接；run.py 据此下架库里已有的行。每次 parse 重置。
+    retire_jd_urls: tuple = ()
     # 部分租户首屏渲染出岗位卡的同时会弹一个「cookies」同意抽屉（sd-Modal-drawer，
     # 按钮文案「好的」），浮在页面最上层拦截点击事件。不清掉它，第一次点「下一页」
     # 就会被它挡住、`nxt.click()` 超时进 except、`_collect_all_pages` 静默停在第 1 页
@@ -934,7 +959,13 @@ class MokaAdapter(PlaywrightAdapter):
         self._finalize_coverage(best, source_url)
         return json.dumps({"_base": base, "cards": best}, ensure_ascii=False)
 
+    @staticmethod
+    def _today() -> date:
+        """年限口径按北京时间算天数（与 jobs_db.retire_posted_before 同口径）。"""
+        return datetime.now(ZoneInfo("Asia/Shanghai")).date()
+
     def parse(self, html: str) -> List[RawJob]:
+        self.retire_jd_urls = ()
         try:
             data = json.loads(html)
         except (ValueError, TypeError):
@@ -942,14 +973,21 @@ class MokaAdapter(PlaywrightAdapter):
         base = data.get("_base", "")
         out: List[RawJob] = []
         seen = set()
+        too_old = []
+        today = self._today()
+        oldest_kept = today - timedelta(days=self._MAX_AGE_DAYS) if self._MAX_AGE_DAYS else None
         for c in data.get("cards", []):
             m = re.search(r"#/job/([\w-]+)", c.get("href") or "")
             if not m:
                 continue
+            jd_url = f"{base}#/job/{m.group(1)}"
+            published = _moka_card_published(c.get("text", ""), today)
+            if oldest_kept and published and published < oldest_kept:
+                too_old.append(jd_url)   # 正好 _MAX_AGE_DAYS 天前发布的仍收，与 _ssr_policy_allows 同一边界
+                continue
             location, title = _parse_moka_card(c.get("text", ""))
             if not title:
                 continue
-            jd_url = f"{base}#/job/{m.group(1)}"
             if jd_url in seen:
                 continue
             seen.add(jd_url)
@@ -961,8 +999,16 @@ class MokaAdapter(PlaywrightAdapter):
                 summary=None,
                 jd_url=jd_url,
                 apply_url=jd_url,
-                posted_at=_moka_card_posted_at(c.get("text", "")),
+                posted_at=published.isoformat() if published else None,
             ))
+        if too_old:
+            # 同一个岗万一有两张卡（一张写着旧日期、一张没日期），以写了日期的为准：不能一边点名下架、一边又收进来，
+            # 那样库里这一行每晚先下架再被写回。
+            old = set(too_old)
+            out = [j for j in out if j.jd_url not in old]
+            self.retire_jd_urls = tuple(dict.fromkeys(too_old))
+            _log.info("moka: 年限口径外 %d 个岗没收（发布日期早于 %s），收 %d 个 base=%s",
+                      len(self.retire_jd_urls), oldest_kept, len(out), base)
         return out
 
 
