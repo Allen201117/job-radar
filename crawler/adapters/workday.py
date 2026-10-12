@@ -24,7 +24,10 @@ import httpx
 
 import normalizer
 from geo import derive_country_code
-from .base import BaseAdapter, PageResult, RawJob, _env_int, paginate_all, resolve_detail_cap
+from .base import (
+    BaseAdapter, DEFAULT_LIST_CAP, RawJob, RepetitionBrake, _env_int, exc_brief, resolve_detail_cap,
+    resolve_list_cap,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +49,19 @@ _LOCATION_PARAM = re.compile(r"loc|country|state|province|region|hierarchy", re.
 # appliedFacets[param] 单次提交的 id 数上限：实测 ThermoFisher 250 个 OK、300 个 400；
 # Mondelez 300 个 OK、904 个（未分块）500——阈值随租户浮动，150 留足安全边界（<250 的已知下限的 60%）。
 _FACET_ID_CHUNK = 150
+# 列表接口的两条硬边界（2026-10-12 逐条实测，101 个启用源 293 个翻页查询）：
+#   · 单页最多 20 条：limit=50 / 100 直接回 400；
+#   · 一个查询最多给 2000 条：首页自报的 total 封顶在 2000；offset 翻过末尾（或 >= 2000）时**不回空页，
+#     回的是第一页**（Target offset=2000 / 2020 / 2500 / 4000 四次都与 offset=0 逐条相同；
+#     Diageo total=40 时 offset=40 起同样回第一页）。total 小于 2000 时是准的（280 个正常收尾的查询 0 个对不上）。
+_PAGE_SIZE = 20
+_QUERY_ROW_CAP = 2000
+# 撞上限后按 facet 计数把一个查询切成几块，每块的计数和不超过这个数（留一成给切分与翻页之间的上新）。
+_SPLIT_BLOCK_ROWS = 1800
+# 最多连切几层（国家 → 州 → 用工类型 …）。再往下每层只多几个请求，但一路切不动说明这个租户的 facet 不适合切。
+_SPLIT_MAX_DEPTH = 3
+# _page_through 的三种结局
+_ENDED, _FULL, _CUT = "ended", "full", "cut"
 
 _SEARCH_TEXT_BY_REGION = {
     "CN": ("China", "Hong Kong", "Macau"),
@@ -135,9 +151,91 @@ def _search_texts_for_regions(regions):
     return tuple(dict.fromkeys(out)) or _SEARCH_TEXT_BY_REGION["CN"]
 
 
+def _post_key(p):
+    return p.get("externalPath") or p.get("title")
+
+
+def _facet_counts(facets) -> dict:
+    """{param: {id: count}}。一个维度下每个取值的 count 受**其它**已选维度的过滤影响、不受本维度影响，
+    且是准的（2026-10-12 Target：带国家过滤后 51 个州逐个翻完，每个州翻到的条数都等于它的 count）。"""
+    out: dict = {}
+    for param, v in WorkdayAdapter._iter_facet_values(facets):
+        if param and v.get("id") and isinstance(v.get("count"), int):
+            out.setdefault(param, {})[v["id"]] = v["count"]
+    return out
+
+
+def _declared_rows(applied: dict, counts: dict) -> Optional[int]:
+    """这个查询对方自报有多少岗（首页 total 封顶在 2000，超过时只能从 facet 计数读）。
+    每个已选维度的「已选取值计数和」都是一个上界（同一个岗挂多个取值会重复计），取最小的；
+    只选了一个取值时就是准数。没有已选维度、或已选取值不在计数里 → None（不知道）。"""
+    best = None
+    for param, ids in applied.items():
+        known = counts.get(param) or {}
+        if not ids or any(i not in known for i in ids):
+            continue
+        n = sum(known[i] for i in ids)
+        best = n if best is None else min(best, n)
+    return best
+
+
+def _pack_facet_ids(pairs, capacity: Optional[int] = None, max_ids: int = _FACET_ID_CHUNK) -> List[list]:
+    """把 (id, 计数) 装成几块：每块计数和 <= capacity、id 数 <= max_ids；自己就超过 capacity 的取值单独一块
+    （留给下一层换个维度再切）。先放大的，块数接近最少；同计数按原顺序，结果是确定的。"""
+    capacity = _SPLIT_BLOCK_ROWS if capacity is None else capacity
+    bins: List[list] = []   # [[id...], 计数和]
+    for id_, n in sorted(pairs, key=lambda pair: -(pair[1] or 0)):
+        n = n or 0
+        for b in bins:
+            if b[1] + n <= capacity and len(b[0]) < max_ids:
+                b[0].append(id_)
+                b[1] += n
+                break
+        else:
+            bins.append([[id_], n])
+    return [b[0] for b in bins]
+
+
+def _split_plan(applied: dict, counts: dict, declared: Optional[int]):
+    """把一个装不下（超过 _QUERY_ROW_CAP）的查询切成几块。返回 (块列表, 并集盖不盖得住原查询)；切不动返回 None。
+
+    ① 查询本身是好几个取值的并集（城市级叶子一次提交 150 个）：按计数把这些取值重新分组，并集不变。
+    ② 只剩一个取值（国家）：换一个维度切，在原条件上再叠一层。这个维度必须盖得住这个查询的全部岗——
+       判据是它的计数和 >= 对方自报的岗数。⚠️ 不能见维度就切：Target 带国家过滤时 `locations` 只露出
+       55 个叶子、766 个岗（全部 14,072），拿它切会静默丢掉九成五。盖得住的里面选「自己就超过上限的
+       取值占得最少」的那个（Target：州，只有加州 2,155 要再切一层；职类里 Stores 一个就 13,646）。
+    """
+    multi = [p for p, ids in applied.items() if len(ids) > 1]
+    if multi:
+        param = max(multi, key=lambda p: len(applied[p]))
+        ids = applied[param]
+        known = counts.get(param) or {}
+        bins = _pack_facet_ids([(i, known.get(i, 0)) for i in ids])
+        if len(bins) < 2:   # 计数说一个查询装得下、实际却撞了上限：计数不可信，对半切
+            bins = [ids[:len(ids) // 2], ids[len(ids) // 2:]]
+        return [{**applied, param: b} for b in bins], True
+    best = None
+    for param, vals in counts.items():
+        if param in applied:
+            continue
+        live = [(i, n) for i, n in vals.items() if n > 0]
+        if len(live) < 2:
+            continue
+        total = sum(n for _i, n in live)
+        covering = declared is not None and total >= declared
+        oversize = sum(n for _i, n in live if n >= _SPLIT_BLOCK_ROWS)
+        key = (0, oversize, total) if covering else (1, -total, oversize)
+        if best is None or key < best[0]:
+            best = (key, param, live, covering)
+    if best is None:
+        return None
+    _key, param, live, covering = best
+    return [{**applied, param: b} for b in _pack_facet_ids(live)], covering
+
+
 class WorkdayAdapter(BaseAdapter):
     name = "workday"
-    max_pages = 100  # 每页 20 → 每个 facet/keyword 安全上限 2000，靠短页自然收尾
+    max_pages = 100  # 每页 20 × 100 页 = Workday 单个查询的硬上限 2000（见 _QUERY_ROW_CAP）；收尾见 _page_through
 
     def should_skip(self, source_url: str):
         return None  # 公开 JSON API，跳过 HEAD 预检
@@ -158,6 +256,13 @@ class WorkdayAdapter(BaseAdapter):
     def fetch(self, source_url: str) -> str:
         self.reported_total = None
         self.fetch_complete = False
+        self.coverage_stop_reason = None   # 同一实例被复用时（probe / 单测），上一条源的停因不许带到这一条
+        # 下面四个只在「一个查询超过 2000 条、要切块」时用得上（见 _collect_capped），其余源碰不到它们。
+        self._list_cap = resolve_list_cap(DEFAULT_LIST_CAP)
+        self._split_brake = RepetitionBrake()
+        self._split_halt = None      # 切块中途停下的原因：repetition_brake / list_cap
+        self._declared_floor = 0     # 装不下的查询里，对方自报岗数最大的那个（抓全率的分母）
+        self._split_keys = set()     # 正在切的那个查询，切出来的各块一共翻到了哪些岗（对自报数用）
         self._parse_endpoint(source_url)
         headers = {
             "Accept": "application/json",
@@ -176,6 +281,9 @@ class WorkdayAdapter(BaseAdapter):
         # 2) facet 路径：把**每个**大中华区 facet 组各自分页、并集去重。
         # 不靠 Workday 的 `total` 字段选「最佳单组」—— 实测该字段极不可靠（NVIDIA 报 total=180 实际可翻 600+），
         # 靠它选组/比较会误判。改为「所有 china facet 组并集」：每组都是合法在华过滤，OR 起来即全部在华岗，
+        # （📌 2026-10-12 复核：293 个翻页查询里，total < 2000 的 280 个正常收尾的查询，total 与翻到的条数
+        #   0 个对不上；「报 180 却能翻 600+」与「翻过末尾回第一页」的表现一致——这一句是推测，当时的数据没法回放。
+        #   并集的做法不受影响；现在 total 只用来认「封顶在 2000 = 这个查询装不下」，见 _collect_query。）
         # 这些是**可信在华**岗（parse 不再过滤）。同 param 多 id 一次 OR 提交；不同 param 分别提交后并集。
         trusted: List[dict] = []
         seen = set()
@@ -208,27 +316,11 @@ class WorkdayAdapter(BaseAdapter):
         # 门槛只数 trusted、不数 2b 的宽松岗——保证加了 2b 之后，原来会跑兜底的源照旧跑。
         if len(trusted) < 25:
             for q in _search_texts_for_regions(regions):
-                def fetch_page(page: int) -> PageResult:
-                    body = {"appliedFacets": {}, "limit": 20, "offset": page * 20, "searchText": q}
-                    rr = _post_list(source_url, body, headers, self.timeout)
-                    posts = rr.json().get("jobPostings", []) or []
-                    return PageResult(items=posts, total=None)
-
-                posts, _total, complete = paginate_all(
-                    fetch_page,
-                    page_size=20,
-                    first_page=0,
-                    max_pages=self.max_pages,
-                    logger=None,
-                    label=f"workday:{self._host}:search:{q}",
-                )
-                if not complete:
+                # 文本召回超过 2000 条时不切块：它带进来的是「正文提到 China / United States」的全球岗，
+                # 逐岗还要再过 regions；2026-10-12 全部 101 个源没有一个文本查询真撞上限。
+                if not self._collect_query(source_url, headers, {}, q, seen, text_posts,
+                                           label=f"workday:{self._host}:search:{q}", splittable=False):
                     any_capped = True
-                for p in posts:
-                    key = p.get("externalPath") or p.get("title")
-                    if key and key not in seen:
-                        seen.add(key)
-                        text_posts.append(p)
 
         # 4) 逐岗 detail 抓 jobDescription —— list 接口不含描述，外企卡片 JD 因此全空。
         #    GET {host}{externalPath} → jobPostingInfo.jobDescription（HTML；run.py 的 clean_summary 去标签解实体，
@@ -247,8 +339,12 @@ class WorkdayAdapter(BaseAdapter):
         if unresolved:
             logger.warning("workday %s: %d/%d posts' country unresolved (detail unreachable), "
                            "not written this run", self._host, unresolved, self.country_lookup["needed"])
-        self.reported_total = len(trusted) + len(text_posts)
         self.fetch_complete = not any_capped and not unresolved
+        # 分母：一般就是看见的全部；有查询装不下又没切全时，记对方 facet 自报的岗数——
+        # 否则「自报 14,072、只拿到 2,008」在台账上是 2,008 / 2,008，谁也看不出少了。
+        self.reported_total = len(trusted) + len(text_posts)
+        if not self.fetch_complete:
+            self.reported_total = max(self.reported_total, self._declared_floor)
 
         return json.dumps({
             "_host": self._host, "_site": self._site,
@@ -256,7 +352,7 @@ class WorkdayAdapter(BaseAdapter):
         }, ensure_ascii=False)
 
     def _collect_facet_posts(self, source_url, headers, candidates: dict, seen: set, out: List[dict]) -> bool:
-        """按 {param: [id...]} 逐组分块翻页，新岗并入 out（按 externalPath 去重）。返回是否有组撞了翻页上限。"""
+        """按 {param: [id...]} 逐组分块翻页，新岗并入 out（按 externalPath 去重）。返回是否有查询没抓全。"""
         any_capped = False
         for param, ids in candidates.items():
             if not ids:
@@ -267,29 +363,210 @@ class WorkdayAdapter(BaseAdapter):
             # 留足安全边界（2026-09-14~18 ThermoFisher/Mondelez 连续 failed 即此）。
             for chunk_start in range(0, len(ids), _FACET_ID_CHUNK):
                 chunk = ids[chunk_start:chunk_start + _FACET_ID_CHUNK]
-
-                def fetch_page(page: int, _chunk=chunk, _param=param) -> PageResult:
-                    body = {"appliedFacets": {_param: _chunk}, "limit": 20, "offset": page * 20, "searchText": ""}
-                    rr = _post_list(source_url, body, headers, self.timeout)
-                    posts = rr.json().get("jobPostings", []) or []
-                    return PageResult(items=posts, total=None)
-
-                posts, _total, complete = paginate_all(
-                    fetch_page,
-                    page_size=20,
-                    first_page=0,
-                    max_pages=self.max_pages,
-                    logger=None,
-                    label=f"workday:{self._host}:{param}:{chunk_start}",
-                )
-                if not complete:
+                if not self._collect_query(source_url, headers, {param: chunk}, "", seen, out,
+                                           label=f"workday:{self._host}:{param}:{chunk_start}"):
                     any_capped = True
-                for p in posts:
-                    key = p.get("externalPath") or p.get("title")
-                    if key and key not in seen:
-                        seen.add(key)
-                        out.append(p)
         return any_capped
+
+    def _post_page(self, source_url, headers, applied: dict, search_text: str, page: int) -> dict:
+        body = {"appliedFacets": applied, "limit": _PAGE_SIZE, "offset": page * _PAGE_SIZE,
+                "searchText": search_text}
+        data = _post_list(source_url, body, headers, self.timeout).json()
+        return data if isinstance(data, dict) else {}
+
+    def _collect_query(self, source_url, headers, applied: dict, search_text: str, seen: set, out: List[dict],
+                       label: str, depth: int = 0, splittable: bool = True) -> bool:
+        """翻完一个查询（appliedFacets + searchText），新岗并入 out。返回这个查询是否抓全。
+
+        首页自报的 total 封顶（>= _QUERY_ROW_CAP）= 这个查询装不下，交给 _collect_capped 切块；
+        其余照常翻到底（_page_through）。depth > 0 = 这是切出来的一块。
+        """
+        try:
+            first = self._post_page(source_url, headers, applied, search_text, 0)
+        except Exception as exc:
+            if depth == 0:
+                raise   # 与原来一致：一个查询的第一页就拿不到，交上层记 failed
+            # 切出来的某一块第一页失败：保住别的块已经抓到的，如实记没抓全（同顺丰那块碑）
+            logger.warning("%s: 第 1 页抓取失败，这一块本轮没抓：%s", label, exc_brief(exc))
+            return False
+        total = first.get("total")
+        if splittable and isinstance(total, int) and total >= _QUERY_ROW_CAP:
+            return self._collect_capped(source_url, headers, applied, first, seen, out, label, depth)
+        end = self._page_through(source_url, headers, applied, search_text, first, seen, out, label,
+                                 in_split=depth > 0)
+        if (end == _FULL and splittable and not self._split_halt
+                and self.max_pages * _PAGE_SIZE >= _QUERY_ROW_CAP):
+            # 首页没报封顶、却真翻满了对方的单查询上限：同样是装不下，照样切（已经翻到的不重翻）。
+            # 条件里带 max_pages：哪天有人把页数上限调小，「翻满」就不再等于「对方装不下」，不能据此切。
+            return self._collect_capped(source_url, headers, applied, first, seen, out, label, depth,
+                                        window_done=True)
+        return end == _ENDED
+
+    def _page_through(self, source_url, headers, applied: dict, search_text: str, first: dict, seen: set,
+                      out: List[dict], label: str, in_split: bool) -> str:
+        """从已经拿到的第一页起把一个查询翻到底。返回 _ENDED（自然收尾）/ _FULL（翻满上限）/
+        _CUT（中途失败或被叫停）。
+        in_split = 这是从一个装不下的查询里切出来的一块：每页过一遍两道闸（_split_should_halt），翻到的岗记进 _split_keys。
+
+        收尾判据是「这一页没有带来这个查询里的新岗」，不是「空页」：翻过末尾时 Workday 回的是第一页
+        （见 _QUERY_ROW_CAP）。条数恰好是 20 的整数倍的查询因此等不到短页也等不到空页——旧实现一路翻满
+        100 页、记「可能未抓全」，2026-10-12 同一轮 101 个源里 11 个源 12 个查询中招、白翻 964 页
+        （全部列表请求的两成），而这 12 个查询一个岗都没少。
+        ⚠️ 判重用这个查询自己的集合，不用跨查询的 seen：后一组的头几页常常全是前一组抓过的岗。
+        """
+        query_seen = set()
+        total = first.get("total")
+        declared = total if isinstance(total, int) and 0 < total < _QUERY_ROW_CAP else None
+        data = first
+        ended = False
+        for page in range(self.max_pages):
+            if page:
+                try:
+                    data = self._post_page(source_url, headers, applied, search_text, page)
+                except Exception as exc:
+                    logger.warning("%s: 第 %d 页抓取失败，保留已抓 %d 条（尽力而为）：%s",
+                                   label, page + 1, len(query_seen), exc_brief(exc))
+                    return _CUT
+            raw = data.get("jobPostings") or []
+            posts = [p for p in raw if isinstance(p, dict)]
+            fresh = {k for k in map(_post_key, posts) if k and k not in query_seen}
+            if not fresh:
+                ended = True   # 空页，或翻过末尾被绕回了第一页
+                break
+            query_seen |= fresh
+            if in_split:
+                self._split_keys |= fresh
+            added = []
+            for p in posts:
+                key = _post_key(p)
+                if key and key not in seen:
+                    seen.add(key)
+                    out.append(p)
+                    added.append(p)
+            if in_split and self._split_should_halt(added, seen):
+                return _CUT
+            if len(raw) < _PAGE_SIZE:
+                ended = True
+                break
+        if not ended:
+            logger.warning("%s: 命中安全翻页上限 %d，可能未抓全（got=%d）", label, self.max_pages, len(query_seen))
+            return _FULL
+        # 「没有新岗」也可能是对方中途把同一页回了两次。total 小于上限时是准的，拿它兜一道：
+        # 少了一整页以上就不算翻完（少几条是翻页期间的正常下架）。
+        if declared is not None and declared - len(query_seen) >= _PAGE_SIZE:
+            logger.warning("%s: 翻到 %d 条就没有新岗了，对方自报 %d 条——按没抓全记", label, len(query_seen), declared)
+            return _CUT
+        return _ENDED
+
+    def _split_should_halt(self, posts: List[dict], seen: set) -> bool:
+        """切块翻页时每页问一次：还该不该往下翻。两道闸都是全站既有口径，不是 workday 另立的：
+          · 重复度刹车（base.RepetitionBrake）：连续 400 条没带来一个新的归一标题 = 同一个岗 × N 家门店；
+          · 单源条数上限（base.DEFAULT_LIST_CAP，env CRAWL_MAX_JOBS）。
+        只管切出来的块；没撞 2000 上限的源不走这里，行为与原来逐条相同。
+        posts 只传这一页**新收进来**的岗：别的块 / 这一块自己的窗口已经收过的岗再出现一次，说明不了
+        「再往下翻还有没有新角色」（首页不报 total 的租户会先翻满一窗再切，切出来的头几页全是刚收过的）。
+        叫停按源算、不按查询算：一个源被判成门店批量发布，它后面再有装不下的查询也不再整包切。"""
+        if not self._split_halt:
+            if self._split_brake.observe([p.get("title") for p in posts]):
+                self._split_halt = "repetition_brake"
+            elif len(seen) >= self._list_cap:
+                self._split_halt = "list_cap"
+            if self._split_halt:
+                self.coverage_stop_reason = self._split_halt
+                logger.warning("workday %s: 切块翻页停在 %s（已收 %d 条）", self._host, self._split_halt, len(seen))
+        return bool(self._split_halt)
+
+    def _collect_capped(self, source_url, headers, applied: dict, first: dict, seen: set, out: List[dict],
+                        label: str, depth: int, window_done: bool = False) -> bool:
+        """一个查询超过 2000 条（Workday 只给前 2000）：按 facet 计数切成装得下的几块，分别翻、取并集。
+
+        2026-10-12 实测唯一真撞上限的是 Target：美国岗自报 14,072，旧实现每轮只见 2,008，库里另有 2,107 个
+        仍在招的岗（其中 208 个是总部 / 技术 / 实习岗）再也刷不到 last_seen_at，列表字段改了规则也不自愈。
+        按州切 + 加州再按用工类型切，逐块翻完 = 14,071 条，与自报只差 1。
+
+        没切全时（切不动 / 没有盖得住的维度 / 刹车 / 撞单源上限）一律把原查询自己的前 2000 条照拿一遍：
+        那是改之前就拿得到的，保证任何情况下都不比改前少。
+        """
+        counts = _facet_counts(first.get("facets"))
+        declared = _declared_rows(applied, counts)
+        if depth == 0 and declared:
+            self._declared_floor = max(self._declared_floor, declared)
+        plan = None
+        if depth < _SPLIT_MAX_DEPTH and not self._split_halt:
+            plan = _split_plan(applied, counts, declared)
+        complete = False
+        mark = len(out)
+        outer_keys, self._split_keys = self._split_keys, set()   # 这一层切出来的各块一共翻到了哪些岗
+        if plan is not None:
+            blocks, complete = plan
+            logger.info("%s: 自报 %s 条超过单查询上限 %d，切成 %d 块", label, declared, _QUERY_ROW_CAP, len(blocks))
+            for i, block in enumerate(blocks):
+                if self._split_halt:
+                    complete = False
+                    break
+                if not self._collect_query(source_url, headers, block, "", seen, out, f"{label}/{i}", depth + 1):
+                    complete = False
+            # 每一块都翻完了，并集却明显少于对方自报的岗数 = 这个维度其实没盖住（或计数不准）：不算抓全。
+            # 只在自报数是准数（每个已选维度只有一个取值）时比，哪一层都比；容差 1% 或一页，
+            # 给切分与翻页之间的上下架——依据只有 Target 一家（14,072 对 14,071），别的租户没验过。
+            exact = all(len(ids) == 1 for ids in applied.values())
+            if (complete and exact and declared
+                    and len(self._split_keys) < declared - max(_PAGE_SIZE, declared // 100)):
+                logger.warning("%s: 切了 %d 块都翻完，只见 %d 条，对方自报 %d 条——按没抓全记",
+                               label, len(blocks), len(self._split_keys), declared)
+                complete = False
+        outer_keys |= self._split_keys
+        self._split_keys = outer_keys
+        if complete:
+            return True
+        if depth > 0:
+            # 里层切不动的一块：尽力拿它自己的前 2000 条，照样受两道闸管。切过但没切全的不再补——
+            # 每层都补一遍就是每层白翻 100 页，「不比改前少」由最外层那一窗兜。
+            if plan is None and not window_done and not self._split_halt:
+                self._page_through(source_url, headers, applied, "", first, seen, out, label, in_split=True)
+            return False
+        if self._split_halt == "repetition_brake":
+            # 刹车前翻到的那几百条是「哪一块排在前面就是哪一块」的门店岗（Target 实测：加州的前 780 条）。
+            # 留着它们 = 又多一批下一轮未必还够得着的行，正是要治的病；批量源只收「原窗口 + 小众取值」。
+            for p in out[mark:]:
+                seen.discard(_post_key(p))
+            del out[mark:]
+        if not window_done:
+            self._page_through(source_url, headers, applied, "", first, seen, out, label, in_split=False)
+        if self._split_halt == "repetition_brake":
+            self._collect_minor_values(source_url, headers, applied, counts, seen, out, label)
+        return False
+
+    def _collect_minor_values(self, source_url, headers, applied: dict, counts: dict, seen: set,
+                              out: List[dict], label: str) -> None:
+        """刹车判定为门店批量发布的源：那一大包不整包拉（全站口径，见 base.DEFAULT_LIST_CAP 的注释），
+        但批量岗都压在各维度的某一个大取值上，其余取值合起来装得进一个查询——把它们各翻一遍。
+
+        Target（2026-10-12）：14,071 个美国岗归一后只有 694 种标题、前 20 种占 91.8%；职类 Stores 一项
+        13,646，其余 17 个职类（实习 / 供应链 / 技术 …）合计 426 个、386 种标题，正是用户要看的那部分，
+        而它们有一半排在前 2000 条之外。只取「有压倒性大取值的维度里、剩下那些取值」：
+        州这种没有压倒性取值的维度不取（它的小取值加起来就是那一大包）。
+        已选维度自己也算：几个国家一起提交、批量的那个国家被叫停时，剩下的小国家（在华 / 新加坡）
+        排在它后面还没轮到，要在这里单独翻全。
+        """
+        for param, vals in counts.items():
+            if param in applied:
+                if len(applied[param]) < 2:
+                    continue
+                vals = {i: vals.get(i, 0) for i in applied[param]}
+            live = [(i, n) for i, n in vals.items() if n > 0]
+            minor = [(i, n) for i, n in live if n < _SPLIT_BLOCK_ROWS]
+            if (not minor or len(minor) == len(live) or len(minor) > _FACET_ID_CHUNK
+                    or sum(n for _i, n in minor) > _SPLIT_BLOCK_ROWS):
+                continue
+            block = {**applied, param: [i for i, _n in minor]}
+            sub_label = f"{label}/minor:{param}"
+            try:
+                first = self._post_page(source_url, headers, block, "", 0)
+            except Exception as exc:
+                logger.warning("%s: 第 1 页抓取失败，这一块本轮没抓：%s", sub_label, exc_brief(exc))
+                continue
+            self._page_through(source_url, headers, block, "", first, seen, out, sub_label, in_split=False)
 
     @staticmethod
     def _iter_facet_values(facets):
