@@ -10,6 +10,11 @@ on:
     # 错过一轮仍在期内；超期的用户打开页面会退回现跑并在响应后回写，不会看到陈旧推荐。
     - cron: "40 4,10,16,22 * * *"
   workflow_dispatch:
+    inputs:
+      io_concurrency:
+        description: "这一轮连接的预读并发：留空 = 用下面 env 里的默认；off = 库默认值 1；也可填 1~1000 的整数"
+        required: false
+        default: ""
 
 concurrency:
   group: today-recall-snapshot
@@ -25,6 +30,8 @@ jobs:
       JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
       JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
       JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
+      # 连接池的预读并发（lib/jobs-store/client.ts 的 jobsSessionOptions）。手动触发时可以临时换一个值做对照。
+      JOBS_DB_IO_CONCURRENCY: ${{ inputs.io_concurrency }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
