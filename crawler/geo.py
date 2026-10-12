@@ -1372,3 +1372,45 @@ def location_cn_places(location: Optional[str]) -> list:
             i += len(name)
             last_province = glued = province if is_province else None
     return hits
+
+
+# 别名表里的城市，别处有同名的区：牡丹江市西安区、辽源市西安区。只有这种才能凭「X区」说它不是 X 市——
+# 「杭州区」「北京区」是业务片区的叫法（live：Moka 卡片上的部门名「浙江业务区-杭州区…」），说的就是那个城市。
+_CITY_NAMES_USED_BY_DISTRICTS_ELSEWHERE = frozenset({"西安"})
+
+
+def cn_name_is_part_of_another_place(location: Optional[str], name: str) -> bool:
+    """location 里每一处「name」是不是都只是别的地名 / 路名的一部分，而不是在说 name 这个城市（2026-10-12 加）。
+
+    给 normalizer.clean_location 用：子串折叠折出了 name，location_cn_places 却在串里认出了别的地方、没认出它。
+    下面几种算「不是在说它」；有一处哪种都不是就返回 False——宁可维持折叠，不把原来对的城市改丢：
+      · 那几个字跨在别的地名上（「陕西安康」「山西安泽县」的「西安」：西是省名的）；
+      · 串里另有 name 所在省之外的地方，而它后面紧跟路 / 街（「哈尔滨市利民开发区南京路6号」，判法同
+        _STREET_AFTER_PLACE_RE），或者它是别处有同名区的那个名字、后面是「区」（「牡丹江市·西安区」）；
+      · 同一段里前面已经写了另一个城市、它后面是「湾」（「宁波市杭州湾新区」）。只认这一个字：紧跟在别的城市后面的
+        多半是几个城市粘在一起写（「广州深圳等地」「南京上海深圳」「宁波杭州区域」），那里的每个城市都是真的。
+    """
+    text = str(location or "")
+    own_province = cn_place_province(name)
+    others = [(pos, pos + len(nm), is_province, nm)
+              for pos, nm, _province, is_province, _written in location_cn_places(text) if nm != name]
+    if not others:
+        return False
+    elsewhere = any(not (is_province and nm == own_province) for _s, _e, is_province, nm in others)
+    seg_ends = [m.end() for m in _SEGMENT_SPLIT_RE.finditer(text)]
+    start = text.find(name)
+    found = False
+    while start >= 0:
+        found = True
+        end = start + len(name)
+        rest = text[end:]
+        seg_start = max((e for e in seg_ends if e <= start), default=0)
+        straddles = any(s < end and start < e for s, e, _is_province, _nm in others)
+        street = bool(_STREET_AFTER_PLACE_RE.match(rest))
+        district = (name in _CITY_NAMES_USED_BY_DISTRICTS_ELSEWHERE
+                    and rest.startswith("区") and not rest.startswith("区域"))
+        after_city = any(seg_start <= s and e <= start and not is_province for s, e, is_province, _nm in others)
+        if not (straddles or (elsewhere and (street or district)) or (after_city and rest.startswith("湾"))):
+            return False
+        start = text.find(name, start + 1)
+    return found
