@@ -800,6 +800,21 @@ class MokaListFilterTest(unittest.TestCase):
         with self.assertRaises(_Timeout):
             self._filtered()._open_route(page, FILTERED)
 
+    def test_empty_filtered_campus_list_does_not_ask_about_a_new_portal(self):
+        """筛出 0 条只说明这一类岗现在没有：不去问平台「是不是换了新一期门户」（那是整个门户为空时才问的）。"""
+        campus = "https://app.mokahr.com/campus-recruitment/t/1"
+        a = MokaAdapter()
+        a._plan_routes(campus + FILTER_ROUTE)
+        a._current_campus_portal_id = lambda host, tenant: self.fail("带筛选的源不该问平台别名")
+        a._raise_if_campus_portal_superseded(object(), campus + FILTER_ROUTE)
+        # 对照：不带筛选的校招门户为空时是会问的
+        asked = []
+        plain = MokaAdapter()
+        plain._plan_routes(campus)
+        plain._current_campus_portal_id = lambda host, tenant: asked.append((host, tenant)) or "1"
+        plain._raise_if_campus_portal_superseded(object(), campus)
+        self.assertEqual(asked, [("app.mokahr.com", "t")])
+
     def test_filtered_list_reads_only_its_own_cards(self):
         listed = [f"#/job/list_{i}" for i in range(15)]
         state, cards = self._filtered()._open_route(_RoutePage(listed, self.SIDEBAR), FILTERED)

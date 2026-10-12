@@ -631,6 +631,8 @@ class MokaAdapter(PlaywrightAdapter):
         「别名不同」本身不够：租户常同时开着几个门户，别名也可能指向没配置过的空模板（华虹 74008）。
         所以要在同一个浏览器里把别名门户打开看一眼——那边也是空的，就当本门户只是休眠，照常记 0 岗。
         打不开 / 看不清一律不报（宁可漏报，不把休眠记成失败）。"""
+        if self._list_filter:
+            return  # 带筛选的源：筛出 0 条只说明这一类岗现在没有，不说明门户换了期
         m = self._CAMPUS_PORTAL_RE.match(source_url or "")
         if not m:
             return  # 不是带 id 的校招门户（社招 / 无 id 别名本身就跟着当前期走）
@@ -966,9 +968,8 @@ class MokaAdapter(PlaywrightAdapter):
                         + ", ".join(route_errors)
                         + ("；这条源带筛选，只读老版门户的列表区（.col-xs-9）——门户换了版式就读不到，到页面上核一下"
                            if self._list_filter else ""))
-                if best_route is None and not self._list_filter:
+                if best_route is None:
                     # 渲染出了空态、一张卡都没有：先排除「我们指着一个已换期的旧门户」再认 0 岗。
-                    # 带筛选的源不查：筛出 0 条只说明这一类岗现在没有，不说明门户换了期。
                     self._raise_if_campus_portal_superseded(page, source_url)
                 if best_route is not None:
                     # 已在这个路由上见过岗位卡；这一步再失败就是真故障，同样不许吞成 0 岗。
