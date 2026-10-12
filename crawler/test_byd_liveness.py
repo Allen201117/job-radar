@@ -10,7 +10,9 @@ from unittest import mock
 import psycopg2
 
 import byd_liveness as L
-from adapters.byd import DETAIL_URL_PREFIX, BydAdapter, detail_state
+from adapters.byd import BydAdapter, social_detail_state as detail_state
+
+DETAIL_URL_PREFIX = BydAdapter()._detail_url_prefix()
 
 
 def _u(token):
@@ -168,13 +170,13 @@ class GateTest(unittest.TestCase):
 
     def test_decode_gate(self):
         urls = [_u(str(i)) for i in range(100)]
-        self.assertIsNone(L.decode_blocked_reason(urls, {u: ("1", None) for u in urls}))
-        self.assertIsNone(L.decode_blocked_reason(urls, {u: ("1", None) for u in urls[:95]}))
-        self.assertIn("94/100", L.decode_blocked_reason(urls, {u: ("1", None) for u in urls[:94]}))
+        self.assertIsNone(L.decode_blocked_reason(urls, {u: ("1", None) for u in urls}, DETAIL_URL_PREFIX))
+        self.assertIsNone(L.decode_blocked_reason(urls, {u: ("1", None) for u in urls[:95]}, DETAIL_URL_PREFIX))
+        self.assertIn("94/100", L.decode_blocked_reason(urls, {u: ("1", None) for u in urls[:94]}, DETAIL_URL_PREFIX))
         # 官方路由整个变了：一条都解不出，绝不许当成「0 个要下架」放过去
-        self.assertIn("0/100", L.decode_blocked_reason(urls, {}))
-        self.assertIsNotNone(L.decode_blocked_reason(["https://job.byd.com/other?x"], {}))
-        self.assertIsNone(L.decode_blocked_reason([], {}))
+        self.assertIn("0/100", L.decode_blocked_reason(urls, {}, DETAIL_URL_PREFIX))
+        self.assertIsNotNone(L.decode_blocked_reason(["https://job.byd.com/other?x"], {}, DETAIL_URL_PREFIX))
+        self.assertIsNone(L.decode_blocked_reason([], {}, DETAIL_URL_PREFIX))
 
     def test_recent_absent_gate(self):
         listed = {str(i) for i in range(100)}

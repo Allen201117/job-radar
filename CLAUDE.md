@@ -207,7 +207,7 @@ app-route 模板把同一个 promise 既交给 waitUntil 又交给 sendResponse�
 
 | 组件 | 在哪 | 干什么 |
 |---|---|---|
-| 期望清单 | `crawler/audit_contract.yaml`（90 条：数据 14 / 体验 22 / 链路 37 / 老告警桥接 17；原写 85 条是 09-19 上线时的数，09-23 复核更正为 87；10-04 加规则 Q 时实数已是 89、加完 90；10-10 体验层再加「现查派发失败」「公告页读取上限」两条，实数 92；10-11 数据层加「公司画像撞名」两条，实数 94） | 每条声明 `normal`；`name/why/action` 是**人话**，晨报直接念 |
+| 期望清单 | `crawler/audit_contract.yaml`（90 条：数据 14 / 体验 22 / 链路 37 / 老告警桥接 17；原写 85 条是 09-19 上线时的数，09-23 复核更正为 87；10-04 加规则 Q 时实数已是 89、加完 90；10-10 体验层再加「现查派发失败」「公告页读取上限」两条，实数 92；10-11 数据层加「公司画像撞名」两条，实数 94；同日再加「公司名带渠道后缀」两条（招聘来源 / 在招岗各一条），实数 96） | 每条声明 `normal`；`name/why/action` 是**人话**，晨报直接念 |
 | 执行器 | `crawler/audit_runner.py` + `structural-audit.yml`（每日北京 08:50） | 逐条量，写 `audit_results`（Supabase，迁移 281/282）；`unique(check_id, run_date)` 一天一行 = 趋势表。可选 `detail_sql` 列出「具体是哪几处」进 `detail.findings`，晨报 ⑤⑦ 据此点名；它失败不改数值与判定 |
 | 覆盖率差集 | `crawler/audit_coverage.py` + `audit_exemptions.yaml` | 左边**自动枚举**（带 cron 的 workflow / 写 ops_runs 的模块 / jobs 表列 / 走查指标），减去有期望的；上线时 68 条 → 现 14 条（全是 jobs 列） |
 | 老告警桥接 | `ops_watchdog.py` 的 `publish_audit_bridge` | 16 条规则**判定与阈值一字未动**，只把每条的命中数 + 明细写进同一张表（`detail.findings[].title` 与 issue 标题逐字一致） |
@@ -522,6 +522,7 @@ tests/                   # node --test 单测（*.test.js）；crawler 侧 unitt
   📌 第四次（2026-09-23，北森）：**一个 ATS 租户 ≠ 一家公司**。`chinalife.zhiye.com` 同时发中国人寿与广发银行的岗，三个门户页同一 PortalId、列表一次返回整租户，每条都贴 sources.company → 531 个广发银行岗（列表里 466 + 已下线 65）挂成「中国人寿」。✅ 按每行自报的招聘机构 `Org`（DisplayFields 点名才返回；广发自己的校招页圈岗用的是同一棵树，全量逐条一致）归属，共享租户登记在 `china_ats._BEISEN_SHARED_TENANTS`；存量逐行纠正走 `reattribute-beisen-shared-tenant.yml`（`rename-job-company` 按前缀整批改名，同一前缀两家混着时用不上）。接北森源先看列表里「招聘机构」列有没有别家。
   2026-09-24 全量普查 307 个在用北森租户（新版 276 个翻全 145,919 岗；老版 30 个里 27 个无机构列、判不了）：除国寿外没有第二个「挂别家」，但同病的两个变种各查出几例（迁移 305）——**同一门户挂两个域名**（tjsemi↔zhonghuan 758 岗、ke.zhiye.com↔campus.ke.com 45 岗，jobAdId 逐个相同 → 一岗两行两个公司名；判法是比两条源页面的 `PortalId`）；**母子集团两个租户各发一份**（上实门户 149 岗里 117 个与上海医药门户标题连招聘编号一字不差，jobAdId 不同 → `china_ats._BEISEN_TWIN_PORTALS` 抓时剔除）；**源名起窄**（泰康之家→泰康保险、建发房产→建发集团）。存量孪生走 `remove-jobs-by-url-prefix.yml` 的 `twin_key`（北森没有 `#` 片段，默认口径对它数出 0，要用 `jobadid` / `title`）。
   📌 第五、六次（2026-10-10，迁移 311·312，老版 wt）：`www.hotjob.cn/wt/CT` 记成中国电信，实为财通证券（215 岗挂错名四个月，同一批岗在财通门户下另有一份；中国电信自己的站是 `job.chinatelecom.com.cn/wt/TELE`，未接）；`jks.hotjob.cn/wt/JKS` 记成晶科能源，实为金科服务（物业，85 岗——晶科能源在必投清单里，缺口台账记它 healthy、健康岗 77，实为零源）。根因：接入时按 **BRAND 代号**猜公司名，只看探活出岗。wt 没有 suite/config，门户自报 = 首页跳到的新版门户的 companyName / 落地页 `<title>`；列表 `orgName` 只能佐证、不能拿来判错（常是部门 / 城市）。✅ `audit_hotjob_attribution.audit_wt` 每周复核全部 wt 源（上线时 40 条：33 对上 / 2 对不上 / 4 判不了 / 1 接口不通）；同时收紧 `names_agree`——原先「中国银行」对「华夏银行招聘官网」、「中国石油」对「中国石化」都判对得上（剥地名剩两字行业词、「地名 + 1 字」的三字头）。⚠️ 核对结果只进 CI 日志和台账、没进晨报：wecruit 侧台账连续三周 mismatch=3（10-10 实跑是「奥迪汽车（中国）」那 3 条，租户自报一汽奥迪），一直没人处理。
+  📌 第七次（2026-10-11，迁移 319，飞书）：`bytedance.jobs.feishu.cn` 记成「抖音」，实为字节跳动官网社招门户挂在飞书域名上的另一个入口（两边页面自报同一个 `website_info.id`、`tenant_name=ByteDance`）。8,351 个在招岗里 7,946 个与「字节跳动」名下岗位编号相同，同一个岗两张卡；且飞书域名上的详情链接在浏览器里是「Not Found」（前端把 `/society/` 改写成 `/experienced/`，curl 仍是 200）——新岗巡检判死、purge、列表重抓再插入，两周复活 6,145 次，吃掉新岗巡检近半名额。根因：自动扩源的 LLM 喂料给了「抖音」+ slug `bytedance`，`feishu_probe` 在门户标题对不上时认「岗位标题含公司名」，字节的岗位标题带业务线名（「…-抖音生活服务」）。✅ 飞书门户核名只认门户自报（`<title>` / `tenant_name` / keywords），**不认岗位标题，也不认 meta description**（宣传语会点名旗下产品）；137 条飞书源对拍，改后被挡的只有这一条。⚠️ 没做的：入库前没有「岗位编号已挂在别的域名下」的查重，也没有「新源巡检判死率过高」的告警——这次连续两周每轮判死约 97% 没人知道。接飞书源要在浏览器里实开一条详情页。
 - **Playwright 在 CI 上：不等 `networkidle`、必须接管 dialog（2026-09-13 立）**。
   ❌ moka 09-10 起 410 源日产 3.6 万岗 → ~500 却全记 success：新版前端 POST `sentry-fe.mokahr.com`，该主机从 runner 连不上也不断开（本机国内网络能连，所以本机复现不出来）→ networkidle 永远等不到 → 4 路由×35s 超时被 `except` 吞成 0 岗。
   ❌ dead-link-audit 每晚一片卡 150min：中国交建详情页弹 `alert('职位已下架')`，没注册 dialog 监听 → 驱动自动 dismiss 撞上下一跳 goto → Node 驱动崩溃、Python 干等。CI 上 A/B：旧代码第 6 个岗就崩，新代码 76 分钟审 1300 岗零崩溃。
@@ -571,6 +572,15 @@ tests/                   # node --test 单测（*.test.js）；crawler 侧 unitt
   ⚠️ 合并画像：`insight_subjects` / `insight_items` 对画像是级联删，必须同一事务里先改挂后删；括号里挂错集团的国聘残留只删不登记别名。动之前的行留在 `archive.merge_20261011_*`。
   ⚠️ 名字按别名归到画像之后，下游凡是「拿清单名 / 岗位公司名去比画像正名」的地方都要跟着认别名
   （校招周期链路的「已有时间线」判断、搜索富化排队的在招数，都是代码审查才查出来的）。全集清单与逐表行数：`docs/reviews/2026-10-11-insight-duplicate-profiles.md`。
+  📌 **源名不带招聘渠道后缀（2026-10-11，迁移 320，上面那批重复画像的上游）**：❌ 53 条源叫「X 校招」「X 实习」，岗位公司名照抄 →
+  岗位卡、公司筛选里出现「TCL 校招」；后缀还有两成是错的（这些名字下 11,246 个在招岗里 2,391 个逐岗分类是社招，北森一个租户的列表社招校招一起返回）。
+  ✅ 根因：全是迁移里手写的（2026-06 探活批次 46 条 + 09 月 7 条），代码不拼后缀。✅ 防：渠道只由 `sources.board` 与逐岗分类表达；
+  新迁移由 `scripts/check-migrations.sh` 在应用前拦、网页加源由 `validateSourceInput` 拦、每日体检 `sources.name_with_channel_suffix` / `jobs.company_with_channel_suffix`（都正常 0）。
+  分类器里「公司名带校招 / 实习就判校招 / 实习」那一层同日拆掉（当时带这类名字的 12,107 个在招岗逐行对拍，改判 0）。
+  ⚠️ 批量改 `jobs.company` 之前先知道：`company` 是招聘类型分类的输入，改名的行分类会被库里的触发器清空等重算 →
+  用 `rename-job-company.yml` 的 `map_file` 模式（先数唯一键撞行、改名与留底同一条语句、先 `rehearse` 真执行后回滚），跑完立刻手动触发 `backfill-recruitment-category`。
+  ⚠️ 「中文 + 英文尾巴」的源名刻意没统一：要动 8.4 万个在招岗、55 个名字的必投匹配会失效（海外清单的模式全是英文名），
+  数字见 `docs/reviews/2026-10-11-source-name-channel-suffix.md` §5。
 - 检索额度是**全局共享**的（见「搜索额度是全局共享的」一节）；千帆免费额度 50/天，耗尽时设 `BAIDU_QIANFAN_SEARCH_DISABLED=true`，**不要反复点「发现」或跑 5-query live 验证**。
 
 ## 四层「搜索/刷新」必须区分（高频踩坑点）

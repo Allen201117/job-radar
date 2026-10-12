@@ -377,6 +377,48 @@ checks:
     why: 两个画像的名字去掉「校招 / 实习」、去掉中文名后面的英文、再去掉「集团」「有限公司」这类后缀之后一样（比如「知乎」和「知乎 Zhihu」、「京东」和「京东集团」），多半是同一家公司建了两个画像：洞察会分散到两边，其中一个往往出不来卡。也可能真是两家公司——沃尔沃汽车和沃尔沃集团就是，这一对是已知的，所以正常上限是 1。2026 年 10 月 11 日清过一次，当时有 173 对。
     action: 把这条转给 Claude，让它按点名的两个画像判断：是同一家就合并，不是同一家就登记成已知例外
 
+  # 源名不带招聘渠道后缀（2026-10-11，迁移 320 把存量 55 条改回公司名之后立）。
+  # 改之前真库实测 53 条（另 2 条是把页面里的岗位字样抄进了公司名，写法不同、这条规则数不到）；改之后 0。
+  # 这是设计上的不变量，不是拍的阈值，所以不标待校准。
+  # 新迁移由 scripts/check-migrations.sh 在应用前拦，网页加源由 lib/source-adapters.ts 拦；这条兜的是其余写入路径。
+  - id: sources.name_with_channel_suffix
+    name: 招聘来源里公司名带着「校招 / 实习 / 社招」字样的条数
+    layer: data
+    db: supabase
+    owner: scripts/check-migrations.sh
+    sql: >
+      select count(*) from sources where company ~ '[[:space:]](校招|实习|社招)$'
+    detail_sql: >
+      select format('「%s」（%s）', company, case when enabled then '在抓' else '已停抓' end) as title,
+             id::text as key
+      from sources where company ~ '[[:space:]](校招|实习|社招)$'
+      order by company limit 30
+    normal: "== 0"
+    severity: warn
+    covers: []
+    why: 岗位卡上的公司名是直接照抄招聘来源的公司名的。来源写成「TCL 校招」，岗位卡和公司筛选里就会出现「TCL 校招」，同一家公司被拆成几个名字，洞察库里也会跟着长出几个重复的公司画像。2026 年 10 月把 55 条这样的来源改回了公司名，招聘渠道另有专门的地方记录。这条检查盯着它别再长出来。
+    action: 把这条转给 Claude，让它把点名的来源改成不带后缀的公司名，并把这些来源名下已有岗位的公司名一起改掉
+
+  # 上一条看来源，这一条看用户真正看到的东西：在招岗位的公司名。两者会不一致的情形——
+  # 来源名改了但存量岗位没跟着改、来源改名时有一轮抓取正在跑把旧名写了回去（迁移 312 踩过）。
+  # 改之前真库实测 11,246 个在招岗 / 38 个名字（2026-10-11）。
+  - id: jobs.company_with_channel_suffix
+    name: 在招岗位里公司名带着「校招 / 实习 / 社招」字样的个数
+    layer: data
+    db: jobs
+    owner: crawler/rename_job_company.py
+    sql: >
+      select count(*) from jobs where status = 'active' and company ~ '[[:space:]](校招|实习|社招)$'
+    detail_sql: >
+      select format('「%s」名下 %s 个在招岗', company, count(*)) as title, company as key
+      from jobs where status = 'active' and company ~ '[[:space:]](校招|实习|社招)$'
+      group by company order by count(*) desc limit 30
+    normal: "== 0"
+    severity: warn
+    covers: [company]
+    why: 用户在岗位卡和公司筛选里看到的公司名就是这一栏。它带着「校招」「实习」，同一家公司就会被拆成几个名字，按公司筛选会漏掉一部分岗位，推荐页对同一家公司的张数限制也会失效。
+    action: 把这条转给 Claude，让它先看对应的招聘来源名字改了没有，改了的话把这些岗位的公司名批量改成同一个名字
+
   # ===== 体验层 =====
   # 全部 db: supabase（events / job_actions / auth.users / ops_runs 都在 Supabase）。
   # 口径统一「昨天全天（Asia/Shanghai）」；SQL 已在真库跑通，实测值写在各条注释里

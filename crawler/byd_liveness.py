@@ -6,7 +6,7 @@
     suspect——375 个真渲染样本里 300 个已撤岗全部判 suspect、0 个判 dead。所以它每天巡、从不下架，
     库里攒了 5,429 个已撤岗（最早 6 月的），占比亚迪在招行数的 73%。
   · 详情链接里的岗位 id 是前端 AES 加密的，光有链接问不了详情接口；官方页面的路由能解，
-    一次页面加载解完全部（adapters/byd.decode_detail_urls）。
+    一次页面加载解完全部（adapters/byd.BydAdapter.decode_detail_urls）。
 
 每行在招岗的处置（逐岗，不抽样）：
   链接解不出 id                    → 不动（keep_undecodable）
@@ -52,7 +52,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import db  # noqa: E402
 import jobs_db  # noqa: E402
 import ops_runs  # noqa: E402
-from adapters.byd import DETAIL_URL_PREFIX, BydAdapter, detail_state  # noqa: E402
+from adapters.byd import BydAdapter, social_detail_state  # noqa: E402
 
 MODULE = "byd_liveness"
 CONTROL_SAMPLE = 8
@@ -75,7 +75,7 @@ def probe(client, job_id):
                 body = r.json()
             except ValueError:
                 body = None
-            state = detail_state(r.status_code, body, job_id)
+            state = social_detail_state(r.status_code, body, job_id)
             if state != "unknown":
                 return state
         except httpx.HTTPError:
@@ -160,9 +160,9 @@ def negative_control_ok(list_ids, probe_fn):
     return all(probe_fn(job_id) == "gone" for job_id in fakes)
 
 
-def decode_blocked_reason(urls, decoded):
-    """链接解不出 id 的比例过高 = 官方路由变了 / 页面没起来，这一轮什么都判不了。"""
-    ours = [u for u in urls if (u or "").startswith(DETAIL_URL_PREFIX)]
+def decode_blocked_reason(urls, decoded, prefix):
+    """链接解不出 id 的比例过高 = 官方路由变了 / 页面没起来，这一轮什么都判不了。prefix = 社招详情链接的前缀。"""
+    ours = [u for u in urls if (u or "").startswith(prefix)]
     n = sum(1 for u in ours if u in decoded)
     if urls and n < max(1, len(ours) * MIN_DECODED_FRACTION):
         return f"decode_degraded:{n}/{len(urls)}"
@@ -297,7 +297,7 @@ def reconcile_source(source, *, apply, max_fraction):
         urls = [u for _i, u, _recent in rows]
         decoded = adapter.decode_detail_urls(source["source_url"], urls)
         rec["decoded"] = sum(1 for u in urls if u in decoded)
-        reason = (decode_blocked_reason(urls, decoded)
+        reason = (decode_blocked_reason(urls, decoded, adapter._detail_url_prefix())
                   or recent_absent_blocked_reason(
                       [decoded[u][0] for _i, u, recent in rows if recent and u in decoded], list_ids))
         if rows and reason:

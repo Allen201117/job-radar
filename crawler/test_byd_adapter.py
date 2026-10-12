@@ -1,13 +1,16 @@
 import json
 import os
 import subprocess
+import sys
+import types
 import unittest
 from unittest import mock
 
 import httpx
 
-from adapters import byd as byd_module
-from adapters.byd import BydAdapter, _list_offsets
+import normalizer
+from adapters import byd as mod
+from adapters.byd import BydAdapter, BydCampusAdapter, _list_offsets
 
 
 class _StubResp:
@@ -92,128 +95,27 @@ class BydAdapterTest(unittest.TestCase):
 
         self.assertEqual(len(jobs), 1)
         self.assertEqual(jobs[0].title, "店端服务顾问")
-        self.assertEqual(jobs[0].job_type, "汽车事业群")
         self.assertEqual(jobs[0].posted_at, "2026-06-05")
 
+    def test_social_job_type_is_the_channel_and_survives_normalize(self):
+        """部门名不是招聘类型：填它时 normalizer 会用正文重推（正文有「应届」→ 校招），不带正文的抓取又
+        写回部门名，同一行来回变。按渠道填「社招」后，带不带正文都是同一个值。"""
+        def parse(detail):
+            payload = {"jobs": [{
+                "jd_url": "https://job.byd.com/portal/pc/#/social/socialPositionDetails?verified-token",
+                "row": {"id": "1", "positionName": "设备工程师", "orgAliasName": "2部",
+                        "province": "广东省", "city": "深圳市"},
+                "detail": detail,
+            }]}
+            return BydAdapter().parse(json.dumps(payload, ensure_ascii=False))[0]
 
-_BASE = "https://job.byd.com/portal/pc/#/social/socialPositionDetails?"
-
-
-class BydDetailUrlTest(unittest.TestCase):
-    """详情链接里的密文是 base64，会带 '//'；Vue Router 的 href 会把它压成 '/'，链接就打不开了。"""
-
-    def test_link_is_built_from_full_path_not_href(self):
-        # href 只许用来取 '#' 之前的路由 base（那一段没有密文）；密文那一段必须来自 fullPath。
-        self.assertIn("resolved.route.fullPath", byd_module._BUILD_DETAIL_URLS_JS)
-        self.assertIn("resolved.href.split('#')[0]", byd_module._BUILD_DETAIL_URLS_JS)
-        self.assertEqual(byd_module._BUILD_DETAIL_URLS_JS.count(".href"), 2)   # 上面那一处 + new URL(...).href
-
-    def test_only_links_that_decode_back_to_the_same_id_are_kept(self):
-        good = _BASE + "at2n3bDPdyn4h4S2Reo8FJW+Tg//qdaRyw9mX6SJu1o="   # 实测的带 '//' 密文，原样保留
-        urls = byd_module._verified_detail_urls([
-            ["2097132362952380417", good, "2097132362952380417"],
-            ["2096769889925652481", _BASE + "x", None],                     # 官方路由解不回来
-            ["2084078594987974657", _BASE + "y", "2084"],                   # 解回来不是同一个 id
-        ])
-        self.assertEqual(urls, {"2097132362952380417": good})
-
-    def test_link_with_another_prefix_is_dropped(self):
-        # 官网哪天换了路由 base：一条都不出 → fetch 报错，而不是 parse 安静丢光、记成功 0 岗
-        urls = byd_module._verified_detail_urls([
-            ["2097132362952380417", "https://job.byd.com/portal/pc#/social/socialPositionDetails?abc=",
-             "2097132362952380417"]])
-        self.assertEqual(urls, {})
-
-    def test_fetch_is_not_complete_when_a_row_has_no_verified_link(self):
-        rows = [{"id": "1", "positionName": "岗位1", "province": "广东省", "city": "深圳市"},
-                {"id": "2", "positionName": "岗位2", "province": "广东省", "city": "深圳市"}]
-
-        class _Stub(BydAdapter):
-            urls = {}
-
-            def _fetch_list_rows(self, client):
-                self.reported_total = len(rows)
-                return rows
-
-            def _generate_detail_urls(self, source_url, job_ids):
-                return self.urls
-
-            def _fetch_details(self, client, job_ids):
-                return {}
-
-        with mock.patch.object(byd_module.httpx, "Client", mock.MagicMock()):
-            full = _Stub()
-            full.urls = {"1": _BASE + "a", "2": _BASE + "b"}
-            self.assertEqual(len(json.loads(full.fetch("https://job.byd.com/portal/pc/"))["jobs"]), 2)
-            self.assertTrue(full.fetch_complete)
-
-            partial = _Stub()
-            partial.urls = {"1": _BASE + "a"}            # 列表翻全了，但 2 号岗没拿到验过的链接
-            self.assertEqual(len(json.loads(partial.fetch("https://job.byd.com/portal/pc/"))["jobs"]), 1)
-            self.assertFalse(partial.fetch_complete)
-
-    def test_absence_liveness_stays_off(self):
-        # 撤岗走 byd_liveness（不在全量列表 + 详情空骨架）；list-absence 认的是「这轮没写库」，不是一回事。
-        self.assertFalse(BydAdapter.supports_absence_liveness)
-
-
-# 用一个假的 Vue Router 在 node 里真跑那两段页面脚本。假路由照搬真路由与这件事有关的三个行为：
-# stringifyQuery / parseQuery 是一对严格互逆的映射（这里用查表代替 AES）；fullPath 原样带密文；
-# href 要过 cleanPath（把 '//' 压成 '/'，一遍、不重叠——'///' 压完还剩 '//'）。
-_ROUTER_STUB = """
-let raw = '';
-process.stdin.on('data', c => raw += c).on('end', () => {
-  const {table, src, input} = JSON.parse(raw);
-  const rev = Object.fromEntries(Object.entries(table).map(([id, token]) => [token, id]));
-  const clean = p => p.split('//').join('/');
-  const router = {resolve(to) {
-    if (typeof to === 'string') {
-      const id = rev[to.split('?')[1]];
-      return {route: {fullPath: to, query: id ? {id} : {}}, href: clean('/portal/pc' + '/' + '#' + to)};
-    }
-    const fullPath = to.path + '?' + table[to.query.id];
-    return {route: {fullPath, query: to.query}, href: clean('/portal/pc' + '/' + '#' + fullPath)};
-  }};
-  global.document = {querySelector: () => ({__vue__: {$router: router}})};
-  global.location = {origin: 'https://job.byd.com'};
-  console.log(JSON.stringify(eval('(' + src + ')')(input)));
-});
-"""
-_A, _B, _C = "2097132362952380417", "2084078591028551682", "2096769889925652481"
-_D, _E, _F = "2053673516951162882", "2080113349814685698", "2057644312329453569"
-_TOKENS = {_A: "aaaa+bb//cccc=", _B: "dddd/eeee+ffff=", _C: "gg//hh//ii=",
-           _D: "x//y/z=", _E: "x/y//z=",          # 两个不同的岗，坏链接压完是同一个串
-           _F: "p///q=", "2084": "short="}
-
-
-def _run_page_script(src, items):
-    result = subprocess.run(["node", "-e", _ROUTER_STUB], check=True, capture_output=True, text=True, encoding="utf-8",
-                            input=json.dumps({"table": _TOKENS, "src": src, "input": items}))
-    return json.loads(result.stdout)
-
-
-class BydPageScriptTest(unittest.TestCase):
-    def test_built_links_keep_double_slash_and_decode_back(self):
-        out = _run_page_script(byd_module._BUILD_DETAIL_URLS_JS, [_A, _B, _C])
-        self.assertEqual(out, [[i, _BASE + _TOKENS[i], i] for i in (_A, _B, _C)])
-        self.assertEqual(byd_module._verified_detail_urls(out), {i: _BASE + _TOKENS[i] for i in (_A, _B, _C)})
-
-    def test_decode_good_links(self):
-        out = _run_page_script(byd_module._DECODE_DETAIL_URLS_JS, [_TOKENS[_B], _TOKENS[_A]])
-        self.assertEqual(out, [[_TOKENS[_B], _B, None], [_TOKENS[_A], _A, None]])
-
-    def test_decode_repairs_collapsed_links(self):
-        out = _run_page_script(byd_module._DECODE_DETAIL_URLS_JS, ["aaaa+bb/cccc=", "gg/hh/ii=", "p//q="])
-        self.assertEqual(out, [["aaaa+bb/cccc=", _A, _TOKENS[_A]],     # 一处 '//' 被压
-                               ["gg/hh/ii=", _C, _TOKENS[_C]],         # 两处都被压
-                               ["p//q=", _F, _TOKENS[_F]]])            # '///' 被压成 '//'
-
-    def test_decode_refuses_to_guess(self):
-        out = _run_page_script(byd_module._DECODE_DETAIL_URLS_JS, ["x/y/z=", "short=", "garbage", "no/such/token="])
-        self.assertEqual(out, [["x/y/z=", None, None],            # 补回去有两个岗都说得通 → 不认
-                               ["short=", None, None],            # 解出来的不是 15~20 位数字
-                               ["garbage", None, None],
-                               ["no/such/token=", None, None]])
+        with_body = parse({"tagDetailList": [
+            {"name": "任职要求", "detail": "工作经验：应届硕士生/本科2年/大专3年以上相关工作经验"}]})
+        without_body = parse({})
+        for raw in (with_body, without_body):
+            self.assertEqual(raw.job_type, "社招")
+            row = normalizer.normalize(raw, source_id="s", company="比亚迪")
+            self.assertEqual(row["job_type"], "社招")
 
 
 class BydFetchDetailsTest(unittest.TestCase):
@@ -245,6 +147,550 @@ class BydFetchDetailsTest(unittest.TestCase):
 
         details = BydAdapter()._fetch_details(_FlakyClient(), ["1", "2", "3"])
         self.assertEqual(set(details), {"1", "3"})
+
+
+class _FakePage:
+    """假装是官方页面：evaluate 按传入的 path / query 拼一个「密文」，可指定哪些 id 回验失败。"""
+
+    def __init__(self, fail_ids=()):
+        self.fail_ids = set(fail_ids)
+        self.evaluate_args = []
+
+    def goto(self, *args, **kwargs):
+        pass
+
+    def wait_for_function(self, *args, **kwargs):
+        pass
+
+    def evaluate(self, script, arg):
+        self.evaluate_args.append((script, arg))
+        return [
+            [q["id"], None if q["id"] in self.fail_ids
+             else f"https://job.byd.com/portal/pc/#{arg['path']}?cipher//{q['id']}"]
+            for q in arg["queries"]
+        ]
+
+
+def _fake_playwright(page):
+    browser = types.SimpleNamespace(new_page=lambda **kw: page, close=lambda: None)
+    pw = types.SimpleNamespace(chromium=types.SimpleNamespace(launch=lambda **kw: browser))
+
+    class _Ctx:
+        def __enter__(self):
+            return pw
+
+        def __exit__(self, *exc):
+            return False
+
+    return types.SimpleNamespace(sync_playwright=lambda: _Ctx())
+
+
+class BydDetailUrlTest(unittest.TestCase):
+    def _generate(self, adapter, ids, fail_ids=()):
+        page = _FakePage(fail_ids)
+        with mock.patch.dict(sys.modules, {"playwright.sync_api": _fake_playwright(page)}):
+            urls = adapter._generate_detail_urls("https://job.byd.com/portal/pc/#/x", ids)
+        return urls, page
+
+    def _run_script(self, ids, parse_query):
+        """在 node 里真跑页面脚本。假路由照 vue-router 的样子：fullPath 保留密文里的 `//`，href 把它压成 `/`。"""
+        harness = (
+            "const fn = " + mod._RESOLVE_DETAIL_URLS_JS + ";\n"
+            "const router = { options: { parseQuery: " + parse_query + " },\n"
+            "  resolve: ({path, query}) => ({ href: '/portal/pc/#' + path + '?ab/' + query.id,\n"
+            "                                 route: { fullPath: path + '?ab//' + query.id } }) };\n"
+            "globalThis.document = { querySelector: () => ({ __vue__: { $router: router } }) };\n"
+            "globalThis.location = { origin: 'https://job.byd.com', pathname: '/portal/pc/' };\n"
+            "const queries = " + json.dumps([{"id": i} for i in ids]) + ";\n"
+            "process.stdout.write(JSON.stringify(fn({path: '/school/schoolPositionDetail', queries})));\n"
+        )
+        proc = subprocess.run(["node", "-e", harness], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return dict(json.loads(proc.stdout))
+
+    def test_script_keeps_double_slash_and_checks_the_round_trip(self):
+        """route.href 会把密文里的 `//` 压成 `/`（vue-router cleanPath），那样的链接打开是空白页：
+        2026-10-11 实测校招 386 条里 6 条、库里社招在招 96 条。脚本回归到 href 这里先红。"""
+        urls = self._run_script(["7", "8"], "c => ({ id: c.split('//')[1] })")
+        self.assertEqual(urls, {
+            "7": "https://job.byd.com/portal/pc/#/school/schoolPositionDetail?ab//7",
+            "8": "https://job.byd.com/portal/pc/#/school/schoolPositionDetail?ab//8",
+        })
+
+    def test_script_gives_no_url_when_the_site_cannot_decode_it_back(self):
+        # 解回的 id 被截短（库里那 96 条坏链接里有 2 条是这样：解得出东西，但不是原来的 id）
+        self.assertEqual(self._run_script(["2084113350083"], "c => ({ id: '2084' })"), {"2084113350083": None})
+        self.assertEqual(self._run_script(["7"], "c => ({})"), {"7": None})                       # 解不出 id
+        self.assertEqual(self._run_script(["7"], "c => { throw new Error('bad') }"), {"7": None})  # 解码器抛错
+        self.assertEqual(self._run_script(["7"], "undefined"), {"7": None})                        # 页面没有解码器
+
+    def test_social_and_campus_pass_the_query_the_site_itself_uses(self):
+        urls, page = self._generate(BydAdapter(), ["7"])
+        self.assertEqual(page.evaluate_args[0][1],
+                         {"path": "/social/socialPositionDetails", "queries": [{"id": "7"}]})
+        self.assertEqual(urls, {"7": "https://job.byd.com/portal/pc/#/social/socialPositionDetails?cipher//7"})
+
+        _urls, page = self._generate(BydCampusAdapter(), ["9"])
+        self.assertEqual(page.evaluate_args[0][1], {
+            "path": "/school/schoolPositionDetail",
+            "queries": [{"id": "9", "abroad": "", "degree": None}],
+        })
+
+    def test_ids_that_fail_the_round_trip_get_no_url(self):
+        urls, _page = self._generate(BydAdapter(), ["1", "2", "3"], fail_ids={"2"})
+        self.assertEqual(set(urls), {"1", "3"})
+
+    def test_no_ids_does_not_launch_a_browser(self):
+        with mock.patch.dict(sys.modules, {"playwright.sync_api": None}):   # 一 import 就炸
+            self.assertEqual(BydAdapter()._generate_detail_urls("https://job.byd.com/portal/pc/#/x", []), {})
+
+
+class BydSocialFetchTest(unittest.TestCase):
+    def setUp(self):
+        os.environ["CRAWL_DETAIL_CAP"] = "0"
+
+    def tearDown(self):
+        os.environ.pop("CRAWL_DETAIL_CAP", None)
+
+    def _fetch(self, fail_ids=()):
+        rows = [{"id": str(i), "positionName": f"岗位{i}", "province": "广东省", "city": "深圳市"} for i in (1, 2, 3)]
+
+        class _Client:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def post(self, url, json):  # noqa: A002
+                return _StubResp({"total": 3, "data": rows if json["pageNum"] == 0 else []})
+
+        adapter = BydAdapter()
+
+        def fake_urls(source_url, job_ids):
+            return {i: f"https://job.byd.com/portal/pc/#/social/socialPositionDetails?c{i}"
+                    for i in job_ids if i not in fail_ids}
+
+        with mock.patch.object(mod.httpx, "Client", lambda **kw: _Client()):
+            with mock.patch.object(adapter, "_generate_detail_urls", fake_urls):
+                html = adapter.fetch("https://job.byd.com/portal/pc/#/social/socialMainPageSocial")
+        return adapter, json.loads(html)["jobs"]
+
+    def test_complete_when_every_listed_row_has_a_url(self):
+        adapter, jobs = self._fetch()
+        self.assertEqual((len(jobs), adapter.reported_total, adapter.fetch_complete), (3, 3, True))
+
+    def test_incomplete_when_a_listed_row_has_no_verified_url(self):
+        adapter, jobs = self._fetch(fail_ids={"2"})
+        self.assertEqual(sorted(j["row"]["id"] for j in jobs), ["1", "3"])
+        self.assertFalse(adapter.fetch_complete)
+
+    def test_no_url_at_all_raises(self):
+        with self.assertRaises(RuntimeError):
+            self._fetch(fail_ids={"1", "2", "3"})
+
+
+_ENTRIES = [  # postEntryConfig/list 2026-10-11 的真实形状（顺序也是接口返回的顺序）
+    {"postEntryName": "实习生", "batch": "2027", "campusNature": "008502", "abroad": "00112",
+     "degree": None, "status": "00111", "sort": 3},
+    {"postEntryName": "应届生", "batch": "2027", "campusNature": "008501", "abroad": "00112",
+     "degree": None, "status": "00111", "sort": 1},
+    {"postEntryName": "外派专项", "batch": "2027", "campusNature": "008501", "abroad": "00111",
+     "degree": None, "status": "00111", "sort": 4},
+    {"postEntryName": "博士生", "batch": "2027", "campusNature": "008501", "abroad": "00112",
+     "degree": "00109", "status": "00111", "sort": 2},
+]
+
+
+def _school_row(job_id, name="高级车身集成工程师", nature="008501", place="深圳市"):
+    return {"id": job_id, "jobName": name, "jobType": "研发技术", "workPlace": place,
+            "campusNature": nature, "batch": 2027, "updateTime": "2026-09-13"}
+
+
+class _Resp:
+    def __init__(self, body, status=200):
+        self._body, self.status_code = body, status
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise httpx.HTTPError("boom")
+
+    def json(self):
+        return self._body
+
+
+class _SchoolClient:
+    """按 URL 路由的假 httpx.Client。lists = {招聘性质码: [第 1 页行, 第 2 页行, ...]}，页写 "ERR" = 业务码报错。"""
+
+    def __init__(self, entries=_ENTRIES, lists=None, totals=None, details=None, entry_code=0):
+        self.entries, self.entry_code = entries, entry_code
+        self.lists = lists or {}
+        self.totals = totals or {}
+        self.details = details or {}
+        self.list_calls, self.detail_calls = [], []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def get(self, url, params=None):
+        if url.endswith("/postEntryConfig/list"):
+            return _Resp({"code": self.entry_code, "data": self.entries})
+        self.detail_calls.append(params)
+        detail = self.details.get(params["id"])
+        return _Resp({"code": 0, "data": detail} if detail is not None else {"code": 500, "data": None})
+
+    def post(self, url, json):  # noqa: A002 (匹配 httpx.Client.post 关键字签名)
+        self.list_calls.append(json)
+        pages = self.lists.get(json["campusNature"], [])
+        index = json["pageIndex"] - 1
+        rows = pages[index] if index < len(pages) else []
+        if rows == "ERR":
+            return _Resp({"code": 500, "msg": "系统异常"})
+        total = self.totals.get(json["campusNature"], sum(len(p) for p in pages if p != "ERR"))
+        return _Resp({"code": 0, "data": rows, "page": {"totalCount": total, "pageIndex": json["pageIndex"]}})
+
+
+class BydCampusChannelTest(unittest.TestCase):
+    def test_channels_come_from_open_entries_deduped_by_batch_and_nature(self):
+        """博士生 / 外派专项 是应届生按学历 / 外派筛出来的子集（同届别同性质），不另抓。"""
+        channels = BydCampusAdapter()._fetch_channels(_SchoolClient())
+        self.assertEqual(channels, [("2027", "008502"), ("2027", "008501")])
+
+    def test_closed_or_unknown_entries_are_not_crawled(self):
+        entries = [
+            {**_ENTRIES[1], "status": "00112"},                                   # 入口关了
+            {**_ENTRIES[0], "campusNature": "008504", "postEntryName": "储干"},   # 不认识的性质：不猜
+        ]
+        self.assertEqual(BydCampusAdapter()._fetch_channels(_SchoolClient(entries=entries)), [])
+
+    def test_business_error_on_entry_api_raises_instead_of_looking_empty(self):
+        with self.assertRaises(RuntimeError):
+            BydCampusAdapter()._fetch_channels(_SchoolClient(entry_code=500))
+        with self.assertRaises(RuntimeError):
+            BydCampusAdapter()._fetch_channels(_SchoolClient(entries=None))
+
+    def test_unrecognised_switch_values_are_not_read_as_all_closed(self):
+        """开关的字典值变了（既不是「是」也不是「否」）≠ 入口全关。"""
+        entries = [{**e, "status": "1"} for e in _ENTRIES]
+        with self.assertRaises(RuntimeError):
+            BydCampusAdapter()._fetch_channels(_SchoolClient(entries=entries))
+
+    def test_reported_total_but_no_recognisable_row_raises(self):
+        client = _SchoolClient(lists={"008501": [[{"positionId": "1", "jobName": "x"}]]}, totals={"008501": 1})
+        with self.assertRaises(RuntimeError):
+            BydCampusAdapter()._fetch_channel_rows(client, "2027", "008501")
+
+    def test_list_request_matches_what_the_school_page_sends(self):
+        client = _SchoolClient(lists={"008501": [[_school_row("1")]]})
+        BydCampusAdapter()._fetch_channel_rows(client, "2027", "008501")
+        self.assertEqual(client.list_calls[0], {
+            "topicCode": "", "batch": "2027", "campusNature": "008501", "abroad": "", "degree": "",
+            "jobType": [], "researchDirection": [], "workPlace": [], "keywords": "",
+            "pageSize": 1000, "pageIndex": 1,
+        })
+
+    def test_list_pages_until_reported_total(self):
+        client = _SchoolClient(lists={"008501": [[_school_row("1"), _school_row("2")], [_school_row("3")]]})
+        rows, total = BydCampusAdapter()._fetch_channel_rows(client, "2027", "008501")
+        self.assertEqual((sorted(rows), total), (["1", "2", "3"], 3))
+        self.assertEqual([c["pageIndex"] for c in client.list_calls], [1, 2])
+
+    def test_first_page_without_total_raises(self):
+        class _NoPage(_SchoolClient):
+            def post(self, url, json):  # noqa: A002
+                return _Resp({"code": 0, "data": []})   # HTTP 200 + 没有 page：不能当成「没有岗」
+
+        with self.assertRaises(RuntimeError):
+            BydCampusAdapter()._fetch_channel_rows(_NoPage(), "2027", "008501")
+        with self.assertRaises(RuntimeError):
+            BydCampusAdapter()._fetch_channel_rows(_SchoolClient(lists={"008501": ["ERR"]}), "2027", "008501")
+
+    def test_later_page_failure_keeps_rows_already_fetched(self):
+        client = _SchoolClient(lists={"008501": [[_school_row("1")], "ERR"]}, totals={"008501": 2})
+        rows, total = BydCampusAdapter()._fetch_channel_rows(client, "2027", "008501")
+        self.assertEqual((len(rows), total), (1, 2))
+
+
+class BydCampusFetchTest(unittest.TestCase):
+    def setUp(self):
+        os.environ.pop("CRAWL_DETAIL_CAP", None)
+
+    def tearDown(self):
+        os.environ.pop("CRAWL_DETAIL_CAP", None)
+
+    def _fetch(self, client, fail_ids=()):
+        adapter = BydCampusAdapter()
+
+        def fake_urls(source_url, job_ids):
+            return {i: f"https://job.byd.com/portal/pc/#/school/schoolPositionDetail?c{i}"
+                    for i in job_ids if i not in fail_ids}
+
+        with mock.patch.object(mod.httpx, "Client", lambda **kw: client):
+            with mock.patch.object(adapter, "_generate_detail_urls", fake_urls):
+                html = adapter.fetch("https://job.byd.com/portal/pc/#/school/schoolPositionList")
+        return adapter, json.loads(html)["jobs"]
+
+    def _client(self, **kw):
+        return _SchoolClient(
+            lists={"008501": [[_school_row("1"), _school_row("2")]],
+                   "008502": [[_school_row("9", nature="008502")]]},
+            details={"1": {"jobName": "高级车身集成工程师", "positionInfoList": []}}, **kw)
+
+    def test_fetch_covers_both_entries_and_judges_completeness_per_entry(self):
+        adapter, jobs = self._fetch(self._client())
+        self.assertEqual(sorted(j["row"]["id"] for j in jobs), ["1", "2", "9"])
+        self.assertEqual(adapter.reported_total, 3)
+        self.assertTrue(adapter.fetch_complete)
+        self.assertEqual({j["row"]["campusNature"] for j in jobs}, {"008501", "008502"})
+
+    def test_same_id_under_two_entries_is_written_once_and_still_complete(self):
+        """入口之间有重叠时拿总和当分母会恒判没抓全（小红书 / 华为踩过）→ 逐入口判。"""
+        client = _SchoolClient(
+            lists={"008501": [[_school_row("1"), _school_row("2")]], "008502": [[_school_row("1")]]},
+            details={"1": {"positionInfoList": []}})
+        adapter, jobs = self._fetch(client)
+        self.assertEqual(sorted(j["row"]["id"] for j in jobs), ["1", "2"])
+        self.assertEqual(adapter.reported_total, 3)
+        self.assertTrue(adapter.fetch_complete)
+
+    def test_later_page_failure_makes_fetch_incomplete(self):
+        client = _SchoolClient(
+            lists={"008501": [[_school_row("1")], "ERR"], "008502": [[_school_row("9", nature="008502")]]},
+            totals={"008501": 2}, details={"1": {"positionInfoList": []}})
+        adapter, jobs = self._fetch(client)
+        self.assertEqual(sorted(j["row"]["id"] for j in jobs), ["1", "9"])
+        self.assertFalse(adapter.fetch_complete)
+
+    def test_rows_that_cannot_be_mapped_fail_loudly_instead_of_looking_empty(self):
+        """列表有行、URL 也有，却一行都映射不出岗位（字段改名）：记失败，不能记成「空源、已抓全」。"""
+        renamed = {"id": "1", "positionName": "高级车身集成工程师", "workPlace": "深圳市", "campusNature": "008501"}
+        client = _SchoolClient(lists={"008501": [[renamed]]}, details={"1": {"positionInfoList": []}})
+        with self.assertRaises(RuntimeError):
+            self._fetch(client)
+
+    def test_one_unmappable_row_makes_fetch_incomplete(self):
+        overseas = _school_row("2", place="新加坡")
+        client = _SchoolClient(lists={"008501": [[_school_row("1"), overseas]]},
+                               details={"1": {"positionInfoList": []}})
+        adapter, jobs = self._fetch(client)
+        self.assertEqual(len(adapter.parse(json.dumps({"jobs": jobs}, ensure_ascii=False))), 1)
+        self.assertFalse(adapter.fetch_complete)
+
+    def test_heavy_lane_with_no_detail_at_all_raises(self):
+        """要补正文却一个详情都没取到 = 详情接口整个坏了；只写标题会是一批没正文的薄卡、状态还是成功。"""
+        client = _SchoolClient(lists={"008501": [[_school_row("1"), _school_row("2")]]}, details={})
+        with self.assertRaises(RuntimeError):
+            self._fetch(client)
+
+    def test_details_ask_for_the_unfiltered_position(self):
+        client = self._client()
+        self._fetch(client)
+        self.assertIn({"id": "1", "abroad": "", "degree": ""}, client.detail_calls)
+
+    def test_a_row_without_verified_url_is_not_written_and_fetch_is_incomplete(self):
+        """少写了一个还在列表里的岗时不许标抓全：标了，按缺席下架就会把它当成撤岗。"""
+        adapter, jobs = self._fetch(self._client(), fail_ids={"2"})
+        self.assertEqual(sorted(j["row"]["id"] for j in jobs), ["1", "9"])
+        self.assertFalse(adapter.fetch_complete)
+
+    def test_short_list_is_incomplete(self):
+        adapter, _jobs = self._fetch(self._client(totals={"008501": 5}))
+        self.assertFalse(adapter.fetch_complete)
+
+    def test_no_open_entry_is_an_empty_season_not_an_error(self):
+        adapter, jobs = self._fetch(_SchoolClient(entries=[]))
+        self.assertEqual((jobs, adapter.reported_total, adapter.fetch_complete), ([], 0, True))
+
+    def test_rows_but_no_urls_raises(self):
+        with self.assertRaises(RuntimeError):
+            self._fetch(self._client(), fail_ids={"1", "2", "9"})
+
+    def test_fast_lane_skips_details(self):
+        os.environ["CRAWL_DETAIL_CAP"] = "0"
+        client = self._client()
+        _adapter, jobs = self._fetch(client)
+        self.assertEqual(client.detail_calls, [])
+        self.assertEqual(len(jobs), 3)
+
+    def test_absence_sweep_stays_dry_run_for_the_new_source(self):
+        """校招类声明了按缺席下架，但新源先观察：默认名单里有它，谁在重档开了落库也只打印数字。"""
+        import run
+        self.assertTrue(BydCampusAdapter.supports_absence_liveness)
+        self.assertFalse(getattr(BydAdapter, "supports_absence_liveness", False))
+        self.assertIn("byd_campus", run.ABSENCE_OBSERVE_DEFAULT.split(","))
+        self.assertIn("beisen", run.ABSENCE_OBSERVE_DEFAULT.split(","))
+
+
+_SCHOOL_URL = "https://job.byd.com/portal/pc/#/school/schoolPositionDetail?us+yTBA6//7i7h86LCG9di3iZ4sEgB"
+_SCHOOL_LIST_URL = "https://job.byd.com/portal/pc/#/school/schoolPositionList"
+
+
+def _inner(direction, division, degree, duty="负责车身结构设计。", need="学历要求：硕士"):
+    return {"researchDirection": direction, "division": division, "degree": degree,
+            "jobDuty": duty, "jobRequirements": need, "workPlace": "深圳市"}
+
+
+class BydCampusParseTest(unittest.TestCase):
+    def _parse(self, row, detail=None, jd_url=_SCHOOL_URL):
+        payload = {"jobs": [{"row": row, "detail": detail or {}, "jd_url": jd_url}]}
+        return BydCampusAdapter().parse(json.dumps(payload, ensure_ascii=False))
+
+    def test_graduate_position(self):
+        detail = {"jobName": "高级车身集成工程师", "workPlace": "惠州市,深圳市", "positionInfoList": [
+            _inner("车身技术开发", "汽车工程研究院", "00109"),
+            _inner("车身技术开发", "商用车研究院", "00108,00107"),
+            _inner("造型曲面", "商用车研究院", "00108", duty="完成外造型曲面的设计。"),
+        ]}
+        job = self._parse(_school_row("1", place="惠州市,深圳市"), detail)[0]
+        self.assertEqual(job.company, "比亚迪")
+        self.assertEqual(job.title, "高级车身集成工程师")
+        self.assertEqual(job.location, "惠州市")                 # 官网列出的第一个城市
+        self.assertEqual(job.job_type, "2027届校招")
+        self.assertEqual(job.experience, "应届/不限")
+        self.assertEqual(job.education, "本科")                  # 各方向里要求最低的那一档
+        self.assertIsNone(job.posted_at)                          # 页面上那个日期叫「更新于」
+        self.assertEqual(job.jd_url, _SCHOOL_URL)
+        self.assertIn("//", job.jd_url.split("?", 1)[1])           # 密文里的双斜杠原样保留
+        for piece in ("【岗位方向】车身技术开发、造型曲面", "【部门意向】汽车工程研究院、商用车研究院",
+                      "【工作地点】惠州市、深圳市", "【学历】本科 / 硕士 / 博士",
+                      "【车身技术开发｜汽车工程研究院、商用车研究院】", "【造型曲面｜商用车研究院】",
+                      "完成外造型曲面的设计。"):
+            self.assertIn(piece, job.summary)
+        self.assertEqual(job.summary.count("负责车身结构设计。"), 1)   # 同一段正文只写一遍
+
+    def test_intern_position_carries_no_grad_class(self):
+        job = self._parse(_school_row("9", nature="008502"),
+                          {"positionInfoList": [_inner("整车集成", "汽车工程研究院", "00107")]})[0]
+        self.assertEqual(job.job_type, "实习")
+        self.assertIsNone(job.experience)
+        row = normalizer.normalize(job, source_id="s", company="比亚迪")
+        self.assertIsNone(row["grad_class"])
+
+    def test_list_only_row_still_emits_with_channel_type(self):
+        job = self._parse(_school_row("1"))[0]                    # 快档：没有详情
+        self.assertEqual((job.job_type, job.summary, job.education), ("2027届校招", None, None))
+
+    def test_single_text_position_has_no_group_header(self):
+        job = self._parse(_school_row("1"), {"positionInfoList": [_inner("整车集成", "汽车工程研究院", "00108")]})[0]
+        self.assertNotIn("｜", job.summary)
+        self.assertNotIn("【工作地点】", job.summary)             # 单城市不重复写
+
+    def test_long_direction_list_is_capped(self):
+        inner = [_inner(f"方向{i}", f"部门{i % 3}", "00107") for i in range(30)]
+        job = self._parse(_school_row("1"), {"positionInfoList": inner})[0]
+        self.assertIn("方向7 等 30 个方向", job.summary)
+        self.assertNotIn("方向7、方向8", job.summary.split("【部门意向】")[0])
+
+    def test_rows_that_must_not_be_written(self):
+        self.assertEqual(self._parse(_school_row("1", nature="008504")), [])          # 不认识的招聘性质
+        self.assertEqual(self._parse(_school_row("1", place="新加坡")), [])            # 没有在华城市
+        self.assertEqual(self._parse(_school_row("1", name="")), [])
+        social_url = "https://job.byd.com/portal/pc/#/social/socialPositionDetails?abc"
+        self.assertEqual(self._parse(_school_row("1"), jd_url=social_url), [])        # 不是校招详情页
+
+    def test_unknown_degree_codes_are_ignored(self):
+        job = self._parse(_school_row("1"), {"positionInfoList": [_inner("a", "b", "00199,00108")]})[0]
+        self.assertEqual(job.education, "硕士")
+        job = self._parse(_school_row("1"), {"positionInfoList": [_inner("a", "b", "00199")]})[0]
+        self.assertIsNone(job.education)
+
+    def test_pipeline_classifies_by_channel(self):
+        """走真实的 normalize + JS 分类器：应届生入口 → 校招 + 2027 届；实习生入口 → 实习。"""
+        from recruitment_classify import classify
+        grad = self._parse(_school_row("1"), {"positionInfoList": [_inner("整车集成", "汽车工程研究院", "00108")]})[0]
+        intern = self._parse(_school_row("9", nature="008502"),
+                             {"positionInfoList": [_inner("整车集成", "汽车工程研究院", "00107")]})[0]
+        for job in (grad, intern):
+            self.assertEqual(normalizer.validate_job_quality(job, _SCHOOL_LIST_URL), (True, ""))
+        rows = [normalizer.normalize(j, source_id="s", company="比亚迪") for j in (grad, intern)]
+        self.assertEqual(rows[0]["grad_class"], 2027)
+        self.assertEqual([category for category, _explicit, _function in classify(rows)], ["校招", "实习"])
+
+    def test_registered_in_run(self):
+        import run
+        self.assertIsInstance(run.ADAPTERS["byd_campus"], BydCampusAdapter)
+        self.assertIn("byd_campus", run.DOMESTIC_ADAPTERS)
+        self.assertNotIn("byd_campus", run._HTTPX_SAFE_ADAPTERS)   # 要起浏览器，只能走串行档
+
+
+# ── 社招撤岗核验要用的反方向：把库里链接的密文解回岗位 id（crawler/byd_liveness.py）──────────────
+# 用一个假的 Vue Router 在 node 里真跑解码脚本。假路由照搬真路由与这件事有关的三个行为：
+# stringifyQuery / parseQuery 是一对严格互逆的映射（这里用查表代替加密）；fullPath 原样带密文；
+# href 要过 cleanPath（把 `//` 压成 `/`，一遍、不重叠——`///` 压完还剩 `//`）。
+_DECODE_STUB = """
+let raw = '';
+process.stdin.on('data', c => raw += c).on('end', () => {
+  const {table, src, arg} = JSON.parse(raw);
+  const rev = Object.fromEntries(Object.entries(table).map(([id, token]) => [token, id]));
+  const clean = p => p.split('//').join('/');
+  const router = {resolve(to) {
+    if (typeof to === 'string') {
+      const id = rev[to.split('?')[1]];
+      return {route: {fullPath: to, query: id ? {id} : {}}, href: clean('/portal/pc' + '/' + '#' + to)};
+    }
+    const fullPath = to.path + '?' + table[to.query.id];
+    return {route: {fullPath, query: to.query}, href: clean('/portal/pc' + '/' + '#' + fullPath)};
+  }};
+  globalThis.document = {querySelector: () => ({__vue__: {$router: router}})};
+  console.log(JSON.stringify(eval('(' + src + ')')(arg)));
+});
+"""
+_A, _B, _C = "2097132362952380417", "2084078591028551682", "2096769889925652481"
+_D, _E, _F = "2053673516951162882", "2080113349814685698", "2057644312329453569"
+_TOKENS = {_A: "aaaa+bb//cccc=", _B: "dddd/eeee+ffff=", _C: "gg//hh//ii=",
+           _D: "x//y/z=", _E: "x/y//z=",          # 两个不同的岗，坏链接压完是同一个串
+           _F: "p///q=", "2084": "short="}
+_SOCIAL = "https://job.byd.com/portal/pc/#/social/socialPositionDetails?"
+
+
+class BydDecodeDetailUrlsTest(unittest.TestCase):
+    def _decode(self, encs):
+        proc = subprocess.run(
+            ["node", "-e", _DECODE_STUB], capture_output=True, text=True, encoding="utf-8", timeout=60,
+            input=json.dumps({"table": _TOKENS, "src": mod._DECODE_DETAIL_URLS_JS,
+                              "arg": {"path": "/social/socialPositionDetails", "encs": encs}}))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return json.loads(proc.stdout)
+
+    def test_good_links_decode_to_their_id(self):
+        self.assertEqual(self._decode([_TOKENS[_B], _TOKENS[_A]]),
+                         [[_TOKENS[_B], _B, None], [_TOKENS[_A], _A, None]])
+
+    def test_collapsed_links_are_repaired(self):
+        self.assertEqual(self._decode(["aaaa+bb/cccc=", "gg/hh/ii=", "p//q="]), [
+            ["aaaa+bb/cccc=", _A, _TOKENS[_A]],     # 一处 `//` 被压
+            ["gg/hh/ii=", _C, _TOKENS[_C]],         # 两处都被压
+            ["p//q=", _F, _TOKENS[_F]]])            # `///` 被压成 `//`
+
+    def test_refuses_to_guess(self):
+        self.assertEqual(self._decode(["x/y/z=", "short=", "garbage", "no/such/token="]), [
+            ["x/y/z=", None, None],            # 补回去有两个岗都说得通 → 不认
+            ["short=", None, None],            # 解出来的不是 15~20 位数字
+            ["garbage", None, None],
+            ["no/such/token=", None, None]])
+
+    def test_wrapper_maps_urls_and_skips_what_it_cannot_decode(self):
+        class _Page(_FakePage):
+            def evaluate(self, script, arg):
+                self.evaluate_args.append((script, arg))
+                canned = {"good=": ["good=", _A, None], "bad/x=": ["bad/x=", _B, "bad//x="], "junk=": ["junk=", None, None]}
+                return [canned[e] for e in arg["encs"]]
+
+        page = _Page()
+        urls = [_SOCIAL + "good=", _SOCIAL + "bad/x=", _SOCIAL + "junk=", _SCHOOL_URL, None]
+        with mock.patch.dict(sys.modules, {"playwright.sync_api": _fake_playwright(page)}):
+            decoded = BydAdapter().decode_detail_urls("https://job.byd.com/portal/pc/#/x", urls)
+        self.assertEqual(decoded, {_SOCIAL + "good=": (_A, None), _SOCIAL + "bad/x=": (_B, _SOCIAL + "bad//x=")})
+        # 只把社招详情链接的密文交给页面（校招链接是另一条路由，不归这里解）
+        self.assertEqual(page.evaluate_args[0][1],
+                         {"path": "/social/socialPositionDetails", "encs": ["bad/x=", "good=", "junk="]})
+
+    def test_wrapper_does_not_launch_a_browser_for_nothing(self):
+        with mock.patch.dict(sys.modules, {"playwright.sync_api": None}):   # 一 import 就炸
+            self.assertEqual(BydAdapter().decode_detail_urls("https://job.byd.com/portal/pc/#/x", [_SCHOOL_URL]), {})
 
 
 if __name__ == "__main__":
