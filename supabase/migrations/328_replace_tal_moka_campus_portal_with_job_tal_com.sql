@@ -1,4 +1,4 @@
--- 327 — 好未来校招：停用被跳走的 Moka 门户源，改接官方自建站 job.tal.com（adapter = tal，三个站点三条源）
+-- 328 — 好未来校招：停用被跳走的 Moka 门户源，改接官方自建站 job.tal.com（adapter = tal，三个站点三条源）
 --
 -- ── 为什么 ──
 --   源 app.mokahr.com/campus-recruitment/tal/146099（库里公司名「好未来」）最后一次抓到岗是 2026-09-09（726 个），
@@ -87,7 +87,7 @@ declare
 begin
   if exists (select 1 from public.sources
               where source_url = 'https://app.mokahr.com/campus-recruitment/tal/146099' and enabled) then
-    raise exception '327: 旧 Moka 校招源还是启用状态（source_url / adapter_name 没匹配上？）';
+    raise exception '328: 旧 Moka 校招源还是启用状态（source_url / adapter_name 没匹配上？）';
   end if;
   select count(*) into n_new from public.sources
    where adapter_name = 'tal' and enabled
@@ -95,11 +95,11 @@ begin
                         'https://job.tal.com/campus/xes/positions',
                         'https://job.tal.com/campus/xesonline/positions');
   if n_new <> 3 then
-    raise exception '327: job.tal.com 三条源应有 3 条启用，实际 %（旧校招源那一行没匹配上？）', n_new;
+    raise exception '328: job.tal.com 三条源应有 3 条启用，实际 %（旧校招源那一行没匹配上？）', n_new;
   end if;
   if exists (select 1 from public.company_profiles where company = '好未来')
      and not exists (select 1 from public.company_profiles
                       where company = '好未来' and aliases @> array['学而思', '学而思网校']) then
-    raise exception '327: 画像「好未来」的别名没登记上（另有画像占着「学而思」/「学而思网校」？需要人来判）';
+    raise exception '328: 画像「好未来」的别名没登记上（另有画像占着「学而思」/「学而思网校」？需要人来判）';
   end if;
 end $$;
