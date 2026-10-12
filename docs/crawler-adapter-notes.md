@@ -69,7 +69,8 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #       万科 882、移远 120、麦当劳 107、云从 94、科兴 91），2025 年 778，2026 年 2,547，卡片上没写日期的 221。
                          #       moka 不写 posted_at，这些岗在库里的首见时间都是上线当晚。门户仍把它们列为在招；
                          #       要不要设年限口径、要不要把发布日期写进 posted_at 没有定（上线前没量这一维，上线后才补量的）。
-                         #       同题另有一份逐门户的报告在未合入的分支 claude/keen-bassi-d13049（docs/reviews/2026-10-11-moka-old-paginator.md）。
+                         #       逐门户的对拍表、上线后对库的回读、已停止招聘却仍在招的 60 行：docs/reviews/2026-10-11-moka-old-paginator.md
+                         #       （📌 纠错：此处原写「另有一份逐门户的报告在未合入的分支」，报告已于 2026-10-12 进 main，只合了文档、没合那一版代码）。
                          #   tencent_music/antgroup/mihoyo = 必投清单大厂自建 SPA 门户（2026-07-06 live 验证：均有公开 JSON 接口，
                          #     纯 httpx 零浏览器，社招+校招一次抓全；company_spa 吃不掉——接口不返回 per-job URL，须模板拼已验证详情路由）
                          #   avature.py = Avature SearchJobs 通用层（siemens.py 是它的子类）：offset 翻页，
