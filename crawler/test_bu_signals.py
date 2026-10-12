@@ -90,6 +90,15 @@ class SampleGateTest(unittest.TestCase):
         dist = {d["key"]: d["count"] for d in metrics["city_share"]["payload"]["distribution"]}
         self.assertEqual(dist, {"上海": 12, "北京": 5, "保定市": 3})
 
+    def test_pinyin_location_is_not_counted_under_a_city_it_merely_contains(self):
+        # 库里原样存着的「Changzhou, Jiangsu, China」（见 normalizer.clean_location）：hangzhou 是 changzhou 的子串，
+        # 再拿 normalize_city 折一遍就又算到杭州头上了。
+        jobs = [job(location="Changzhou, Jiangsu, China") for _ in range(6)] + [job(location="杭州") for _ in range(6)]
+        metrics = {m["metric_key"]: m for m in
+                   S.compute_metrics(jobs, kind="company", subject_name="某公司", now=NOW)}
+        dist = {d["key"]: d["count"] for d in metrics["city_share"]["payload"]["distribution"]}
+        self.assertEqual(dist, {"杭州": 6, "Changzhou, Jiangsu, China": 6})
+
     def test_every_metric_carries_sample_n(self):
         jobs = [job(education="本科", experience="3-5年", salary_text="15-30K",
                     recruitment_category="社招") for _ in range(20)]
