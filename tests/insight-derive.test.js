@@ -512,6 +512,50 @@ test("deriveHiring 热门方向 / 城市：并列时结果与行的先后无关"
   assert.deepEqual(a.top_cities.map((c) => c.key), ["上海", "北京", "成都"]);
 });
 
+// 2026-10-11 线上：Target 的抽屉写「主要在 1000、7000、900」——地点列存的是被逗号劈开的门牌地址
+// （根因在抓取端，见 crawler/normalizer.strip_street_address 与 workday adapter 的 _post_location）。
+// 抓取端修好后地点是「Minneapolis, MN」「Brooklyn Park, MN」「San Diego, CA」，这里要把多词城市整个取出来。
+test("deriveHiring 热门城市：西文多词城市不按空格切，中文照旧按空格 / 短横切", () => {
+  const rows = [
+    ...Array(3).fill(0).map(() => j({ location: "Brooklyn Park, MN" })),
+    ...Array(2).fill(0).map(() => j({ location: "San Diego, CA" })),
+    j({ location: "San Jose, CA, USA" }),
+  ];
+  const cities = D.deriveHiring(rows, NOW_ISO).payload.top_cities;
+  assert.deepEqual(cities, [
+    { key: "Brooklyn Park", count: 3 },
+    { key: "San Diego", count: 2 },
+    { key: "San Jose", count: 1 },
+  ]);
+
+  const cn = [
+    j({ location: "上海市-浦东新区" }), j({ location: "上海 徐汇" }), j({ location: "上海" }),
+    j({ location: "北京市·海淀区" }), j({ location: "北京 Beijing" }),
+    j({ location: "香港" }), j({ location: "深圳" }),
+  ];
+  assert.deepEqual(D.deriveHiring(cn, NOW_ISO).payload.top_cities.slice(0, 2), [
+    { key: "上海", count: 3 },
+    { key: "北京", count: 2 },
+  ]);
+
+  // 短横照旧当分隔：博通把层级写成 "USA-Colorado-Fort Collins-4380 Ziegler Road"，不切就每个园区各算一个「城市」
+  const dashed = [
+    j({ location: "USA-Colorado-Fort Collins-4380 Ziegler Road" }),
+    j({ location: "USA-CA San Jose Innovation Drive" }),
+    j({ location: "USA-TX Plano Legacy Drive Suite 700" }),
+  ];
+  assert.deepEqual(D.deriveHiring(dashed, NOW_ISO).payload.top_cities, [{ key: "USA", count: 3 }]);
+
+  // 门牌号不是城市：库里还没被重抓改写的存量行（2026-10-12：Target 约 2,060 个在招岗排在列表 2000 条上限之外，
+  // 日常重抓够不着）和对方没写城市的地址，不能再挤进前三。
+  const leftovers = [
+    ...Array(5).fill(0).map(() => j({ location: "1000, Nicollet, Mall, MinneapolisMN, 55403, 2542" })),
+    ...Array(4).fill(0).map(() => j({ location: "1 New York Plaza" })),
+    j({ location: "Minneapolis, MN" }),
+  ];
+  assert.deepEqual(D.deriveHiring(leftovers, NOW_ISO).payload.top_cities, [{ key: "Minneapolis", count: 1 }]);
+});
+
 test("deriveHiring 不足阈值返回 null", () => {
   assert.equal(D.deriveHiring([j(), j()], NOW_ISO), null);
 });
