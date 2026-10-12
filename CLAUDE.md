@@ -657,6 +657,14 @@ tests/                   # node --test 单测（*.test.js）；crawler 侧 unitt
 
 `jd_url` 准确性高于一切。**禁止写入 active jobs**：招聘首页 / 搜索页 / 导航页 / 帮助页·FAQ / 登录页 / 语言切换页 / 专题入口页 / 空链接或猜测链接。拿不到稳定岗位详情链接的 source 只能记 `partial_success`，不得标记完整成功。质量门：`company/title/jd_url` 非空 + HTTP 200 + 页面含标题或核心片段。
 
+🚫 **借官网前端路由生成的 jd_url，要用它自己的解码器解回同一个岗才写库（2026-10-12 立）**：
+❌ 比亚迪详情链接的查询串是前端加密的，adapter 让页面的 Vue Router `resolve` 批量生成，取的是 `.href` → 约 1.5% 的链接打开是空白详情页
+（HTTP 200、没有任何下线文案）：库里社招在招 7,481 条里 96 条，最早的 2026-06-20 入库，其中 57 条被巡检看过仍是 active；校招首轮 386 条里 6 条。
+✅ 根因：`href` 会过 vue-router 的 cleanPath，把 `//` 压成 `/`；密文是 base64，本身会出现 `//`。页面自己跳转时写进地址栏的是 `fullPath`。
+✅ 防：取 `route.fullPath`，再用页面的 `router.options.parseQuery` 解一遍，解回同一个 id 才给 URL（`adapters/byd._RESOLVE_DETAIL_URLS_JS`，
+单测在 node 里真跑这段脚本）；列表里有一个岗没拿到可用 URL 就不算抓全。存量核验用同一招：页面里一次 `evaluate` 核完 7,481 条，不必逐条渲染。
+那 96 行已于 2026-10-12 标 removed（全量核过：96 条都解不回原 id、其余 7,417 条都解得回）。
+
 **唯一性下沉到 DB（migration 144）**：`jobs.canonical_jd_url`（归一 tracking 参数 + 尾斜杠；`#` SPA hash 路由原样不碰）+ active partial unique index 保证「同一岗位链接在 active 里唯一」。
 - ⚠️ **`canonicalize_jd_url` 归一逻辑活在三处，改一处必须三处同改、字节级一致**：`lib/canonical-url.js`（前端/JS 写入端）、`crawler/normalizer.py`（爬虫端）、`jobs-db/schema.sql` 的 SQL 函数（香港库的回填/触发器/审计；📌 纠错 2026-09-24：此处原写 `supabase/migrations/144`，那是 Phase 1 前的 Supabase 版，与上文 Phase 1 段的说法矛盾）。任一处 drift 会导致同岗算出不同 canonical → 去重失效或误并。
 - 改规则后必须同步两套纯函数测试：`tests/canonical-url.test.js` + `crawler/test_canonical.py`。
