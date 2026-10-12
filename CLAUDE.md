@@ -100,6 +100,7 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
      ⚠️ **农行（abchina）刻意没加进浏览器巡检**：它的死岗文案是「该岗位已过期」，`DEAD_MARKERS`
      一条都不匹配 → 光加 adapter 只会白烧浏览器预算；而「先加文案、后修导航」的顺序会当场误杀
      （2026-09-06 实测：不 reload 时 3 个在招岗全部读到上一个岗的过期页）。
+     另一层原因（2026-10-12）：它每次文档加载都可能被对方的反调试脚本清空页面（见通用红线 Playwright 那条），逐岗 reload 等于每个岗赌一次。
    - **🚫 巡检判「疑似」≠ 还在招：比亚迪撤岗页是空壳，已撤岗挂了近四个月（2026-10-12 立）**：
      ❌ 比亚迪社招在招 7,481 行里 5,429 行早已撤岗（最早 6 月），其中 3,160 行被浏览器巡检看过，照样 active。
      ✅ 根因：撤岗后的详情页不渲染岗位名和正文，也**没有任何「已下线」文案**（页面自己的详情接口回 code=0 + 字段全空的骨架）。
@@ -528,6 +529,8 @@ tests/                   # node --test 单测（*.test.js）；crawler 侧 unitt
 - **必须逐个跑一遍 `adapter.should_skip(url)`**：工行 / 中国移动对 HEAD 恒返 403，建行对本项目 Bot UA 返「HTTP 200 + 零字节 body」——不覆写就整源被静默跳过、永远 0 产出且不报错。
 - **本机绿 ≠ CI 绿**：本机 macOS 是 LibreSSL + 有 IPv6，GitHub runner 是 OpenSSL 3 + 无 IPv6 出口 → 国内门户常「本机全通、CI 四个源全 failed」。修法在 `crawler/cn_portal_tls.py`（强制 IPv4 + OP_LEGACY_SERVER_CONNECT，**证书校验保持开启、不许 verify=False**），这两条本机永远测不出来，靠单测断言看着。
 - **接完源必须回读线上 `crawl_runs` 的 status / error_message**，别拿本机跑通当交付。
+  不用等当晚重档：`gh workflow run crawl-one-adapter.yml -f adapter=<adapter 名>` 只跑这一个 adapter 名下的源（2026-10-12 加，
+  首跑农行 8 秒收尾、crawl_runs 记 success）。它走的就是正式抓取那条 `run.py`，真写库；名下源上百条的 adapter（moka / beisen / feishu / workday…）别用它跑。
 - **hotjob / wecruit 源的公司名只认租户自报的 `suite/config.companyName`，不认 slug / probe 清单（2026-09-18 立，迁移 248·274 两次张冠李戴）**：`jd.hotjob.cn` 是精雕不是京东；wecruit 租户 `SU612f55…` seed 时记成领益智造，实为特变电工（1,903 个 active 岗挂错名三个月无人发现，标题与 tbea wt 源逐字相同）。探活出岗 ≠ 归属正确。存量纠正走 `rename-job-company.yml`（按 jd_url 前缀点名）。
   📌 第三次（2026-09-23，迁移 291，moka）：租户 `dahua` 是上海大华（集团）（地产，页面 title/intro 自报），被记成浙江大华技术（安防）——根因是 auto-discover 清单 `cn='大华'`，`_verify` 只要求门户标题含 cn，「大华集团 - 社会招聘」照样放行。**清单 `cn` 必须能区分同名的另一家公司**（现为「大华技术」，`test_auto_discover` 钉着）；moka 等平台同样以门户页自报的公司名为准。
   📌 第四次（2026-09-23，北森）：**一个 ATS 租户 ≠ 一家公司**。`chinalife.zhiye.com` 同时发中国人寿与广发银行的岗，三个门户页同一 PortalId、列表一次返回整租户，每条都贴 sources.company → 531 个广发银行岗（列表里 466 + 已下线 65）挂成「中国人寿」。✅ 按每行自报的招聘机构 `Org`（DisplayFields 点名才返回；广发自己的校招页圈岗用的是同一棵树，全量逐条一致）归属，共享租户登记在 `china_ats._BEISEN_SHARED_TENANTS`；存量逐行纠正走 `reattribute-beisen-shared-tenant.yml`（`rename-job-company` 按前缀整批改名，同一前缀两家混着时用不上）。接北森源先看列表里「招聘机构」列有没有别家。
@@ -538,6 +541,18 @@ tests/                   # node --test 单测（*.test.js）；crawler 侧 unitt
   ❌ moka 09-10 起 410 源日产 3.6 万岗 → ~500 却全记 success：新版前端 POST `sentry-fe.mokahr.com`，该主机从 runner 连不上也不断开（本机国内网络能连，所以本机复现不出来）→ networkidle 永远等不到 → 4 路由×35s 超时被 `except` 吞成 0 岗。
   ❌ dead-link-audit 每晚一片卡 150min：中国交建详情页弹 `alert('职位已下架')`，没注册 dialog 监听 → 驱动自动 dismiss 撞上下一跳 goto → Node 驱动崩溃、Python 干等。CI 上 A/B：旧代码第 6 个岗就崩，新代码 76 分钟审 1300 岗零崩溃。
   ✅ 等「岗位卡 / 空态文案出现」而不是 networkidle（`MokaAdapter._open_route`，google.py 早有同理注释；`abchina.py` 仍在用 networkidle，出事先看这里）；`page.on("dialog")` 自己 dismiss 并吞掉异常（`audit_dead_links._install_dialog_guard`）；「所有路由都没渲染出来」必须抛错记 failed，只有真看到空态才许 0 岗 success。
+  📌 **`interrupted by another navigation` 先查页面是不是自己跳走了，别先猜 CI（2026-10-12，农行，创始人授权）**：
+  ❌ 农行这条源 09-05~10-11 共 39 轮 35 轮 failed：`Page.goto: Navigation to "…#/100" is interrupted by another navigation`，
+     每个机构页「打开失败」，一直被当成站点不稳 / CI 慢（查下来也不是上面那条 networkidle）。
+  ✅ 根因：对方入口页夹着检测调试工具的脚本，每次文档加载比 `console.table` 与 `console.log` 的耗时，有调试协议接着
+     （Playwright 走的 CDP）时概率性命中，命中就把 window 的属性全置 0 —— `location=0` 让主文档自己跳去 `…/build/0`。
+     本机复现出与 CI 逐字相同的报错；不挂自动化的 headless Chrome 连开 6 次全正常。
+  ✅ 查法：`page.on("request")` 看主文档有没有去请求别的地址；CDP `Network.requestWillBeSent` 的 `initiator.stack` 直接给出发起跳转的脚本。
+  ✅ 防：`abchina._note_navigation` + `_PageLeft` —— 一发现就停，已读到的岗保留、不算抓全；一个都没读到就带着跳去的地址记 failed。
+     同次把「0 岗」的判据换成对方自己的空态文案：固定标题在数据回来之前、接口被限流时都在，认它会把「没读到」记成「没在招」。
+  🚫 **对方明确设的防调试 / 反自动化措施不写绕过**（不屏蔽、不改写它的脚本，不重新加载碰运气）——农行这一例创始人 2026-10-12 定的。
+     同类情况先做性质判定（对照 `docs/crawler-adapter-notes.md` 里兴业那条「前端公开算法的请求签名，可接」），是防护就报创始人；
+     adapter 自己能做的只有少加载文档。⚠️ 没解决的：农行机构页 / 详情页仍是每个一次 reload，有岗的季节一轮几乎必然撞上（细节见 docs）。
 
 ## 数据库表（核心表，权限见 002_rls.sql）
 

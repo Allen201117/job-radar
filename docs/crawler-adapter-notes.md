@@ -292,6 +292,9 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #          改成整轮只加载一次文档（机构 / 详情全走 hash）能把暴露面降到 1 次，但当期没岗、验不了读法。
                          #     诚实边界：靠「热招事项」卡枚举机构。2026-10-12 校招 / 社招 / 专项三个板块都自报「暂无热招事项」
                          #       （校招 46 个机构全部置灰，库里 2,671 岗截止日全是 10-08）→ adapter 返回 0 岗、记 success。
+                         #       线上回读（同日，`crawl-one-adapter` 在 GitHub runner 上跑）：crawl_runs 记 success / 0 岗 /
+                         #       reported_total=0 / coverage_complete=true，8 秒收尾（此前每晚 55~60 秒后记 failed）。
+                         #       那 2,671 个截止日已过的岗同日标 removed（可逆，创始人同意；回读 active 0 / removed 2,671）。
                          #       「专项招聘」是 `#/102`（点站点顶栏得到的），2026-10-12 接上：不接的话专项开着时也会报
                          #       「对方没在招」。它的岗不给招聘类型提示（列的是博士后工作站这类机构，该归校招还是社招没核过）。
                          #       机构页地址照站点 onClick 拼——用热招事项卡**自带**的 recruitType，不是所在板块的编号。
