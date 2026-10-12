@@ -250,7 +250,7 @@ class MideaCampusAdapter(BaseAdapter):
             jobs.append(RawJob(
                 company=self.company_name,
                 title=title,
-                location=_first_city(location) or None,
+                location=_all_cities(location),
                 job_type=_job_type_of(row),
                 summary=_summary_of(row),
                 jd_url=jd_url,
@@ -279,10 +279,10 @@ def _in_source_regions(location: str, regions) -> bool:
     return normalizer.derive_country_code(location) is None
 
 
-def _first_city(location: str) -> str:
-    """`workPlaceCode` 是「上海市,佛山市」这种逗号串（字段名叫 code，值其实是中文城市名）。
-    与 sf_express_campus / lenovo 同口径：筛选取第一个，全部城市写进 summary。"""
-    return (location.split(",")[0] or "").strip()
+def _all_cities(location: str) -> Optional[str]:
+    """`workPlaceCode` 是「上海市,佛山市」这种逗号串（字段名叫 code，值其实是中文城市名）：每个城市都交出去。
+    与 sf_express_campus 同口径（2026-10-11 前只取第一个，其余只进 summary）。"""
+    return normalizer.join_places(location.split(","))
 
 
 def _job_type_of(row: dict) -> str:

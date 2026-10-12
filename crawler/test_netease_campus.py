@@ -151,7 +151,7 @@ class NeteaseCampusFetchTest(unittest.TestCase):
     def test_multi_city_kept_in_summary_first_as_location(self):
         _a, jobs, _c = self._run(_nav([103]), {103: "网易互联网2027届校园招聘"},
                                  {103: [_page([1], 1)]})
-        self.assertEqual(jobs[0].location, "杭州")
+        self.assertEqual(jobs[0].location, "杭州、上海")
         self.assertIn("杭州,上海", jobs[0].summary)
 
 

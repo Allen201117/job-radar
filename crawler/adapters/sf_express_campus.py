@@ -168,7 +168,7 @@ class SfExpressCampusAdapter(BaseAdapter):
                 continue
             location = str(row.get("demandCity") or "").strip()
             # 后置地区过滤（所有源通用的正确性兜底，CLAUDE.md 核心产品原则#1）。
-            # ⚠️ 用原始整串判，不要用 `_first_city` 的结果：「全国」这类整串能过
+            # ⚠️ 用原始整串判：「全国」这类整串能过
             # （live 实测 location_in_source_regions("全国", {"CN"}) → True），砍开反而更脆。
             if not _in_source_regions(location, getattr(self, "regions", None)):
                 continue
@@ -176,7 +176,7 @@ class SfExpressCampusAdapter(BaseAdapter):
             jobs.append(RawJob(
                 company=self.company_name,
                 title=title,
-                location=_first_city(location) or None,
+                location=_all_cities(location),
                 job_type=_job_type_of(row),
                 summary=_summary_of(row),
                 jd_url=jd_url,
@@ -209,15 +209,14 @@ def _in_source_regions(location: str, regions) -> bool:
     return normalizer.derive_country_code(location) is None
 
 
-def _first_city(location: str) -> str:
-    """多城市岗的 `demandCity` 是「成都市,武汉市,深圳市」这种逗号串，取第一个做 location。
+def _all_cities(location: str) -> Optional[str]:
+    """多城市岗的 `demandCity` 是「成都市,武汉市,深圳市」这种逗号串：每个城市都交出去。
 
-    与 lenovo/huawei_campus 同口径：**筛选用第一个城市，全部城市写进 summary**。
-    不把整串交给 normalizer 的原因是 `normalize_city` 对逗号串只会挑出其中一个
-    （live 实测「上海市,佛山市」→ 上海、「成都市,武汉市,深圳市」→ 深圳，挑哪个取决于
-    别名表命中顺序），行为不可预期；取第一个至少是确定的。
+    2026-10-11 前只取第一个（其余只进 summary）：当时 `normalize_city` 对逗号串只会挑出其中一个
+    （「上海市,佛山市」→ 上海、「成都市,武汉市,深圳市」→ 深圳，挑哪个取决于别名表顺序）。
+    现在 clean_location 逐个城市折成「成都/武汉/深圳」；有清洗认不出的城市时 join_places 退回只交第一个。
     """
-    return (location.split(",")[0] or "").strip()
+    return normalizer.join_places(location.split(","))
 
 
 def _job_type_of(row: dict) -> str:

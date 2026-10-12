@@ -30,7 +30,7 @@ class TencentCampusParseTest(unittest.TestCase):
         # 且同一岗位跨批次会换 postId，而 pid+id 稳定。
         self.assertEqual(j.jd_url, "https://join.qq.com/post_detail.html?pid=1&id=783")
         self.assertNotIn("postId", j.jd_url)
-        self.assertEqual(j.location, "深圳总部", "多地点串取首个作主地点")
+        self.assertEqual(j.location, "深圳总部、北京、上海", "多地点串每个城市都交出去（入库是「深圳/北京/上海」）")
         self.assertIn("深圳总部 北京 上海", j.summary, "完整多地点串要留在正文里，别丢")
         self.assertIn("CDG CSIG", j.summary)
         self.assertIn("全栈开发", j.summary)

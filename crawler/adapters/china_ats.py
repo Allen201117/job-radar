@@ -183,13 +183,6 @@ _MOKA_OTHER_OVERSEAS = "海外其他"
 # ⚠️「台湾省」不在此列：它必须照常写出去，才会被出口的台湾红线拒收（normalizer.validate_job_quality）。
 _MOKA_VAGUE_PLACES = frozenset({"中国", "全国", "china", "prc", "cn", "greater china", _MOKA_OTHER_OVERSEAS,
                                 *(name for name in TITLE_CITY_PROVINCE_NAMES if not name.startswith("台湾"))})
-# 多地并列的地点行（「北京市 广东·深圳市 上海市」）入库清洗时会被 normalizer.normalize_city 按别名表折成
-# **其中一个**城市（上例 →「北京」），另外两个城市的用户在今日推荐里就看不到这个岗了（读侧地点对不上是硬拒）；
-# 不写地点它至少还是「城市未知」，标题里带城市的还能由标题兜底成「深圳/上海/北京」。
-# 所以多地行只在清洗不丢城市时才写（行里没有别名表里的城市 → 原样入库，每个城市都匹配得上）。
-# 例外：12 字以内的多地行改前一直在写、也一直被折成一个城市（同日 668 张卡）。改成不写会让它们在按城市筛选时
-# 一个城市都搜不到，两头都有代价，所以这次不动这批岗的可见性；治本要改清洗那一步。
-_MOKA_LEGACY_MULTI_PLACE_CHARS = 12
 
 
 def _first_line(exc: BaseException, limit: int = 240) -> str:
@@ -327,20 +320,45 @@ def _moka_places(line: str) -> Optional[List[str]]:
 
 
 def _survives_location_cleaning(line: str, places: List[str]) -> bool:
-    """这一行地点写进库之后，页面上列的每个城市是不是都还匹配得上。"""
+    """这一行地点写进库之后，页面上列的每个国内城市是不是都还匹配得上。
+
+    多地并列的地点行（「北京市 广东·深圳市 上海市」）只在入库清洗不丢城市时才写：读侧地点对不上是硬拒，
+    丢掉的那个城市的用户在今日推荐里就看不到这个岗；不写地点它至少还是「城市未知」，标题里带城市的还能由标题兜底。
+    清洗（normalizer.clean_location）2026-10-11 起逐个城市折成「北京/深圳/上海」，所以国内城市并列的行都能写了；
+    仍然不写的是「等N个地点」的截断行，和清洗会弄丢其中某个国内城市的行。这里直接问清洗的结果，不自己另猜一遍。
+    """
     if _MOKA_MORE_PLACES_RE.search(line):
         # 「…等8个地点」只列了前 3 个，没列出来的城市不知道是哪几个：写进去，那几个城市的用户就被硬拒了。
         return False
     if len(places) == 1 and _CJK_RE.search(line):
         return True                       # 单个地点：折成城市名正是清洗该做的（「四川·成都市」→「成都」）
-    # 以下是多地并列（或英文行，逗号写法分不清是「城市, 省」还是两个城市，一并按命中的别名城市数判）。
-    low = line.lower()
-    alias_cities = {city for alias, city in normalizer.CITY_ALIASES.items() if alias.lower() in low}
-    if len(alias_cities) <= 1 and len({normalizer.clean_location(p) for p in places}) == 1:
-        return True                       # 几个地点其实是同一个城市
-    if normalizer.clean_location(line) == re.sub(r"\s+", " ", line).strip():
+    # 以下是多地并列（或英文行，逗号写法分不清是「城市, 省」还是两个城市）。
+    cleaned = normalizer.clean_location(line)
+    if cleaned == re.sub(r"\s+", " ", line).strip():
         return True                       # 行里没有别名表里的城市：整行原样入库
-    return len(line) <= _MOKA_LEGACY_MULTI_PLACE_CHARS
+    # 整行一起认、再和清洗结果比：省和它自己的城市并列（「广东 广东·深圳市」）时，省是被城市盖住的上级，
+    # 逐个地点单独认会把它当成一个丢了的地点。
+    if not normalizer.location_place_keys(cleaned).issuperset(normalizer.location_place_keys(line)):
+        return False                      # 清洗把行里的某个城市弄丢了（折错城市的那类，见 clean_location）
+    any_named = False
+    for place in places:
+        if normalizer.location_place_keys(place):
+            any_named = True
+        elif not _beyond_location_column(place):
+            return False
+    return any_named
+
+
+def _beyond_location_column(place: str) -> bool:
+    """location 列本来就表示不了的地点：只说到国家 / 省的（_MOKA_VAGUE_PLACES），或者在境外。
+
+    location 给国内城市用、国家码只有一个（一岗多地中国优先，见 geo.derive_country_code），
+    所以「广东·深圳市 中国」「马来西亚 福建·福州市」里行内的国内城市一个不少就算没丢。
+    """
+    if place.lower() in _MOKA_VAGUE_PLACES:
+        return True
+    code = normalizer.derive_country_code(place)
+    return code is not None and code not in ("CN", "HK", "MO")
 
 
 def _parse_moka_card(text: str):
