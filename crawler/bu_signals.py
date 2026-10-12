@@ -186,7 +186,8 @@ def compute_metrics(jobs: list[dict], *, kind: str, subject_name: str,
     # 城市分布
     # 多地并列的岗（location「上海/北京」，见 normalizer.clean_location）按写在最前面的城市计、一个岗一份：
     # 整串拿去 normalize_city 会全算给别名表里排最前的那个城市。
-    cities = [normalizer.normalize_city(str(jb.get("location") or "").split(normalizer.MULTI_PLACE_SEP)[0])
+    # 单段也走 clean_location 而不是 normalize_city：后者是子串折叠，库里原样存着的「Changzhou, …」会算成杭州。
+    cities = [normalizer.clean_location(str(jb.get("location") or "").split(normalizer.MULTI_PLACE_SEP)[0]) or ""
               for jb in jobs]
     city_dist = distribution(cities)
     city_n = sum(item["count"] for item in city_dist)

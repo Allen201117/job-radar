@@ -43,7 +43,7 @@ URL 里那个冒号是**字面量**（前端拼串时把路由占位符一起拼
    · 证据：CDP `Network.requestWillBeSent` 的 initiator 调用栈落在 sm3/core.js 的 eval 代码里（`_$V`）；
      不挂自动化的 headless Chrome 连开 6 次全正常；CI 与本机报错逐字相同（不是 CI 环境问题）。
    · 概率性的（`console.log` 那一下要计到 ≥1ms 才判），随机器快慢波动很大：诊断时多挂了 CDP 网络监听，
-     4 次新加载 3 次被清空；本文件自己的流程本机跑了 14 次（多数只加载 1 次文档），3 次撞上。那 39 轮拆开看：
+     4 次新加载 3 次被清空；本文件自己的流程本机跑了 17 次（多数只加载 1 次文档），5 次撞上。那 39 轮拆开看：
      对方还在招的 09-05~10-08 共 35 轮 = 3 轮成功、1 轮部分成功、31 轮失败；10-09 起的 4 轮是
      对方已经没在招、被记成了失败（见下一条）。所以有的晚上整轮没撞上、看着像「偶尔能成」。
    · 旧代码不认识它：被清空后的页面每次导航都被那次跳转打断，被当成「单个机构抖了一下」吞掉，
@@ -57,7 +57,7 @@ URL 里那个冒号是**字面量**（前端拼串时把路由占位符一起拼
 ⚠️ **「0 个岗」只认对方自己写的空态文案，不认固定标题**（2026-10-12，读 bundle 的 render 分支 + 线上核对）：
 列表页「热招事项」、机构页「在招岗位」是固定标题，接口没回来 / 被限流（它回「请求过于频繁」时组件不更新）
 时照样在页面上。接口成功且 0 条，页面才写「暂无热招事项」/「该机构暂无在招岗位」。
-两个板块都写着「暂无热招事项」= 对方当期确实没在招，返回 0 岗（run.py 记 success）；
+顶栏上的三个板块（校招 / 社招 / 专项）都写着「暂无热招事项」= 对方当期确实没在招，返回 0 岗（run.py 记 success）；
 没读到岗、对方又没这么说 = 我们没读到，必须抛错（记 failed）。
 """
 import json
@@ -78,10 +78,13 @@ _WIPE_TARGET = _ENTRY.rsplit("/", 1)[0] + "/0"
 _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
-# 招聘类型：站点顶栏「校园招聘」= 99 / 「社会招聘」= 100（hash 路由里就是这个数字）。
-# 「专项招聘」= 102（2026-10-12 点站点顶栏得到，不是猜的），未接：它列的是博士后工作站这类机构，
-# 岗位该归校招还是社招没核过，当天也没有岗可以验读法。
-_RECRUIT_TYPES = ((99, "校招"), (100, "社招"))
+# 板块：站点顶栏「校园招聘」= 99 / 「社会招聘」= 100 / 「专项招聘」= 102（hash 路由里就是这个数字；
+# 102 是 2026-10-12 点顶栏得到的，不是猜的）。第二项是写给岗位的招聘类型提示：
+# 专项板块列的是博士后工作站这类机构，岗位该归校招还是社招没核过 → 不给提示，交逐岗分类去判。
+# ⚠️ 「对方当期没在招」要这里列的每个板块都这么说才成立，所以顶栏上有的板块都得列进来。
+# bundle 的路由清单里还有 103 / 498~501 五个同类列表页，顶栏没有入口，不猜。
+_RECRUIT_TYPES = ((99, "校招"), (100, "社招"), (102, None))
+_BOARD_NAMES = {99: "校招", 100: "社招", 102: "专项"}
 
 # 对方页面自己的空态文案：接口**成功返回 0 条**时才出现（站点 bundle 的 render 分支，2026-10-12 线上逐字核过）。
 # 用它把「对方说没有」和「我们没读到」分开 —— 两者都表现为「0 个岗」，一个正常、一个是漏抓。
@@ -336,7 +339,7 @@ class AbchinaAdapter(BaseAdapter):
         读到的就是上一个板块的答案。所以页面上还挂着列表时，先退回首页让它卸载，再进下一个板块。
         不用 reload：每多加载一次文档，就多给对方的反调试脚本一次清空页面的机会。
         """
-        board = f"{dict(_RECRUIT_TYPES).get(recruit_type, '')}板块 #/{recruit_type}"
+        board = f"{_BOARD_NAMES.get(recruit_type, '')}板块 #/{recruit_type}"
 
         def list_unmounted():
             text = self._body_text(page)
@@ -370,9 +373,13 @@ class AbchinaAdapter(BaseAdapter):
     def _scan_org(self, page, recruit_type, org) -> Tuple[List[dict], bool]:
         """打开一个机构页并取回岗位卡的 state。返回 (岗位列表, 页面是否给出了确定答案)。"""
         org_id = _clean(org.get("orgId"))
+        # 地址照站点自己的点击跳转来拼：热招事项卡的 onClick 是
+        # `'/RecruitmentOrgDetails/' + batchCardInfo.recruitType + '/' + batchCardInfo.orgId`，
+        # 用的是**卡片自带**的招聘类型，不是所在板块的编号（两者在专项板块里未必相同）。
+        card_type = _clean(org.get("recruitType")) or recruit_type
         try:
             self._raise_if_left()
-            page.goto(self.ORG_URL.format(recruit_type=recruit_type, org_id=org_id),
+            page.goto(self.ORG_URL.format(recruit_type=card_type, org_id=org_id),
                       wait_until="domcontentloaded", timeout=self.GOTO_TIMEOUT_MS)
             # 只改 hash 是同文档导航，上一家的卡片会留在 DOM 里 → 必须真的重载。
             page.reload(wait_until="domcontentloaded", timeout=self.GOTO_TIMEOUT_MS)
