@@ -124,7 +124,7 @@ class FetchTest(unittest.TestCase):
 
     def test_all_work_locations_kept_in_summary(self):
         _a, jobs, _c = self._run(_batches([1]), {1: [_page([10], 1)]})
-        self.assertEqual(jobs[0].location, "杭州")
+        self.assertEqual(jobs[0].location, "杭州、北京")   # 每个城市都交出去（入库是「杭州/北京」）
         self.assertIn("杭州 / 北京", jobs[0].summary)
 
     def test_job_type_keeps_function_and_declared_batch_name(self):

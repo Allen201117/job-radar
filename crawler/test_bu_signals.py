@@ -80,6 +80,16 @@ class SampleGateTest(unittest.TestCase):
         self.assertNotIn("edu_requirement_mode", keys)
         self.assertIn("hiring_volume_30d", keys)
 
+    def test_multi_city_location_counts_under_its_first_city(self):
+        # 多地并列的岗（location「上海/北京」）按写在最前面的城市计，一个岗一份。
+        # 整串拿去 normalize_city 会全算给别名表里排最前的北京；别名表外的组合还会自成「保定市/沈阳市」一个桶。
+        jobs = ([job(location="上海/北京") for _ in range(12)]
+                + [job(location="保定市/沈阳市") for _ in range(3)] + [job(location="北京") for _ in range(5)])
+        metrics = {m["metric_key"]: m for m in
+                   S.compute_metrics(jobs, kind="company", subject_name="某公司", now=NOW)}
+        dist = {d["key"]: d["count"] for d in metrics["city_share"]["payload"]["distribution"]}
+        self.assertEqual(dist, {"上海": 12, "北京": 5, "保定市": 3})
+
     def test_every_metric_carries_sample_n(self):
         jobs = [job(education="本科", experience="3-5年", salary_text="15-30K",
                     recruitment_category="社招") for _ in range(20)]
