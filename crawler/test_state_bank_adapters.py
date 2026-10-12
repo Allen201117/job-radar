@@ -596,7 +596,7 @@ class _SiteFake:
 
     @staticmethod
     def _kind(route):
-        if route in ("/99", "/100"):
+        if route in ("/99", "/100", "/102"):
             return "list"
         if route and route.startswith("/RecruitmentOrgDetails/"):
             return "org"
@@ -675,6 +675,14 @@ def _list_page(*batches):
     return {"body": _LIST_HEADERS, "state": {"batchCardInfo": list(batches)}}
 
 
+def _site(routes=None, **kw):
+    """顶栏三个板块（校招 99 / 社招 100 / 专项 102）里没点名的，都按「对方答了没有」处理 ——
+    用例只写自己关心的那几页。"""
+    full = {"/99": _EMPTY_LIST, "/100": _EMPTY_LIST, "/102": _EMPTY_LIST}
+    full.update(routes or {})
+    return _SiteFake(full, **kw)
+
+
 class _ListOnlyAbchina(_FastAbchina):
     """只测「列表 → 机构」那一段：正文一段换成记一笔。"""
 
@@ -698,7 +706,7 @@ class AbchinaHarvestTest(unittest.TestCase):
     """
 
     def test_site_saying_it_has_no_openings_is_an_honest_zero(self):
-        page = _SiteFake({"/99": _EMPTY_LIST, "/100": _EMPTY_LIST})
+        page = _site()
         adapter = _ListOnlyAbchina()
 
         rows = adapter._harvest(page)
@@ -706,6 +714,8 @@ class AbchinaHarvestTest(unittest.TestCase):
         self.assertEqual(rows, [])
         self.assertEqual(adapter.reported_total, 0)
         self.assertTrue(adapter.fetch_complete)
+        # 顶栏上有的板块都要问到：只问校招 / 社招就说「对方没在招」，专项开着时就是错的。
+        self.assertEqual([v for v in page.visits if v != "/"], ["/99", "/100", "/102"])
         # 整轮只加载一次文档：每多加载一次，就多给反调试脚本一次清空页面的机会。
         self.assertEqual(page.loads, 1)
 
@@ -713,16 +723,17 @@ class AbchinaHarvestTest(unittest.TestCase):
         """标题在、卡片没有、「暂无热招事项」也没有 = 对方没回答。不许当成「没在招」，
         而且报错要点名是哪个板块没答 —— 这句话会进 crawl_runs，CI 日志不一定留得住。"""
         for routes, silent_board in (
-            ({"/99": {"body": _LIST_HEADERS}, "/100": _EMPTY_LIST}, "#/99"),
-            ({"/99": _EMPTY_LIST, "/100": {"body": _LIST_HEADERS}}, "#/100"),   # 只答了一半也不算
-            ({"/99": _EMPTY_LIST}, "#/100"),                                    # 社招那页压根没出来
+            ({"/99": {"body": _LIST_HEADERS}}, "#/99"),
+            ({"/100": {"body": _LIST_HEADERS}}, "#/100"),    # 三个板块里只有一个没答，也不算
+            ({"/102": {}}, "#/102"),                         # 专项那页压根没出来
         ):
             with self.assertRaises(RuntimeError) as ctx:
-                _ListOnlyAbchina()._harvest(_SiteFake(routes))
+                _ListOnlyAbchina()._harvest(_site(routes))
             self.assertNotIsInstance(ctx.exception, abchina._PageLeft)
             self.assertIn(silent_board, str(ctx.exception))
-            answered_board = "#/100" if silent_board == "#/99" else "#/99"
-            self.assertNotIn(answered_board, str(ctx.exception))
+            for answered_board in ("#/99", "#/100", "#/102"):
+                if answered_board != silent_board:
+                    self.assertNotIn(answered_board, str(ctx.exception))
 
     def test_no_hot_batches_is_only_an_honest_zero_when_the_org_list_agrees(self):
         """「暂无热招事项」只说明没有热招事项卡，而我们正是靠这些卡枚举机构的。
@@ -733,14 +744,14 @@ class AbchinaHarvestTest(unittest.TestCase):
             ({"body": _LIST_HEADERS + " 暂无热招事项"}, "机构清单"),                        # 清单没渲染出来
         ):
             with self.assertRaises(RuntimeError) as ctx:
-                _ListOnlyAbchina()._harvest(_SiteFake({"/99": _EMPTY_LIST, "/100": social}))
+                _ListOnlyAbchina()._harvest(_site({"/99": _EMPTY_LIST, "/100": social}))
             self.assertIn(evidence, str(ctx.exception))
             self.assertNotIn("广东分行", str(ctx.exception))
 
     def test_second_list_is_read_fresh_not_from_what_the_first_left_behind(self):
         """#/99 写着「暂无热招事项」，直接跳 #/100 时这句话还留在页面上。
         不先退回首页让列表组件卸载，社招明明有岗也会被读成「没有」—— 安静地丢掉整个板块。"""
-        page = _SiteFake({
+        page = _site({
             "/99": _EMPTY_LIST,
             "/100": _list_page(_batch(236, "上海分行")),
             _org_route(100, 236): _org_page(_pos(1, "客户经理岗")),
@@ -756,7 +767,7 @@ class AbchinaHarvestTest(unittest.TestCase):
     def test_page_that_cannot_be_read_still_goes_home_before_the_next_board(self):
         """「页面上还挂着列表吗」读不出来时，必须按「还挂着」处理、照样退回首页。
         按「没挂着」放行的话：直接跳下一个板块 → 读到上一个板块留下的「暂无热招事项」→ 安静的 0 岗。"""
-        page = _SiteFake({
+        page = _site({
             "/99": _EMPTY_LIST,
             "/100": _list_page(_batch(236, "上海分行")),
             _org_route(100, 236): _org_page(_pos(1, "客户经理岗")),
@@ -777,14 +788,14 @@ class AbchinaHarvestTest(unittest.TestCase):
 
     def test_list_that_will_not_unmount_is_not_trusted(self):
         """退回首页后上一个板块的列表还在（比如首页自己也带这个标题）→ 说不清读到的是谁的 → 记失败。"""
-        page = _SiteFake({"/99": _EMPTY_LIST, "/100": _EMPTY_LIST, "/": {"body": "首页 热招事项"}})
+        page = _site({"/99": _EMPTY_LIST, "/100": _EMPTY_LIST, "/": {"body": "首页 热招事项"}})
         with self.assertRaises(RuntimeError) as ctx:
             _ListOnlyAbchina()._harvest(page)
         self.assertIn("#/99", str(ctx.exception))        # 入口就停在首页：第一个板块起就不可信
 
     def test_wiped_on_first_load_fails_fast_and_says_why(self):
         for entry_error in (None, RuntimeError("Page.goto: net::ERR_EMPTY_RESPONSE")):   # goto 正常返回 / 自己先抛错
-            page = _SiteFake({"/99": _EMPTY_LIST, "/100": _EMPTY_LIST}, wipe_on_load=1,
+            page = _site({"/99": _EMPTY_LIST, "/100": _EMPTY_LIST}, wipe_on_load=1,
                              entry_error=entry_error)
             adapter = _ListOnlyAbchina()
 
@@ -801,13 +812,13 @@ class AbchinaHarvestTest(unittest.TestCase):
         """入口页普通地打不开（没有被带走）→ 原样报这个错，别套「反调试」那句话。"""
         boom = RuntimeError("Page.goto: Timeout 45000ms exceeded.")
         with self.assertRaises(RuntimeError) as ctx:
-            _ListOnlyAbchina()._harvest(_SiteFake({}, entry_error=boom))
+            _ListOnlyAbchina()._harvest(_site({}, entry_error=boom))
         self.assertIs(ctx.exception, boom)
 
     def test_wipe_midway_keeps_what_was_read_and_stops(self):
         """旧代码：第 2 个机构被清空 → 第 3 个接着失败 → 打开 #/100 时崩，第 1 个机构读到的岗全丢。"""
         for reload_raises in (False, True):     # 清空发生在 reload 返回之后 / reload 自己报错，两种都实测到过
-            page = _SiteFake({
+            page = _site({
                 "/99": _list_page(_batch(217, "北京市分行"), _batch(290, "天津市分行"), _batch(262, "深圳市分行")),
                 _org_route(99, 217): _org_page(_pos(11, "综合业务岗"), _pos(12, "客户经理岗")),
                 _org_route(99, 290): _org_page(_pos(21, "柜员岗")),
@@ -827,7 +838,7 @@ class AbchinaHarvestTest(unittest.TestCase):
             self.assertIsNone(adapter.body_pass_rows, "页面已经没了，正文那一段不该再开始")
 
     def test_wipe_during_the_retry_round_also_stops_and_keeps_rows(self):
-        page = _SiteFake({
+        page = _site({
             "/99": _list_page(_batch(217, "北京市分行"), _batch(262, "深圳市分行"), _batch(290, "天津市分行")),
             _org_route(99, 217): _org_page(_pos(11, "综合业务岗")),
             _org_route(99, 262): {"body": _ORG_HEADERS},      # 第一轮没答 → 进重试轮
@@ -846,7 +857,7 @@ class AbchinaHarvestTest(unittest.TestCase):
 
     def test_each_org_page_is_reloaded_so_it_shows_its_own_positions(self):
         """机构页之间只改 hash 不重载的话，页面上还是上一家的岗位卡（第一版就是这么只抓到 2 个岗）。"""
-        page = _SiteFake({
+        page = _site({
             "/99": _list_page(_batch(217, "北京市分行"), _batch(262, "深圳市分行")),
             _org_route(99, 217): _org_page(_pos(11, "综合业务岗")),
             _org_route(99, 262): {"body": _ORG_HEADERS + " 该机构暂无在招岗位"},   # 这家答了「没有」
@@ -865,7 +876,7 @@ class AbchinaHarvestTest(unittest.TestCase):
         class _Capped(_ListOnlyAbchina):
             _MAX_JOBS = 1
 
-        page = _SiteFake({
+        page = _site({
             "/99": _list_page(_batch(217, "北京市分行"), _batch(262, "深圳市分行")),
             _org_route(99, 217): _org_page(_pos(11, "综合业务岗"), _pos(12, "客户经理岗")),
             _org_route(99, 262): _org_page(_pos(31, "科技岗")),
@@ -888,20 +899,43 @@ class AbchinaHarvestTest(unittest.TestCase):
         }
         adapter = _ListOnlyAbchina()
 
-        rows = adapter._harvest(_SiteFake(routes, unreachable=("/100",)))
+        rows = adapter._harvest(_site(routes, unreachable=("/100",)))
 
         self.assertEqual([r["jobPublishId"] for r in rows], [11])
         self.assertFalse(adapter.fetch_complete, "有一个板块没打开，不许自称抓全")
 
         # 两个板块都打不开、一个岗没有 → 失败；这不是「页面被清空」，别套用那句话，要带上真实的报错。
         with self.assertRaises(RuntimeError) as ctx:
-            _ListOnlyAbchina()._harvest(_SiteFake(routes, unreachable=("/99", "/100")))
+            _ListOnlyAbchina()._harvest(_site(routes, unreachable=("/99", "/100")))
         self.assertNotIn("反调试", str(ctx.exception))
         self.assertIn("Timeout 45000ms", str(ctx.exception))
 
+    def test_every_board_has_a_name_for_the_error_message(self):
+        self.assertEqual(set(abchina._BOARD_NAMES), {board for board, _ in abchina._RECRUIT_TYPES})
+
+    def test_org_page_address_follows_the_card_not_the_board(self):
+        """机构页地址照站点自己的点击跳转拼：用热招事项卡自带的 recruitType，不是所在板块的编号。
+        专项板块的岗不给招聘类型提示（没核过该归校招还是社招），交逐岗分类去判。"""
+        card = dict(_batch(10007960, "博士后科研工作站"), recruitType=103)
+        page = _site({
+            "/102": _list_page(card),
+            _org_route(103, 10007960): _org_page(_pos(41, "博士后研究人员")),
+            _org_route(102, 10007960): _org_page(_pos(99, "不该读到的岗")),
+        })
+        adapter = _ListOnlyAbchina()
+
+        rows = adapter._harvest(page)
+
+        self.assertEqual([r["jobPublishId"] for r in rows], [41])
+        self.assertNotIn(_org_route(102, 10007960), page.visits)
+        self.assertIsNone(rows[0]["_job_type"])
+        job = adapter.parse(json.dumps({"jobs": rows}, ensure_ascii=False))[0]
+        self.assertIsNone(job.job_type)
+        self.assertTrue(adapter.fetch_complete)
+
     def test_orgs_listed_but_no_position_read_is_a_failure(self):
         """有热招事项却一个岗都没读到 —— 更像是我们读法过期了，不是对方没在招。"""
-        page = _SiteFake({
+        page = _site({
             "/99": _list_page(_batch(262, "深圳市分行")),
             _org_route(99, 262): {"body": _ORG_HEADERS + " 该机构暂无在招岗位"},
             "/100": _EMPTY_LIST,
@@ -910,7 +944,7 @@ class AbchinaHarvestTest(unittest.TestCase):
             _ListOnlyAbchina()._harvest(page)
 
     def test_org_page_that_never_answers_gets_one_retry_then_breaks_fetch_complete(self):
-        page = _SiteFake({
+        page = _site({
             "/99": _list_page(_batch(217, "北京市分行"), _batch(262, "深圳市分行")),
             _org_route(99, 217): _org_page(_pos(11, "综合业务岗")),
             _org_route(99, 262): {"body": _ORG_HEADERS},       # 标题在，数据一直没来

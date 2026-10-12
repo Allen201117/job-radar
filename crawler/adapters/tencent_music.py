@@ -119,10 +119,16 @@ class TencentMusicAdapter(BaseAdapter):
             # 「技术大咖」非招聘类型词 → normalizer 退回正文推断，不误标校招。
             job_type = str(row.get("job_type_descr") or "").strip() or "校招"
         summary = str(row.get("duty") or "").strip() or None
+        # 校招板块的 work_city 是 [{value, label}]，社招板块是字符串（2026-10-12 live）。
+        work_city = row.get("work_city")
+        if isinstance(work_city, list):
+            location = normalizer.join_places(c.get("label") if isinstance(c, dict) else c for c in work_city)
+        else:
+            location = str(work_city or "").strip() or None
         return RawJob(
             company=self.company_name,
             title=title,
-            location=str(row.get("work_city") or "").strip() or None,
+            location=location,
             job_type=job_type,
             summary=summary,
             jd_url=jd_url,
