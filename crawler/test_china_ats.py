@@ -76,7 +76,9 @@ class TestMokaCardParse(unittest.TestCase):
 
 class TestMokaAdapter(unittest.TestCase):
     def _parse(self, payload):
-        return MokaAdapter().parse(json.dumps(payload))
+        adapter = MokaAdapter()
+        adapter._MAX_AGE_DAYS = 0   # 这组用例测卡片解析；发布年限口径另见 test_moka_age_policy.py（夹具里有 2023 年的卡片）
+        return adapter.parse(json.dumps(payload))
 
     def test_parses_cards_builds_hash_route_url(self):
         jobs = self._parse(MOKA_CARDS)

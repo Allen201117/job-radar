@@ -1,4 +1,4 @@
--- 322 — 字节跳动全球站 joinbytedance.com 接成第三条源（adapter = bytedance_global），先以 enabled = false 入库
+-- 324 — 字节跳动全球站 joinbytedance.com 接成第三条源（adapter = bytedance_global），先以 enabled = false 入库
 --
 -- 为什么（2026-10-12 全集核实，创始人同日确认「接，按现行规则收」）：
 --   字节这个招聘租户挂着 society（中文社招官网）/ campus（中文校招官网）/ en（全球站）/ jp / referral 五个门户。
@@ -49,6 +49,6 @@ do $$
 begin
   if not exists (select 1 from public.sources where source_url = 'https://joinbytedance.com/search'
                  and adapter_name = 'bytedance_global') then
-    raise exception '322: 字节全球站源没插进去（社招源 https://jobs.bytedance.com/experienced/position 没匹配上？）';
+    raise exception '324: 字节全球站源没插进去（社招源 https://jobs.bytedance.com/experienced/position 没匹配上？）';
   end if;
 end $$;

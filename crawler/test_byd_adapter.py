@@ -616,5 +616,82 @@ class BydCampusParseTest(unittest.TestCase):
         self.assertNotIn("byd_campus", run._HTTPX_SAFE_ADAPTERS)   # 要起浏览器，只能走串行档
 
 
+# ── 社招撤岗核验要用的反方向：把库里链接的密文解回岗位 id（crawler/byd_liveness.py）──────────────
+# 用一个假的 Vue Router 在 node 里真跑解码脚本。假路由照搬真路由与这件事有关的三个行为：
+# stringifyQuery / parseQuery 是一对严格互逆的映射（这里用查表代替加密）；fullPath 原样带密文；
+# href 要过 cleanPath（把 `//` 压成 `/`，一遍、不重叠——`///` 压完还剩 `//`）。
+_DECODE_STUB = """
+let raw = '';
+process.stdin.on('data', c => raw += c).on('end', () => {
+  const {table, src, arg} = JSON.parse(raw);
+  const rev = Object.fromEntries(Object.entries(table).map(([id, token]) => [token, id]));
+  const clean = p => p.split('//').join('/');
+  const router = {resolve(to) {
+    if (typeof to === 'string') {
+      const id = rev[to.split('?')[1]];
+      return {route: {fullPath: to, query: id ? {id} : {}}, href: clean('/portal/pc' + '/' + '#' + to)};
+    }
+    const fullPath = to.path + '?' + table[to.query.id];
+    return {route: {fullPath, query: to.query}, href: clean('/portal/pc' + '/' + '#' + fullPath)};
+  }};
+  globalThis.document = {querySelector: () => ({__vue__: {$router: router}})};
+  console.log(JSON.stringify(eval('(' + src + ')')(arg)));
+});
+"""
+_A, _B, _C = "2097132362952380417", "2084078591028551682", "2096769889925652481"
+_D, _E, _F = "2053673516951162882", "2080113349814685698", "2057644312329453569"
+_TOKENS = {_A: "aaaa+bb//cccc=", _B: "dddd/eeee+ffff=", _C: "gg//hh//ii=",
+           _D: "x//y/z=", _E: "x/y//z=",          # 两个不同的岗，坏链接压完是同一个串
+           _F: "p///q=", "2084": "short="}
+_SOCIAL = "https://job.byd.com/portal/pc/#/social/socialPositionDetails?"
+
+
+class BydDecodeDetailUrlsTest(unittest.TestCase):
+    def _decode(self, encs):
+        proc = subprocess.run(
+            ["node", "-e", _DECODE_STUB], capture_output=True, text=True, encoding="utf-8", timeout=60,
+            input=json.dumps({"table": _TOKENS, "src": mod._DECODE_DETAIL_URLS_JS,
+                              "arg": {"path": "/social/socialPositionDetails", "encs": encs}}))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return json.loads(proc.stdout)
+
+    def test_good_links_decode_to_their_id(self):
+        self.assertEqual(self._decode([_TOKENS[_B], _TOKENS[_A]]),
+                         [[_TOKENS[_B], _B, None], [_TOKENS[_A], _A, None]])
+
+    def test_collapsed_links_are_repaired(self):
+        self.assertEqual(self._decode(["aaaa+bb/cccc=", "gg/hh/ii=", "p//q="]), [
+            ["aaaa+bb/cccc=", _A, _TOKENS[_A]],     # 一处 `//` 被压
+            ["gg/hh/ii=", _C, _TOKENS[_C]],         # 两处都被压
+            ["p//q=", _F, _TOKENS[_F]]])            # `///` 被压成 `//`
+
+    def test_refuses_to_guess(self):
+        self.assertEqual(self._decode(["x/y/z=", "short=", "garbage", "no/such/token="]), [
+            ["x/y/z=", None, None],            # 补回去有两个岗都说得通 → 不认
+            ["short=", None, None],            # 解出来的不是 15~20 位数字
+            ["garbage", None, None],
+            ["no/such/token=", None, None]])
+
+    def test_wrapper_maps_urls_and_skips_what_it_cannot_decode(self):
+        class _Page(_FakePage):
+            def evaluate(self, script, arg):
+                self.evaluate_args.append((script, arg))
+                canned = {"good=": ["good=", _A, None], "bad/x=": ["bad/x=", _B, "bad//x="], "junk=": ["junk=", None, None]}
+                return [canned[e] for e in arg["encs"]]
+
+        page = _Page()
+        urls = [_SOCIAL + "good=", _SOCIAL + "bad/x=", _SOCIAL + "junk=", _SCHOOL_URL, None]
+        with mock.patch.dict(sys.modules, {"playwright.sync_api": _fake_playwright(page)}):
+            decoded = BydAdapter().decode_detail_urls("https://job.byd.com/portal/pc/#/x", urls)
+        self.assertEqual(decoded, {_SOCIAL + "good=": (_A, None), _SOCIAL + "bad/x=": (_B, _SOCIAL + "bad//x=")})
+        # 只把社招详情链接的密文交给页面（校招链接是另一条路由，不归这里解）
+        self.assertEqual(page.evaluate_args[0][1],
+                         {"path": "/social/socialPositionDetails", "encs": ["bad/x=", "good=", "junk="]})
+
+    def test_wrapper_does_not_launch_a_browser_for_nothing(self):
+        with mock.patch.dict(sys.modules, {"playwright.sync_api": None}):   # 一 import 就炸
+            self.assertEqual(BydAdapter().decode_detail_urls("https://job.byd.com/portal/pc/#/x", [_SCHOOL_URL]), {})
+
+
 if __name__ == "__main__":
     unittest.main()

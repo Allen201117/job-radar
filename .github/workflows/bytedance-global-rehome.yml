@@ -3,7 +3,7 @@ name: bytedance-global-rehome
 # 字节「中文站链接已下线、全球站在招」的存量岗：原地换成全球站链接并挪到全球站那条源（一次性，2026-10-12）。
 # 为什么不让它们自然下架再重进：上千个岗的首见时间会被刷成当天，在海外用户那里全显示成本周新岗。
 # 手动触发、默认 dry-run；处置规则与三道安全闸见 crawler/bytedance_global_rehome.py 的模块注释。
-# 顺序：全球站那条源先以 enabled=false 入库（迁移 322）→ 跑这条（先 dry-run 再 apply）→ 再启用那条源。
+# 顺序：全球站那条源先以 enabled=false 入库（迁移 324）→ 跑这条（先 dry-run 再 apply）→ 再启用那条源。
 
 on:
   workflow_dispatch:

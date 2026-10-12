@@ -499,14 +499,16 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
         if not pid or not title:
             return None
 
-        city = ""
+        # city_info 在前、city_list 其余城市在后，全部交出去（2026-10-11 前有 city_info 就只用它、否则只取
+        # city_list 第一个：live 6 个租户 6,140 岗里 1,056 个列了不止一个城市）。
+        names = []
         ci = post.get("city_info")
         if isinstance(ci, dict):
-            city = ci.get("name") or ""
-        if not city:
-            cl = post.get("city_list")
-            if isinstance(cl, list) and cl and isinstance(cl[0], dict):
-                city = cl[0].get("name") or ""
+            names.append(ci.get("name"))
+        cl = post.get("city_list")
+        if isinstance(cl, list):
+            names.extend(c.get("name") for c in cl if isinstance(c, dict))
+        city = normalizer.join_places(names)
 
         job_type = ""
         jc = post.get("job_category")
