@@ -145,7 +145,26 @@ class IguopinGroupTagAttributionTest(unittest.TestCase):
     📌 另有一个悬着的取舍（留给创始人，别自己改）：中国建筑现用 `%中建%` 命中 164 个在招岗，
        换/并上 `%中国建筑%` 会多进 29 个真岗、同时多进 8 个中国建研院的岗 —— 两个方向都在动，
        不是零代价，需要拍板。
+    📌 2026-10-11 更正（创始人同意）：上面说的「刻意不修」只对**通用规则**成立。中建研 / 中建材这两种写法
+       现在由清单条目的 `excludes` 逐条点名排除（must_apply.company_excludes），归属判定不再把它们算进中国建筑，
+       两个反向样例不受影响——见下面第一个用例。`match_company_against_patterns` 是粗筛，仍然命中。
     """
+
+    def test_registered_excludes_fix_the_wrong_group_without_touching_the_reverse_cases(self):
+        """2026-10-11（创始人同意）：上面那个「悬着的取舍」用**逐条登记排除**解决了，而不是「以标签为准」。
+
+        `excludes` 只点名「名字里有这家的模式、但不是这家」的写法（中建研 / 中建材），
+        所以两个反向样例一个都不丢——这正是通用规则做不到的。归属判定（resolve_owner）认排除；
+        `match_company_against_patterns` 只是「像不像」的粗筛，仍然命中，见下一个用例。
+        """
+        import gap_census
+        index = gap_census.build_owner_index(gap_census.load_companies("domestic"))
+        self.assertEqual(gap_census.resolve_owner("中建研科技股份有限公司（中国建研院）", index), "")
+        self.assertEqual(gap_census.resolve_owner("中建材海外经济合作有限公司", index), "")
+        self.assertEqual(gap_census.resolve_owner("中建四局建设发展有限公司（中国建筑）", index), "中国建筑")
+        self.assertEqual(
+            gap_census.resolve_owner("内蒙古蒙牛乳业（集团）股份有限公司（中粮集团）", index), "蒙牛")
+        self.assertEqual(gap_census.resolve_owner("中海油田服务股份有限公司（中国海油）", index), "中海油")
 
     def test_group_tag_does_not_override_pattern_match_today(self):
         pats = M.patterns()
@@ -185,3 +204,88 @@ class LatinTokenWordBoundaryTest(unittest.TestCase):
         names = ["京东", "京东方"]
         self.assertEqual(M.resolve_owner("京东方科技集团", names), "京东方")
         self.assertEqual(M.resolve_owner("京东集团", names), "京东")
+
+
+class ExcludesTest(unittest.TestCase):
+    """清单条目的 `excludes`：名字里有这家的模式、但**不是这家**的写法（2026-10-11 立）。
+
+    ❌ 「吉利德 Gilead」含「吉利」→ 归到吉利；「连云港新东方国际货柜码头」含「新东方」→ 归到新东方。
+       品牌名本身就这么短，模式收不窄（「吉利汽车」「浙江吉利控股集团」都要认）。
+    ✅ 逐条登记排除。被排除的名字还可以归给别的清单公司（那个码头回到中远海运）。
+    全集依据见 docs/reviews/2026-10-11-attribution-gate-and-must-apply-patterns.md §3.2。
+    """
+
+    def test_excluded_name_is_not_owned_by_name_index(self):
+        for names in (M.all_names(), M.owner_index("domestic"), M.owner_index()):
+            self.assertEqual(M.resolve_owner("吉利德 Gilead", names) in ("", "Gilead Sciences"), True)
+            self.assertNotEqual(M.resolve_owner("吉利德 Gilead", names), "吉利")
+            self.assertEqual(M.resolve_owner("吉利汽车", names), "吉利")
+            self.assertEqual(M.resolve_owner("浙江吉利控股集团", names), "吉利")
+        self.assertEqual(M.resolve_owner("吉利德 Gilead", M.owner_index("domestic")), "")
+
+    def test_plain_lists_without_excludes_keep_old_behaviour(self):
+        # 调用方自己传的裸列表不带排除信息 → 行为与改前一致（不靠全局状态偷偷改判）
+        self.assertEqual(M.resolve_owner("吉利德 Gilead", ["吉利"]), "吉利")
+
+    def test_is_excluded_reads_the_real_list(self):
+        self.assertTrue(M.is_excluded("吉利", "吉利德 Gilead"))
+        self.assertFalse(M.is_excluded("吉利", "吉利汽车"))
+        self.assertTrue(M.is_excluded("泰康保险", "国投泰康信托有限公司（国投集团）"))
+        self.assertFalse(M.is_excluded("不在清单里的公司", "吉利德 Gilead"))
+        self.assertFalse(M.is_excluded("吉利", ""))
+
+    def test_census_owner_honours_excludes_and_narrowed_patterns(self):
+        import gap_census
+        index = gap_census.build_owner_index(gap_census.load_companies("domestic"))
+        cases = {
+            # 排除
+            "吉利德 Gilead": "",
+            "吉利汽车": "吉利",
+            "国投泰康信托有限公司（国投集团）": "",
+            "泰康人寿保险有限责任公司湖北分公司": "泰康保险",
+            "中铁物总供应链科技集团有限公司（中国物流集团）": "",
+            "中铁置业集团有限公司（中国中铁）": "中国中铁",
+            "中铁十七局集团有限公司（中国铁建）": "中国铁建",
+            "化学工业出版社有限公司（中国石油和化学工业联合会）": "",
+            "中国石油工程建设有限公司天津分公司": "中国石油",
+            "连云港新东方国际货柜码头有限公司（中远海运集团）": "中远海运",
+            "新东方 New Oriental": "新东方",
+            # 收窄的三条模式
+            "宁德新能源": "",
+            "宁德时代 CATL": "宁德时代",
+            "中储恒科物联网系统有限公司（中国物流集团）": "",
+            "中储智运": "中储智运",
+            "国投甘肃小三峡发电有限公司（国投集团）": "",
+            "三峡集团": "三峡集团",
+        }
+        for name, owner in cases.items():
+            self.assertEqual(gap_census.resolve_owner(name, index), owner, name)
+
+    def test_hand_built_index_without_excludes_is_unchanged(self):
+        import gap_census
+        self.assertEqual(gap_census.resolve_owner("吉利德 Gilead", [("吉利", "吉利")]), "吉利")
+
+
+class SharedOwnerFixtureTest(unittest.TestCase):
+    """与网站侧共用夹具（tests/fixtures/must-apply-owner-cases.json）：
+    gap_census.resolve_owner 与 lib/must-apply-owner.ts 必须逐条给出同一个 owner。
+    夹具红了 = 清单或规则变了：重新生成夹具，并在提交说明里写清哪几条变了、为什么。"""
+
+    def test_every_case_resolves_to_the_fixture_owner(self):
+        import json
+
+        import gap_census
+        path = os.path.join(os.path.dirname(__file__), "..", "tests", "fixtures",
+                            "must-apply-owner-cases.json")
+        with open(path, encoding="utf-8") as f:
+            cases = json.load(f)["cases"]
+        self.assertGreaterEqual(len(cases), 100)
+        index = {scope: gap_census.build_owner_index(gap_census.load_companies(scope))
+                 for scope in ("domestic", "overseas")}
+        bad = [
+            "%s：%s → 爬虫侧「%s」，夹具「%s」" % (c["scope"], c["name"], got, c["owner"])
+            for c in cases
+            for got in [gap_census.resolve_owner(c["name"], index[c["scope"]])]
+            if got != c["owner"]
+        ]
+        self.assertEqual(bad, [])

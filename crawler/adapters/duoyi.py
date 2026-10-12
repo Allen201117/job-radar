@@ -150,9 +150,10 @@ class DuoyiAdapter(BaseAdapter):
             if not job_id or not title:
                 continue
             places = [str(p).strip() for p in (row.get("workPlaces") or []) if str(p).strip()]
-            location = places[0] if places else ""
-            if location and not _in_source_regions(location, getattr(self, "regions", None)):
+            # 地区过滤照旧只看第一个城市；写出去的是每个城市（2026-10-11 前只写第一个）。
+            if places and not _in_source_regions(places[0], getattr(self, "regions", None)):
                 continue
+            location = normalizer.join_places(places) or ""
             jd_url = _DETAIL_URL.format(host=host, job_id=job_id)
             jobs.append(RawJob(
                 company=self.company_name,

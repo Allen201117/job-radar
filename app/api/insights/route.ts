@@ -14,7 +14,11 @@ import {
   emptyDimensions,
   groupGatedInsights,
 } from "@/lib/insight-bundle";
-import { deriveCompanyInsights } from "@/lib/insight-derive";
+import {
+  deriveCompanyInsightsFromFacets,
+  facetsFromJobs,
+  type DeriveFacets,
+} from "@/lib/insight-derive";
 import {
   aggregateFirstParty,
   FIRST_PARTY_MIN_COUNT,
@@ -23,7 +27,7 @@ import {
 } from "@/lib/insight-submission";
 import {
   jobsStoreEnabled,
-  activeJobsByCompanies,
+  activeJobFacetsByCompanies,
   INSIGHT_DERIVE_COLUMNS,
   INSIGHT_DERIVE_COLUMNS_NOT_IN_SUPABASE,
 } from "@/lib/jobs-store/read";
@@ -40,7 +44,8 @@ export const runtime = "nodejs";
 // 现查派发在响应之后跑（after），其中调 GitHub 最长等 10s。不显式给时限的话，函数可能在
 // 「台账已写 queued、还没回写 failed」之间被杀，那家公司会被冷却期白挡 6 小时。
 export const maxDuration = 30;
-// 派生统计最多取这么多行在招岗位做样本；取满了就说明真实数量不止这些（见 deriveHiring 的 sampleCapped）。
+// 只管 Supabase 兜底取数（仍是取行）：最多取这么多行做样本，取满了就说明真实数量不止这些（见 deriveHiring 的 sampleCapped）。
+// 香港库那条路不受它限制 —— 库里把全部在招岗数好再回传（lib/jobs-store/read.ts 的 INSIGHT_FACETS_SQL）。
 const DERIVE_JOB_CAP = 3000;
 // Supabase 兜底取数的列 = 香港库那份清单去掉兜底表没有的列。
 // 此前这里手抄了一串列名，漏了 experience / education —— 兜底路径上经验 / 学历分布静默算不出来。
@@ -84,7 +89,7 @@ export async function GET(request: NextRequest) {
   }
 
   // 1) 取全部公司画像，归一化匹配（苹果↔Apple、字节↔ByteDance）。可能无画像（95% 公司）。
-  //    走跨实例缓存（10min），轻列足够 findCompanyProfile + deriveCompanyInsights 使用。
+  //    走跨实例缓存（10min），轻列足够 findCompanyProfile + deriveCompanyInsightsFromFacets 使用。
   let profilesLight: CompanyProfile[];
   try {
     profilesLight = (await getCachedCompanyProfilesLight()) as CompanyProfile[];
@@ -112,14 +117,16 @@ export async function GET(request: NextRequest) {
   //    是一条接一条串行的，腾讯 2.26 / 2.34s、美团 3.26s、小红书 2.39s —— 用户每点开一次洞察抽屉都要
   //    对着骨架屏等 2~3 秒。函数在香港、Supabase 在悉尼，每多串一步就多一趟跨区往返。
   const today = new Date().toISOString().slice(0, 10);
-  const [fullProfileRes, jobRows, itemsRes, firstParty, recruitmentCycles] = await Promise.all([
+  const [fullProfileRes, jobFacets, itemsRes, firstParty, recruitmentCycles] = await Promise.all([
     // 轻列只够做归一化匹配；抽屉还要展示 industry / founded_year / hq_location 等全列字段，
     // 命中后按 id 单行补取（主键读），未命中或读失败则回落轻列。
     profileLight
       ? supabase.from("company_profiles").select("*").eq("id", profileLight.id).maybeSingle()
       : null,
-    // Tier1 派生用的在招岗位（无需画像，保证 100% 覆盖）；限 active，cap 3000 行足够代表性聚合。
-    loadDeriveJobRows(supabase, candidates),
+    // Tier1 派生用的在招岗位（无需画像，保证 100% 覆盖）：全部在招岗的分面计数，不搬岗位行。
+    // 不要改回「取前 N 行做样本」：没有排序的前 N 行是按磁盘位置取的，不是样本
+    // （对比数字见 lib/jobs-store/read.ts 的 INSIGHT_FACETS_SQL）。
+    loadDeriveFacets(supabase, candidates),
     // 存储型洞察（仅当有画像）。
     profileLight
       ? supabase
@@ -128,7 +135,7 @@ export async function GET(request: NextRequest) {
           .eq("company_id", profileLight.id)
           .eq("status", "active")
           // 排除「数据层」两类 origin（共用 lib/insight-bundle 的 DATA_LAYER_ORIGINS）：
-          //   · derived —— 抽屉的第一方数字由下面 deriveCompanyInsights 读时算，而
+          //   · derived —— 抽屉的第一方数字由下面 deriveCompanyInsightsFromFacets 读时算，而
           //     crawler/bu_signals.py 把同一批指标物化进 insight_items 供洞察库按指标筛选。
           //     两者同源，不排除就会在抽屉里把同一个数字显示两遍。
           //     （后续若把抽屉也切成读物化行，删掉这一行并同时去掉读时派生，不要两者都留。）
@@ -149,10 +156,16 @@ export async function GET(request: NextRequest) {
     profile = fullProfileRes.data as CompanyProfile;
   }
 
-  const derived = deriveCompanyInsights((jobRows || []) as Job[], new Date(), {
+  const deriveStartedAt = Date.now();
+  const derived = deriveCompanyInsightsFromFacets(jobFacets.facets, new Date(), {
     headcountBand: profile?.headcount_band ?? null,
-    sampleCapped: (jobRows?.length || 0) >= DERIVE_JOB_CAP,
+    sampleCapped: jobFacets.sampleCapped,
   });
+  // 大公司要把全部在招行读一遍（字节跳动 2 万行）、再给上万个不同的标题判职能。留一行耗时，慢了查得到是哪一家、慢在哪一段。
+  console.log(
+    `[insights] 派生 company=${candidates[0]} source=${jobFacets.source} jobs=${jobFacets.facets.total}` +
+      ` titles=${jobFacets.facets.byTitle.length} fetch_ms=${jobFacets.fetchMs} derive_ms=${Date.now() - deriveStartedAt}`,
+  );
 
   // 过校验门 + 分组（共享 insight-bundle）。
   let storedDims = emptyDimensions();
@@ -182,7 +195,7 @@ export async function GET(request: NextRequest) {
   //    挪到响应之后跑：它要读节流台账、写一行台账、再调一次 GitHub（超时 10s），而它的返回值
   //    没有任何调用方在读（全仓无 enrich_now 的消费者）—— 此前却让用户陪着等完才看到抽屉内容。
   //    结果照旧落在 discovery_runs 台账里（成功 / 失败 / 被节流都有记录）。
-  const jobCount = jobRows?.length || 0;
+  const jobCount = jobFacets.facets.total;
   if (jobCount > 0 && !storedHasAny) {
     // 派发与占位一律用**画像里的规范名**，不用查询词原文。
     // 用原文的后果（2026-10-10 实测踩到）：查「星巴克」命中的是画像「星巴克 Starbucks」，占位却按
@@ -210,13 +223,22 @@ export async function GET(request: NextRequest) {
   });
 }
 
-// jobs 已迁自建香港 PG：配了 env 走 jobs-store（按 company 取 active），异常或未配则 Supabase 兜底。
-async function loadDeriveJobRows(supabase: any, candidates: string[]): Promise<any[]> {
+// jobs 已迁自建香港 PG：配了 env 走 jobs-store（库里按 company 把全部在招岗数好回传），异常或未配则 Supabase 兜底。
+// 兜底仍是取行、最多 DERIVE_JOB_CAP 行（那张表在切库后已清空，只在本地没配连接串 / 回滚时走到）。
+async function loadDeriveFacets(
+  supabase: any,
+  candidates: string[],
+): Promise<{ facets: DeriveFacets; sampleCapped: boolean; source: "jobs-store" | "supabase"; fetchMs: number }> {
+  const startedAt = Date.now();
   if (jobsStoreEnabled()) {
     try {
-      return await activeJobsByCompanies(candidates, DERIVE_JOB_CAP);
+      const facets = await activeJobFacetsByCompanies(candidates);
+      return { facets, sampleCapped: false, source: "jobs-store", fetchMs: Date.now() - startedAt };
     } catch (e) {
-      console.error("[insights] 读取香港库 jobs（派生）失败", (e as Error).message);
+      console.error(
+        `[insights] 读取香港库 jobs（派生）失败 company=${candidates[0]} ms=${Date.now() - startedAt}`,
+        (e as Error).message,
+      );
     }
   }
   const { data, error: jobError } = await supabase
@@ -228,7 +250,13 @@ async function loadDeriveJobRows(supabase: any, candidates: string[]): Promise<a
   if (jobError) {
     console.error("[insights] 读取 jobs（派生）失败", jobError.message);
   }
-  return data || [];
+  const rows = (data || []) as Job[];
+  return {
+    facets: facetsFromJobs(rows),
+    sampleCapped: rows.length >= DERIVE_JOB_CAP,
+    source: "supabase",
+    fetchMs: Date.now() - startedAt,
+  };
 }
 
 async function loadRecruitmentCycles(companyId: string, today: string): Promise<any[]> {

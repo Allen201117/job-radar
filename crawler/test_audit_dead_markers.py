@@ -8,6 +8,7 @@
 """
 import unittest
 
+from adapters.china_ats import MokaAdapter
 from audit_dead_links import classify
 
 
@@ -50,6 +51,15 @@ class TestDeadMarkerPrecision(unittest.TestCase):
         # 强信号：整句话只可能是「这个岗没了」，标题在场也判死（多数关闭页会连标题一起渲染）
         text = "软件工程师\n该职位已下线，感谢你的关注。"
         self.assertEqual(verdict(text, "软件工程师"), "dead")
+
+    def test_moka_portal_closed_page_is_not_dead(self):
+        # Moka 租户门户被关停时，岗位详情页整页只剩这一句。它不是撤岗信号：2026-09 两个门户挂了 2 天 / 4 天
+        # 关停页后原样恢复出岗（阿克苏诺贝尔、云顶新耀）。判 dead = 置 expired、次日永久删除在招岗。
+        self.assertIn("当前网页已关停", MokaAdapter._CLOSED_MARKERS)
+        for text in MokaAdapter._CLOSED_MARKERS:     # 文案只有 adapter 那一份；它加了新语言，这里跟着覆盖
+            for title in ("产品经理", "Software Engineer"):
+                with self.subTest(text=text, title=title):
+                    self.assertEqual(verdict(text, title), "unsure")
 
     def test_strong_marker_variants_still_dead(self):
         for phrase in ["该职位不存在", "岗位已关闭", "已招满", "招聘已结束", "this job is no longer open"]:
