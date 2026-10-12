@@ -459,6 +459,23 @@ def _group_by_host(sources):
     return queues
 
 
+def _retire_out_of_policy(adapter) -> int:
+    """adapter 这一轮点名「在对方列表里、但按口径不收」的岗：库里还 active 的下架成 removed，返回下架行数。
+
+    只在写香港库时做；失败只打印、绝不影响抓取主流程。"""
+    urls = getattr(adapter, "retire_jd_urls", None)
+    if not urls or not jobs_db.enabled():
+        return 0
+    try:
+        removed = jobs_db.retire_out_of_policy(_get_thread_jobs_conn(), urls)
+        if removed:
+            print(f"    [policy] out_of_policy={len(urls)} removed={removed}")
+        return removed
+    except Exception as e:  # 下架失败绝不影响抓取主流程
+        print(f"    [policy] 跳过(异常不阻断): {type(e).__name__}: {e}")
+        return 0
+
+
 def _process_one_source(source, supabase) -> dict:
     """处理单个源：robots → should_skip → fetch → parse → 质量门 → upsert。
     返回 {status, created, updated}；**永不抛异常**（并发档 ex.map 迭代结果时不会炸整批）。
@@ -526,6 +543,10 @@ def _process_one_source(source, supabase) -> dict:
         raw_jobs = adapter.parse(html)
         print(f"    parsed {len(raw_jobs)} jobs")
 
+        # 4b. 口径外的岗（adapter.retire_jd_urls，如 moka 超过发布年限的）：这一轮没收，库里已有的下架成 removed。
+        #     放在下面几个分支之前：整个门户都在口径外时 raw_jobs 为空、紧接着就返回，库里的旧行同样要下架。
+        policy_removed = _retire_out_of_policy(adapter)
+
         # 抓全率可观测（阶段①）：fetch 时 adapter 已填 reported_total/fetch_complete。
         # 有 total 才判 complete；无 total（纯 HTML/接口无此字段）→ complete=None 不可判定（诚实盲区）。
         _cov_total = getattr(adapter, "reported_total", None)
@@ -538,7 +559,7 @@ def _process_one_source(source, supabase) -> dict:
                                 jobs_found=0,
                                 reported_total=_cov_total, coverage_complete=_cov_complete,
                                 coverage_stop_reason=_cov_stop_reason)
-            return {"status": "empty", "created": 0, "updated": 0}
+            return {"status": "empty", "created": 0, "updated": 0, "policy_removed": policy_removed}
 
         valid_jobs = []
         invalid_reasons = {}
@@ -567,7 +588,7 @@ def _process_one_source(source, supabase) -> dict:
                 reported_total=_cov_total, coverage_complete=_cov_complete,
                 coverage_stop_reason=_cov_stop_reason,
             )
-            return {"status": "no_valid", "created": 0, "updated": 0}
+            return {"status": "no_valid", "created": 0, "updated": 0, "policy_removed": policy_removed}
 
         # 5. normalize & 批量 upsert
         #    逐岗 upsert 每岗 2 次 Supabase REST（先查后写）是快档 ~30min 瓶颈（全量数万岗→6-10万往返）。
@@ -652,7 +673,7 @@ def _process_one_source(source, supabase) -> dict:
             print(f"    skipped invalid rows: {invalid_reasons}")
         print(f"    created={created}, updated={updated}")
         return {"status": run_status,
-                "created": created, "updated": updated}
+                "created": created, "updated": updated, "policy_removed": policy_removed}
 
     except Exception as e:
         error_msg = f"{type(e).__name__}: {e}"
@@ -745,6 +766,8 @@ def run_crawl(filter_adapter: str = None, tier: str = "all",
     # 「进程活着但两次回写都失败」的证据（2026-09-04 那 7 个 workday 源就卡在这个岔口上，
     # 当时 CI 六片全绿，日志又已被 GitHub 截断，事后无从复原）。
     unrecorded_count = sum(1 for r in results if r.get("run_unrecorded"))
+    # 按抓取口径下架的行数（如 moka 超过发布年限的）。上线首轮会有几千，之后应接近 0；CI 日志不是台账，所以记在这里。
+    policy_removed_total = sum(r.get("policy_removed") or 0 for r in results)
     failed_ratio = (fail_count / active_n) if active_n else 0
     all_empty = active_n > 0 and empty_count == active_n
     # ops_runs 只允许 success/partial/failed；全空是可观测预警而不是执行失败，
@@ -762,6 +785,7 @@ def run_crawl(filter_adapter: str = None, tier: str = "all",
             "jobs_found_total": total_created + total_updated,
             "all_empty": all_empty,
             "crawl_run_unrecorded": unrecorded_count,
+            "out_of_policy_removed": policy_removed_total,
         },
         status=ops_status,
     )
