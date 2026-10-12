@@ -337,6 +337,9 @@ class BaseAdapter:
     #   "list_cap"          撞 resolve_list_cap 的单源条数上限（计入缺口，正文标注——抬不抬是取舍）
     #   "page_click_failed" 浏览器翻页点「下一页」失败（计入缺口，修 adapter）
     #   "page_no_new_rows"  翻到的下一页全是已见过的岗（翻页参数没生效；计入缺口，修 adapter）
+    #   "page_render_timeout"   moka：点了「下一页」，列表和翻页器迟迟没渲染回来（计入缺口）
+    #   "paginator_not_found"   moka：页面上没有认得的下一页按钮，抓到的数却明显少于门户自报（计入缺口，修 adapter）
+    #   "short_of_portal_total" moka：页面上没有更多可翻的页（含一张卡都没渲染出来），仍明显少于门户自报（计入缺口）
     #   "attribution_unverified"  国聘：有公司的集团归属本轮没核上，那部分没写（规则 G 单列、不计入缺口）
     # 规则 G 的人话标签在 ops_watchdog.COVERAGE_STOP_LABELS，加取值两边一起加。
     coverage_stop_reason: Optional[str] = None
