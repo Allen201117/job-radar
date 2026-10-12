@@ -500,3 +500,212 @@ test("年限读错不再把写明应届 / 届别的岗强制判成社招（全�
   );
   assert.strictEqual(recruitmentCategory({ title: "审计专员", job_type: "校招", summary: "不少于3年相关工作经验" }), "社招");
 });
+
+test("年限读数：中文数字与阿拉伯数字走同一套判断（下限 / 区间 / 上限），约数取下限", () => {
+  const years = _minRequiredExperienceYears;
+  assert.strictEqual(years("2.三年以上金融相关行业系统建设经验"), 3);
+  assert.strictEqual(years("大专及以上学历，专业不限，两年及以上医疗行业销售经验"), 2);
+  assert.strictEqual(years("硕士及以上学历，三年工作经验以上或者优秀应届博士生"), 3);
+  assert.strictEqual(years("2、财务工作从业经验三年以上"), 3);
+  assert.strictEqual(years("有较强的动手能力，有二年以上相关工作经验"), 2);
+  assert.strictEqual(years("硕士以上学位,十年以上工作经验(含)优先"), 10);
+  assert.strictEqual(years("十五年以上从业经验"), 15);
+  assert.strictEqual(years("二十年行业经验"), 20);
+  assert.strictEqual(years("二十五年以上相关经验"), 25);
+  assert.strictEqual(years("具有三至五年相关工作经验"), 3);
+  assert.strictEqual(years("3至五年相关工作经验"), 3);
+  assert.strictEqual(years("三至5年相关工作经验"), 3); // 混写：「5年」前面没有中文数字紧挨着「年」，也要走带中文分支的正则
+  assert.strictEqual(years("两三年相关工作经验"), 2); // 约数取下限
+  assert.strictEqual(years("十五六年从业经历"), 15);
+  assert.strictEqual(years("三两年工作经验"), 2);
+  assert.strictEqual(years("要求二至5年，有销售经验"), 2); // 混写里的「5年」改前按窗口读得到，不能因为前面是中文数字就丢
+  // 🚫 中文数字读到的不足 2 年（「一年」）不拍板：别处还有读数就让位，只在别处读不到时才用
+  assert.strictEqual(years("一年以上工作经验"), 1);
+  assert.strictEqual(years("一至3年相关工作经验"), 1);
+  assert.strictEqual(years("3、一年及以上管理软件实施经验；或者2年财务审计相关工作经验"), 2); // 改前读 2，不变
+  assert.strictEqual(years("入职一年内需取得基金从业资格，要求3年以上银行工作经验"), 3); // 「从业资格」带出了经验字样
+  assert.strictEqual(years("具备一年以上细胞治疗病毒载体研发经验的博士，或三年以上相关经验的硕士"), 3);
+  assert.strictEqual(years("一年以上相关经验。5+ years of experience in banking"), 5);
+  // 不是年限：中文写的年份、年级、前面还连着百 / 千 / 别的数字
+  assert.strictEqual(years("二〇二四年毕业，有实习经历"), null);
+  assert.strictEqual(years("二零二五年入职，有项目经验"), null);
+  assert.strictEqual(years("大学三年级以上，有实习经验"), null);
+  assert.strictEqual(years("成立一百二十年，积累了丰富的行业经验"), null);
+  assert.strictEqual(years("一二三四年的相关经验"), null); // 认不出的组合不猜
+  assert.strictEqual(years("二六年毕业，有实习经验者优先"), null); // 年份缩写，不当成「两三年」那种约数
+  // 上限：与阿拉伯数字同一条规则（只有上限 → 0）
+  assert.strictEqual(years("机械/车辆工程/机电等相关专业应届生或工作经验两年内"), 0);
+  assert.strictEqual(years("985/211及重点传媒院校本科毕业，工作经验不超过两年"), 0);
+  // 🚫 N≥3 的上限、前后没有应届 / 毕业字样 → 照旧读成 N（那道门对中文数字同样生效）
+  assert.strictEqual(years("五年以内人力资源从业经验，年龄30以内"), 5);
+});
+
+test("年限读数：中文数字只在同一小句里写着经验字样时才算（行文里的「一年 / 两年」太多）", () => {
+  const years = _minRequiredExperienceYears;
+  // 小句 = 到标点或下一条为止；经验二字离年限再远（超过阿拉伯数字用的 25 字窗口）也算
+  assert.strictEqual(years("【任职要求】三年以上锂电设备（卷绕、涂布、辊压、模切、叠片、方形与圆柱组装线)调试经验"), 3);
+  assert.strictEqual(years("2、工作经验：五年以上临床工作经验"), 5); // 冒号不是边界
+  // 小句里没有经验字样 → 不算，哪怕隔一个逗号就有
+  assert.strictEqual(years("硕士研究生，学制三年；有相关实习经验者优先"), null);
+  assert.strictEqual(years("无需工作经验，两年内晋升为店长"), null);
+  assert.strictEqual(years("公司成立二十年，为应届生提供丰富的实践经验"), null);
+  assert.strictEqual(years("无论你是应届毕业生还是毕业两年内的学子，有教学经验优先"), null);
+  assert.strictEqual(years("以688为晋升模式，两年内三级跳，将毫无经验的职场新人，培养成为餐厅经理"), null);
+  // 🚫 不让行文里的「一年」抢在后面真正的年限之前（改前这两句读的是 3 / 2，不能变小）
+  assert.strictEqual(years("试用期一年，岗位要求3年以上销售经验"), 3);
+  assert.strictEqual(years("有一年以上驾龄，3年以上销售经验"), 3);
+  // 库里的正文是压成一行存的，条目之间只有「空格 + 序号」——那也是边界
+  assert.strictEqual(years("2、跳槽频率：拒绝一年两跳等频繁跳槽的应聘者 3、2年以上制造行业工作经历"), 2);
+  assert.strictEqual(years("1.教育背景限制：临床医学专业，临床医学八年制优先 2.有医学评测经验更佳"), null);
+  assert.strictEqual(years("通过三年培养计划成长为管理者\n有相关实习经验优先"), null);
+  // 例外：写明了下限（N年以上 / 及以上 / 或以上 / 不低于N年）且 N≥2 的，经验字样隔着逗号也算（与阿拉伯数字同一个 25 字窗口）
+  assert.strictEqual(years("从事两年或以上皮科领域，生物制剂或特药的销售经验"), 2);
+  assert.strictEqual(years("2、三年以上自动驾驶，adas，移动机器人等实际开发经验"), 3);
+  assert.strictEqual(years("2.工作经验：熟悉储能产品系统，从事相关工作三年及以上"), 3);
+  assert.strictEqual(years("①全球资金管理经验，不低于五年"), 5);
+  assert.strictEqual(years("有两年以上驾龄，有销售经验者优先"), null); // 驾龄不是工作年限
+  // 没写「以上」的不享受这个例外
+  assert.strictEqual(years("备注：此为短期项目招聘，暂定两年，有同类商品开发经验优先"), null);
+  assert.strictEqual(years("具有相关工作经历，近两年个人绩效考核不低于良好"), null);
+});
+
+test("年限读数：学制 / 培养期 / 学习经历不是工作年限（中文数字、阿拉伯数字同一套）", () => {
+  const years = _minRequiredExperienceYears;
+  // ④ 学制 / 学历年限
+  assert.strictEqual(years("1.教育背景限制：临床医学专业，硕士或博士学历，临床医学八年制优先。有相关经验更佳"), null);
+  assert.strictEqual(years("3、全日制统招四年制本科毕业，学士学位；有管理经验"), null);
+  assert.strictEqual(years("1、教育程度：全日制统招四年本科及以上学历，2、经验：熟悉山东地区教材内容"), null);
+  assert.strictEqual(years("岗位要求：1、26/27年本科毕业，有用户运营、社群运营经验优先"), null);
+  // ⑤ 培养期 / 轮岗时长
+  assert.strictEqual(years("3、入职后配备经验资深、业务过硬的双导师，量身制定三年培养方案，助力转变角色、个人成长"), null);
+  assert.strictEqual(years("每位TTDP（技术菁英）都会经历为期三年的轮岗，逐年担任三个不同的技术岗位"), null);
+  assert.strictEqual(years("希望你了解，通过不低于1年的轮岗历练，积累基层业务经验"), null);
+  // ⑥ 学习 / 留学经历
+  assert.strictEqual(years("1、本科阶段须在美国高校就读，并具有累计不少于五年的美国学习经历"), null);
+  assert.strictEqual(years("具有2年及以上系统学习经历"), null);
+  assert.strictEqual(years("三年以上海外留学经历者优先"), null);
+  assert.strictEqual(years("具有2年以上国内外学习经历"), null);
+  assert.strictEqual(years("全日制硕士学制三年 有实习经历者优先"), null); // 学制N年：后面跟什么都不算
+  // 学制写在上一条、经验写在下一条（压成一行后粘在一起）：阿拉伯数字同样不算
+  assert.strictEqual(years("1.临床医学8年制优先 2.有医学评测经验更佳"), null);
+  // 上限补的两种写法：N年内 + 亦 / 也 / 均 / 数字；紧跟在「毕业」后面的 N年内
+  assert.strictEqual(years("2.有相关实习经验优先3.有大型企业实习经历优先4.毕业三年内亦可投递"), 0);
+  assert.strictEqual(years("【任职要求】本科学历，毕业2年内(具有教育行业市场/咨询经验优先)"), 0);
+  assert.strictEqual(years("以688为晋升模式，2年内3级跳，将毫无经验的职场新人，培养成为餐厅经理"), 0);
+
+  // 🚫 长得像、其实是工作年限 —— 必须照旧读成 N
+  assert.strictEqual(years("2.五年以上制造业知识产权工作相关经验"), 5); // 「年以上制」不是「年制」
+  assert.strictEqual(years("三年制造业成本会计相关工作经验"), 3); // 年 + 制造
+  assert.strictEqual(years("两年制药企业QA工作经验"), 2); // 年 + 制药
+  assert.strictEqual(years("相关运维服务工作经验三年以上专科及以上学历"), 3); // 去空白后「以上」粘着「专科」
+  assert.strictEqual(years("3年本科教学经验"), 3); // 这一小句里还有「经验」
+  assert.strictEqual(years("三年培养体系搭建经验"), 3);
+  assert.strictEqual(years("三年以上培养方案设计经验"), 3);
+  assert.strictEqual(years("任职者应具备至少1年英语国家或地区工作学习经历"), 1); // 工作学习经历
+  assert.strictEqual(years("3年以上机器学习经历"), 3); // 机器学习是工作内容
+  assert.strictEqual(years("具有两年深度学习经历"), 2);
+  assert.strictEqual(years("5年以上增强学习经历"), 5);
+  assert.strictEqual(years("5年以上销售及海外留学经历者优先"), 5); // 留学经历前面还隔着别的工作内容
+  assert.strictEqual(years("有人才培养经验；3年培养体系搭建能力"), 3); // 培养体系是工作内容
+  assert.strictEqual(years("有培训经验，3年培养方案设计能力"), 3);
+  assert.strictEqual(years("至少2年海外工作或学习经历"), 2); // 工作或学习
+  assert.strictEqual(years("2年以上英国留学经历或同等工作经验"), 2); // 后面还跟着工作经验
+  assert.strictEqual(years("5年以上工作年限\n有海外留学经历者优先"), 5); // 留学经历是下一条的事
+  assert.strictEqual(years("5年以上工作年限 2、有海外留学经历者优先"), 5);
+  assert.strictEqual(years("5年以上，有海外留学经历者优先"), 5);
+  assert.strictEqual(years("工作经验3年\n本科及以上学历"), 3); // 「3年本科」是两条粘在一起，不是学历年限
+  assert.strictEqual(years("工作经验3年本科及以上学历"), 3);
+  assert.strictEqual(years("毕业后3年内容运营经验"), 3); // 内容
+  // 「经验」离年限超过 25 字、靠窗口前半段的「留学经历」才被认出来的真社招：学习经历那道门不能动窗口
+  assert.strictEqual(
+    years(
+      "任职要求：1、本科以上学历，英语可以作为工作语言（海外留学经历优先）；" +
+        "2、具备4年以上物流、快递行业末端配送网络规划/运力管理/承运商采购/配送作业标准化管理等任一相关工作经验",
+    ),
+    4,
+  );
+});
+
+test("认中文数字年限后的招聘类型：真社招不再留在校招 / 实习，培养期 / 学制写法的真校招不被误杀（全库 →社招 302 行、→校招 2 行）", () => {
+  const campusUrl = "https://x.mokahr.com/campus-recruitment/x/1#/job/abc";
+  // 社招岗挂在校招门户 / 校招渠道参数下（全库 234 行：小米、新产业、华大基因、扬子江、延锋…）
+  for (const [title, summary] of [
+    ["财务经理(J13285)", "【任职要求】1、统招本科以上毕业，五年以上工作经验"],
+    ["销售经理-江西", "【任职要求】1.大专及以上学历，专业不限，两年及以上医疗行业销售经验"],
+    ["YFS-芜湖-客户主管", "资质要求：大学本科及以上学历 工作经验：汽车行业两年以上相关工作经验"],
+    ["产品经理（PLM）(J10702)", "PLM相关工作经验三年以上，至少具有1个PLM落地项目经验"],
+    ["设备工程师(J11698)", "2、制药或精细化工类企业设备管理相关工作经验八年以上"],
+  ]) {
+    assert.strictEqual(recruitmentCategory({ title, jd_url: campusUrl, summary }), "社招", summary);
+  }
+  // 只靠正文里的「应届」字样 / job_type 写着校招
+  assert.strictEqual(
+    recruitmentCategory({ title: "理财经理(001124)", summary: "（1）大学本科及以上学历，两年以上证券从业经历；应届毕业生需通过证券从业资格考试" }),
+    "社招",
+  );
+  assert.strictEqual(
+    recruitmentCategory({ title: "大润发课级主管", job_type: "校招", experience: "应届/不限", summary: "全日制大专以上学历，35岁以下，两年以上管理工作经验" }),
+    "社招",
+  );
+  // 渠道自报实习的行：写明的中文数字年限同样推翻渠道声明（层2 的 _statesPriorExperience）
+  assert.strictEqual(
+    recruitmentCategory({
+      title: "焊工",
+      job_type: "实习",
+      jd_url: "https://x.hotjob.cn/wt/x/web/index/webPositionN300!getOnePosition?postId=1&recruitType=12",
+      summary: "【任职要求】1.持有效焊工证2.有三年以上电焊或二保焊工作经验3.身体健康，服从管理",
+    }),
+    "社招",
+  );
+  // 「N 年经验、应届亦可」/ 标题自报届别而正文写年限：按既有口径判社招（阿拉伯数字写法今天就是这么判的）
+  assert.strictEqual(
+    recruitmentCategory({ title: "新业务部-音频算法工程师", job_type: "校招", summary: "硕士及以上学历，三年工作经验以上或者优秀应届博士生" }),
+    "社招",
+  );
+  assert.strictEqual(
+    recruitmentCategory({ title: "【27届校招】机械结构工程师", job_type: "校招", jd_url: campusUrl, summary: "2.具有至少三年机械设计、机器人、自动化设备或类似产品相关经验" }),
+    "社招",
+  );
+  assert.strictEqual(
+    recruitmentCategory({ title: "人寿-四川分公司-行政文秘岗（2027校招）", job_type: "校招", summary: "4、应届毕业生或两年以上金融行业或相关岗位从业经历" }),
+    "社招",
+  );
+  // experience 字段的「3-5年」和正文开头的「本科…」是两个字段，不能粘成「3-5年本科」被当成学历年限（改前判社招，不能变）
+  assert.strictEqual(
+    recruitmentCategory({ title: "后端开发", job_type: "校招", experience: "3-5年", summary: "本科及以上学历，熟悉Java，有微服务项目经验" }),
+    "社招",
+  );
+  // 没有别的信号的社招岗：从「类型依据不明」变成「明确」（全库 499 行）
+  assert.strictEqual(hasExplicitRecruitmentType({ title: "区域销售", summary: "三年以上医疗器械销售经验" }), true);
+
+  // 🚫 不是经验要求的写法：真校招照旧判校招（直接认会误杀 31 行，全是近 3 天还在官网的活岗）
+  for (const [title, summary] of [
+    ["软件开发工程师JSYJY/管理培训生", "6、入职后配备经验资深、业务过硬的双导师，量身制定三年培养方案，助力转变角色、个人成长"],
+    ["TTDP 技术菁英管培生", "每位TTDP（技术菁英）都会经历为期三年的轮岗，逐年担任三个不同的技术岗位"],
+    ["大模型医学评测", "1.教育背景限制：临床医学专业，硕士或博士学历，临床医学八年制优先。有医学评测经验更佳"],
+    ["英语翻译专员", "任职要求：1、本科阶段须在美国高校就读，并具有累计不少于五年的美国学习经历"],
+    ["济南-初中班课教师", "【任职要求】1、教育程度：全日制统招四年本科及以上学历，2、经验：熟悉山东地区教材内容，有教学经验者更佳"],
+    ["中国区校招投递入口", "1.全日制本科及以上2.有相关实习经验优先3.有大型企业实习经历优先4.毕业三年内亦可投递"],
+    ["肯德基餐厅储备经理", "★快速的成长晋升通路：以688为晋升模式，两年内三级跳，将毫无经验的职场新人，培养成为餐厅经理"],
+  ]) {
+    assert.strictEqual(recruitmentCategory({ title, job_type: "校招", jd_url: campusUrl, summary }), "校招", summary);
+  }
+  // 🚫 「一年」不拍板：用友这两行改前读的是后面的「2年」、判社招，认了中文数字也不许翻成校招
+  assert.strictEqual(
+    recruitmentCategory({
+      title: "实施顾问-E035",
+      job_type: "实施 校园招聘",
+      summary: "3、一年及以上管理软件实施经验；或者2年财务审计相关工作经验。",
+    }),
+    "社招",
+  );
+  // 社招→校招 只有 2 行，都是语境门在阿拉伯数字侧纠正的：希望学（「26/27年本科」读成 27 年）、阿里云管培生（2 年学习经历）
+  assert.strictEqual(
+    recruitmentCategory({ title: "石家庄-社群运营SA", job_type: "校招", summary: "岗位要求：1、26/27年本科毕业，有用户运营、社群运营经验优先" }),
+    "校招",
+  );
+  assert.strictEqual(
+    recruitmentCategory({ title: "阿里云管培生-商业技术方向", job_type: "校招", summary: "计算机相关专业，具有2年及以上系统学习经历" }),
+    "校招",
+  );
+});
