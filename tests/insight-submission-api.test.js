@@ -113,11 +113,12 @@ function insightRouteMocks(service, supabase) {
       groupGatedInsights: () => ({ dimensions: emptyDimensions(), evaluations: [] }),
     },
     "@/lib/insight-derive": {
-      deriveCompanyInsights: () => emptyDimensions(),
+      deriveCompanyInsightsFromFacets: () => emptyDimensions(),
+      facetsFromJobs: (rows) => ({ total: rows.length, byTitle: [] }),
     },
     "@/lib/jobs-store/read": {
       jobsStoreEnabled: () => false,
-      activeJobsByCompanies: async () => [],
+      activeJobFacetsByCompanies: async () => ({ total: 0, byTitle: [] }),
       INSIGHT_DERIVE_COLUMNS,
       INSIGHT_DERIVE_COLUMNS_NOT_IN_SUPABASE,
     },

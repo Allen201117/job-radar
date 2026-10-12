@@ -1,7 +1,7 @@
 // 自建香港 jobs 库的简单读取（非搜索）。供 jobs 页 SSR / companies / saved / applied / 洞察可用性 等用。
 // 返回的行是 snake_case 列（与 supabase.from("jobs").select("*") 同形），下游 scoring/job-filter 直接吃。
 import "server-only";
-import { jobsQuery, jobsScalar } from "./client";
+import { jobsQuery, jobsQueryWithLocalSettings, jobsScalar } from "./client";
 import { JOB_COLUMNS } from "./types";
 import { appendJobScopeWhere } from "@/lib/job-scope";
 import type { UserPreferences } from "@/lib/types";
@@ -31,6 +31,7 @@ import { buildTsquery } from "@/lib/job-search";
 import { mustApplyUnion, type MustApplyCompany } from "@/lib/must-apply-list";
 import { mustApplyOwnerPicker, mustApplyOwnerResolver } from "@/lib/must-apply-owner";
 import { requestSafeCache } from "@/lib/request-safe-cache";
+import type { DeriveFacets } from "@/lib/insight-derive";
 
 export { ilikeMatcher } from "@/lib/ilike-matcher";
 
@@ -672,10 +673,10 @@ export async function jobsByUrls(urls: string[], activeOnly = false): Promise<an
 }
 
 // 洞察派生（lib/insight-derive.ts）实际读的列：逐个属性访问核过，只有这 11 个 + company。
-// 此前这里取的是全量 JOB_COLUMNS（含整段职位描述 summary），大公司一次要搬 3000 行正文回函数 ——
-// 用户点开洞察抽屉等的 2~3 秒大半花在这上面，而统计一个字都不读正文。
-// ⚠️ 给 insight-derive 加新维度、要读新的列时，必须同步加到这里，否则那一列恒为 undefined、
-//    新维度静默算不出来（tests/insight-derive-columns.test.js 会拦）。
+// 只有 Supabase 兜底取数（app/api/insights/route.ts）按这份清单取行；香港库那条路走下面的分面聚合
+// （INSIGHT_FACET_SOURCE_COLUMNS：同一批列去掉 company / status —— 那两个在那边只当 where 条件，不回传）。
+// ⚠️ 给 insight-derive 加新维度、要读新的列时，两份清单都要加，否则那一列恒为 undefined、
+//    新维度静默算不出来（tests/insight-derive-columns.test.js 会拦）。永远不带正文 summary。
 export const INSIGHT_DERIVE_COLUMNS =
   "company, title, location, job_type, salary_text, posted_at, first_seen_at, status, experience, education, recruitment_category, recruitment_explicit";
 
@@ -684,12 +685,120 @@ export const INSIGHT_DERIVE_COLUMNS =
 // 派生遇到没有这两列的行会退回关键词判法（insight-derive 的 recruitBucket）。
 export const INSIGHT_DERIVE_COLUMNS_NOT_IN_SUPABASE = ["recruitment_category", "recruitment_explicit"];
 
-/** 按 company 批量取 active 岗（insights Tier1 派生：聚合某公司在招岗算事实洞察）。只取派生用到的列。 */
-export async function activeJobsByCompanies(companies: string[], limit: number): Promise<any[]> {
-  if (!companies.length) return [];
-  return jobsQuery(
-    `select ${INSIGHT_DERIVE_COLUMNS} from jobs where status = 'active' and company = any($1::text[]) limit $2`,
-    [companies, limit],
+// 分面聚合（下面的 INSIGHT_FACETS_SQL）从 jobs 里取的列。
+export const INSIGHT_FACET_SOURCE_COLUMNS =
+  "title, location, experience, education, salary_text, first_seen_at, posted_at, recruitment_category, recruitment_explicit, job_type";
+
+// ---- 洞察抽屉的取数：库里把这些公司名下全部在招岗按「原始列值」数好，只回传计数，不搬岗位行 ----
+//
+// ❌ 此前是 `select <INSIGHT_DERIVE_COLUMNS> from jobs where status = 'active' and company = any($1) limit 3000`、没有排序。
+//    执行计划是位图扫描，拿到的是磁盘位置最靠前的 3,000 行，不是随机样本；岗位行一被改写（爬虫 upsert / 探活盖戳 /
+//    整批下架）就换一批。2026-10-11 23:11 香港库同一个快照里逐家比（在招 ≥3,000 的 20 家，那 3,000 行 → 全部在招行）：
+//    · 类型占比写得不一样的 12 家：字节跳动（含当时还没清掉的「抖音」重复源，共 28,558 行）「社招 14%·校招 26%·实习 60%」
+//      → 「社招 72%·校招 9%·实习 19%」，奇瑞差 10 个点、小米 8，其余 9 家 1~2；
+//    · 经验分布 13 家、学历 12 家、在架中位 11 家（最多差 13 天）、热门城市前三 3 家、热门方向 2 家、招聘节奏 2 家；
+//      20 家都写成「3000+ 个在招岗位」；
+//    · 两个方向都有：社招被说低 8 家 / 说高 4 家，校招说高 5 / 说低 3，实习说高 4 / 说低 1；
+//    · 当晚 22:54~23:58 四次取样都一样；00:10 那条重复源的 8,351 行被清掉后，字节跳动的抽屉变成「社招 2%·校招 28%·实习 70%」。
+// ✅ 现在每个分面一条 group by：SQL 只按原始值分组计数，「这个值算哪一类」全在 insight-derive 里判
+//    （城市取第一段、标题判职能、经验学历归桶都是 JS 函数，不在这里另写一份）。
+// ⚠️ type 分面是「招聘类型列 × 发布日」的联合计数。job_type / title 只在招聘类型列不是 校招 / 实习 / 社招 时才带回来
+//    （空，或将来出现的别的取值）：recruitBucket 只有那时才读它们；全带回来等于把岗位行原样搬一遍。
+//    这三个取值与 recruitBucket 里的必须是同一批（tests/insight-derive.test.js 钉着）。
+// ⚠️ 时间列转成 text 再回传 —— 与本库连接把 timestamptz 原样当字符串返回的写法逐字相同（见 client.ts 的 type parser）。
+// ⚠️ 写法选的是「物化 CTE + 每个分面一条 group by」，不是 grouping sets：库的 work_mem 只有 8MB，grouping sets
+//    在最大的那家（上面那 28,558 行）上退化成排序，库内 365~474ms，这个写法 145~190ms（同晚 EXPLAIN ANALYZE，数据都在缓存里，各三次）。
+// 回传量（同晚，20 家）：34~427KB，原来取 3,000 行是 354~605KB；只有字节跳动变大（503KB → 1,040KB，1.6 万种标题）。
+//    在招不到 3,000 的公司读的行和原来一样多。库内耗时见下面 FACETS_IO_CONCURRENCY。
+export const INSIGHT_FACETS_SQL = `with j as materialized (
+  select ${INSIGHT_FACET_SOURCE_COLUMNS}
+  from jobs where status = 'active' and company = any($1::text[])
+)
+select 'title' as facet, title as v1, null::text as v2, null::text as v3, null::text as v4, null::text as v5, count(*)::int as n from j group by title
+union all select 'location', location, null, null, null, null, count(*)::int from j group by location
+union all select 'experience', experience, null, null, null, null, count(*)::int from j group by experience
+union all select 'education', education, null, null, null, null, count(*)::int from j group by education
+union all select 'salary_text', salary_text, null, null, null, null, count(*)::int from j group by salary_text
+union all select 'first_seen_at', first_seen_at::text, null, null, null, null, count(*)::int from j group by first_seen_at
+union all select 'type', recruitment_category, recruitment_explicit::text,
+    case when recruitment_category in ('校招', '实习', '社招') then null else job_type end,
+    case when recruitment_category in ('校招', '实习', '社招') then null else title end,
+    posted_at::text, count(*)::int
+  from j group by 2, 3, 4, 5, 6`;
+
+export type InsightFacetRow = {
+  facet: string;
+  v1: string | null;
+  v2: string | null;
+  v3: string | null;
+  v4: string | null;
+  v5: string | null;
+  n: number;
+};
+
+/** INSIGHT_FACETS_SQL 的结果行 → 派生函数吃的分面。纯函数（单测直接喂行）。 */
+export function facetsFromGroupedRows(rows: InsightFacetRow[]): DeriveFacets {
+  const f: DeriveFacets = {
+    total: 0,
+    byTitle: [], byLocation: [], byExperience: [], byEducation: [], bySalary: [], byFirstSeen: [], byTypeDate: [],
+  };
+  const sums: Record<string, number> = {
+    title: 0, location: 0, experience: 0, education: 0, salary_text: 0, first_seen_at: 0, type: 0,
+  };
+  for (const r of rows) {
+    if (!(r.facet in sums)) throw new Error(`洞察分面：不认识的分面 ${r.facet}`);
+    sums[r.facet] += r.n;
+    if (r.facet === "title") f.byTitle.push([{ title: r.v1 }, r.n]);
+    else if (r.facet === "location") f.byLocation.push([{ location: r.v1 }, r.n]);
+    else if (r.facet === "experience") f.byExperience.push([{ experience: r.v1 }, r.n]);
+    else if (r.facet === "education") f.byEducation.push([{ education: r.v1 }, r.n]);
+    else if (r.facet === "salary_text") f.bySalary.push([{ salary_text: r.v1 }, r.n]);
+    else if (r.facet === "first_seen_at") f.byFirstSeen.push([{ first_seen_at: r.v1 }, r.n]);
+    else if (r.facet === "type") {
+      f.byTypeDate.push([
+        {
+          recruitment_category: r.v1,
+          recruitment_explicit: r.v2 === null ? null : r.v2 === "true",
+          job_type: r.v3,
+          title: r.v4,
+          posted_at: r.v5,
+        },
+        r.n,
+      ]);
+    } else {
+      // sums 里登记了、上面却没有哪一支接它（多半是分面名打错了字）：不许悄悄落进别的分面
+      throw new Error(`洞察分面：${r.facet} 没有对应的处理分支`);
+    }
+  }
+  // 每个分面数的是同一批岗，加起来必须相等。对不上 = 有人改 SQL 时漏了 / 多了一支，
+  // 对应的指标会静默算少 —— 宁可整条报错让调用方走兜底并留下日志。
+  f.total = sums.type;
+  for (const [facet, sum] of Object.entries(sums)) {
+    if (sum !== f.total) throw new Error(`洞察分面：${facet} 合计 ${sum}，与在招岗位数 ${f.total} 对不上`);
+  }
+  return f;
+}
+
+// 这条查询要把这些公司的全部在招行回表读一遍：行很宽（带正文）、同一家公司的行散在整张表里，大公司要读上万个数据块
+// （字节跳动 2 万行 → 1.6 万块，刚被大批改写、还没清理时到过 2.9 万块）。库的预读参数是默认值 1，一次只等一块盘读。
+// ❌ 不带这个参数、数据不在缓存时（2026-10-12 00:16，隔 35 分钟没人读过）：字节跳动 8.6 秒、Amazon 2.1 秒，20 家中位 0.74 秒。
+//    抽屉近 30 天只被点开 21 次，绝大多数点开应该都赶上「不在缓存里」（这句是按点开频率推的，没逐次量）。
+// ✅ 只在这条查询的事务里调到 64（位图扫描会提前把后面要读的块一起发给磁盘）。同一晚的实测：
+//    · 35 家当时没被读过的公司交替换参数，每读一块：1 → 0.17~0.23ms、16 → 0.045ms、64 → 0.034~0.037ms、200 → 0.031ms；
+//    · 01:00 再量那 20 家（隔 44 分钟没人读全量）：字节跳动 0.41 秒、Amazon 0.31 秒、其余 ≤0.19 秒，中位 0.086 秒；
+//      数据都在缓存里时 14~105ms；
+//    · 原来那条只取 3,000 行的查询（预读 1）：5 家没被读过的公司 0.08~0.64 秒，在缓存里 5~15ms。
+// ⚠️ 只作用于这一条查询。库里别的查询（搜索、/today 召回）冷读慢是同一个原因，但那是全库参数的事，
+//    要改得另量另定，别从这里顺手推广。
+const FACETS_IO_CONCURRENCY = 64;
+
+/** 洞察抽屉 Tier1 派生的取数：这些公司名下全部在招岗的分面计数。 */
+export async function activeJobFacetsByCompanies(companies: string[]): Promise<DeriveFacets> {
+  if (!companies.length) return facetsFromGroupedRows([]);
+  return facetsFromGroupedRows(
+    await jobsQueryWithLocalSettings<InsightFacetRow>(INSIGHT_FACETS_SQL, [companies], {
+      effective_io_concurrency: FACETS_IO_CONCURRENCY,
+    }),
   );
 }
 
