@@ -45,14 +45,13 @@ import {
 import { isAdmin } from "@/lib/auth";
 import { getCampusSupplyInputs, getJobsHealthSnapshot, getMustApplyCoverage, type JobsHealthSnapshot, type MustApplyCoverageRow } from "@/lib/jobs-store/read";
 import { summarizeCampusSupply } from "@/lib/campus-supply-coverage";
-import { ilikeMatcher } from "@/lib/ilike-matcher";
+import { mustApplyOwnerResolver } from "@/lib/must-apply-owner";
 import {
   DEFAULT_MUST_APPLY_INDUSTRY,
   industriesForPattern,
   mustApplyByIndustry,
   MUST_APPLY_BY_INDUSTRY,
   MUST_APPLY_INDUSTRIES,
-  mustApplyPatterns,
   MUST_APPLY_VERSION,
   mustApplyUnion,
   resolveMustApplyIndustries,
@@ -217,11 +216,11 @@ function buildMustApplyRowsForScope(
   coverage: MustApplyCoverageRow[],
 ): MustApplyRowsByIndustry {
   const union = mustApplyUnion(scope);
+  // 源与岗用同一把尺（lib/must-apply-owner.ts 的独占归属，别名一并认）：改前是裸子串，
+  // 海外 IMAX 靠 MiniMax 的源显示「已接入」，京东靠京东方的源多算两条。
+  const ownerOf = mustApplyOwnerResolver(scope, union);
   const rows = union.map((c, i) => {
-    // 别名一并认（壳牌=Shell / 大陆集团=Continental）：只按清单名找源，会把「已接入」显示成
-    // 「从未接入」，而这个假象正是重复补源的起点。与 computeMustApplyCoverage 同一套模式集。
-    const matchers = mustApplyPatterns(c).map(ilikeMatcher);
-    const matched = sources.filter((s) => s.company && matchers.some((m) => m(s.company as string)));
+    const matched = sources.filter((s) => s.company && ownerOf(s.company as string) === c.name);
     return {
       ...coverage[i],
       pattern: c.pattern,
@@ -262,10 +261,10 @@ const loadCampusSupplySummary = cachedLoader("campus-supply", async () => {
   if (!list.length) return null;
   const [inputs, sources] = await Promise.all([getCampusSupplyInputs(list), loadAllSources()]);
   const byName = new Map(inputs.map((i) => [i.company, i]));
+  const ownerOf = mustApplyOwnerResolver("domestic", list);
   return summarizeCampusSupply(
-    list.map(({ name, pattern }) => {
-      const matches = ilikeMatcher(pattern);
-      const hit = sources.filter((s) => s.company && matches(s.company));
+    list.map(({ name }) => {
+      const hit = sources.filter((s) => s.company && ownerOf(s.company) === name);
       const agg = byName.get(name);
       return {
         company: name,

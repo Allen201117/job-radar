@@ -598,6 +598,21 @@ class StripStreetAddressTest(unittest.TestCase):
         # 街名里带别的城市名：按城市段折，不按街名折
         self.assertEqual(normalizer.clean_location("88 Beijing Road, Shanghai"), "上海")
 
+    def test_address_is_one_place_even_when_a_building_is_named_after_another_city(self):
+        # 奥的斯武汉办公室（2026-10-12 live 原文）：楼名叫 Hong Kong Center。按多地并列折会写成「香港/武汉」、国家判成香港。
+        raw = ("LOC3277: Room 3101-02, T1 Office Tower, Hong Kong Center, Wusheng Road, "
+               "Qiaokou District, Wuhan, Hubei, China")
+        self.assertEqual(normalizer.strip_street_address(raw),
+                         "Hong Kong Center, Wusheng Road, Qiaokou District, Wuhan, Hubei, China")
+        self.assertEqual(normalizer.clean_location(raw), "武汉")
+        job = normalizer.normalize(
+            RawJob(company="Otis", title="Engineer", location=raw, job_type=None, summary=None,
+                   jd_url="https://example.com/jobs/3"),
+            source_id="s", company="Otis", regions={"CN", "US"})
+        self.assertEqual((job["location"], job["country_code"], job["job_scope"]), ("武汉", "CN", "domestic"))
+        # 分号隔开的是几处地址，各算各的
+        self.assertEqual(normalizer.clean_location("100 Century Ave, Shanghai; 8 Finance St, Beijing"), "上海/北京")
+
     def test_alias_city_found_only_in_the_dropped_part_is_kept(self):
         # 截短后的「Lujiazui」认不出城市，整段地址认得出：不能因为截短让这个岗从「上海」筛选里消失
         self.assertEqual(normalizer.clean_location("100 Shanghai Tower Rd, Lujiazui"), "上海")

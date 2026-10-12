@@ -10,6 +10,40 @@ import type { InsightDimension, InsightItemView, Job } from "./types";
 export type RecruitBucket = "campus" | "intern" | "social" | "unknown";
 
 // ============================================================
+// 分面计数：派生函数真正的输入。一个分面 = 一串 [在这几列上取值相同的岗位片段, 这样的在招岗有几个]。
+// 线上由岗位库聚合好回传（为什么不再取岗位行、取数怎么写，见 lib/jobs-store/read.ts 的 INSIGHT_FACETS_SQL）；
+// 手里是岗位行时用 facetsFromJobs 转一下（每行权重 1）。两条路进同一套计算，取值口径只有下面这一份。
+// ⚠️ 分面之间互相独立，只有「招聘类型 × 发布日」是联合计数（招聘节奏要按桶看月份）。
+//    要加一个需要两列一起看的新指标，得在取数 SQL 里加一个联合分面，不能从两个单列分面里拼。
+// ============================================================
+type Counted<T> = Array<[T, number]>;
+// 判招聘类型要读的那几列（见 recruitBucket）。title 允许为空：分面里它不一定带回来。
+type RecruitFields = Pick<Job, "job_type" | "recruitment_category" | "recruitment_explicit"> & { title: string | null };
+export type DeriveFacets = {
+  /** 在招岗位数。构造方要保证每个分面的计数加起来都等于它（facetsFromGroupedRows 会验）。 */
+  total: number;
+  byTitle: Counted<{ title: string | null }>;
+  byLocation: Counted<Pick<Job, "location">>;
+  byExperience: Counted<Pick<Job, "experience">>;
+  byEducation: Counted<Pick<Job, "education">>;
+  bySalary: Counted<Pick<Job, "salary_text">>;
+  byFirstSeen: Counted<{ first_seen_at: string | null }>;
+  /** 招聘类型 × 发布日。 */
+  byTypeDate: Counted<RecruitFields & Pick<Job, "posted_at">>;
+};
+
+// 岗位行 → 分面（每行权重 1）。Supabase 兜底取数和单测走这条；
+// 下面按岗位行收参数的 deriveTiming / deriveHiring / deriveSalaryBand / deriveCompanyInsights 现在只有单测在用。
+export function facetsFromJobs(jobs: Job[]): DeriveFacets {
+  const each: Array<[Job, number]> = jobs.map((jb) => [jb, 1]);
+  return {
+    total: jobs.length,
+    byTitle: each, byLocation: each, byExperience: each, byEducation: each,
+    bySalary: each, byFirstSeen: each, byTypeDate: each,
+  };
+}
+
+// ============================================================
 // 样本量阈值（v3 §1.5 硬规则）：样本不足即整字段/整卡不显示。
 // 导出供展示层单测用，禁止内联数字（改一处就全改）。
 // ============================================================
@@ -128,9 +162,10 @@ export function classifyRecruitment(jobType: string | null, title: string | null
 // ⚠️ 夜间物化的同名指标（crawler/bu_signals.py 的 bucket_share，洞察库用）读同一列，但兜底社招也算社招：
 //    同一家公司两处的数字可以不同（同日 89 家差 10 个百分点以上、25 家占比最高的类别不同）。
 //    要统一得两边一起定，别只改一边。
-export function recruitBucket(
-  jb: Pick<Job, "job_type" | "title" | "recruitment_category" | "recruitment_explicit">,
-): RecruitBucket {
+// ⚠️ job_type / title 只在招聘类型列不是 校招 / 实习 / 社招 时才读：取数 SQL（lib/jobs-store/read.ts 的 type 分面）
+//    照这条只在那时带回这两列。要让列是这三个值时也看标题 / job_type，得先改那条 SQL，否则线上拿到的是空值、
+//    判出来和这里的单测不一样。
+export function recruitBucket(jb: RecruitFields): RecruitBucket {
   if (jb.recruitment_category === "校招") return "campus";
   if (jb.recruitment_category === "实习") return "intern";
   if (jb.recruitment_category === "社招") return jb.recruitment_explicit === true ? "social" : "unknown";
@@ -175,11 +210,38 @@ function yyyymm(iso: string): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
-function median(nums: number[]): number {
-  if (nums.length === 0) return 0;
-  const s = [...nums].sort((a, b) => a - b);
-  const mid = Math.floor(s.length / 2);
-  return s.length % 2 ? s[mid] : Math.round((s[mid - 1] + s[mid]) / 2);
+function sumCounts(counts: Iterable<number>): number {
+  let s = 0;
+  for (const n of counts) s += n;
+  return s;
+}
+
+// 带权中位数：[值, 个数] → 与「把每个值重复写个数遍再取中位数」逐值相同（偶数个取中间两个的平均、四舍五入）。
+function weightedMedian(pairs: Array<[number, number]>): number {
+  const s = pairs.filter(([, n]) => n > 0).sort((a, b) => a[0] - b[0]);
+  const total = sumCounts(s.map(([, n]) => n));
+  if (total === 0) return 0;
+  // 排好序后第 idx 个（从 0 数）是哪个值
+  const at = (idx: number): number => {
+    let seen = 0;
+    for (const [v, n] of s) {
+      seen += n;
+      if (idx < seen) return v;
+    }
+    return s[s.length - 1][0];
+  };
+  const mid = Math.floor(total / 2);
+  return total % 2 ? at(mid) : Math.round((at(mid - 1) + at(mid)) / 2);
+}
+
+// 把一个分面按 keyOf 归成「名称 → 个数」；归不出名称的不计。
+function tally<T>(slice: Array<[T, number]>, keyOf: (jb: T) => string | null): Map<string, number> {
+  const freq = new Map<string, number>();
+  for (const [jb, n] of slice) {
+    const k = keyOf(jb);
+    if (k) freq.set(k, (freq.get(k) || 0) + n);
+  }
+  return freq;
 }
 
 // 构造派生展示态条目：grade=fact（兼容旧字段），assertion=signal（v3 语义）
@@ -218,31 +280,40 @@ function makeDerivedView(o: {
   };
 }
 
+const onlyActive = (jobs: Job[]): Job[] => jobs.filter((jb) => jb.status === "active");
+
 // 薪资带（compensation_intensity, fact）：聚合 active 岗位中「明示薪资」的月薪带中位区间。
 export function deriveSalaryBand(jobs: Job[], nowIso: string): InsightItemView | null {
-  const bands = jobs
-    .filter((jb) => jb.status === "active")
-    .map((jb) => parseSalaryText(jb.salary_text))
-    .filter((b): b is { minK: number; maxK: number } => Boolean(b));
-  if (bands.length < SALARY_MIN_SAMPLE) return null;
-  const lo = median(bands.map((b) => b.minK));
-  const hi = median(bands.map((b) => b.maxK));
-  const content = `公开在招岗位中明示薪资的约 ${bands.length} 个，月薪带集中在约 ${lo}–${hi}K（中位区间，仅供参考）。`;
+  return salaryBandOf(facetsFromJobs(onlyActive(jobs)), nowIso);
+}
+
+function salaryBandOf(f: DeriveFacets, nowIso: string): InsightItemView | null {
+  const los: Array<[number, number]> = [];
+  const his: Array<[number, number]> = [];
+  for (const [jb, n] of f.bySalary) {
+    const band = parseSalaryText(jb.salary_text);
+    if (!band) continue;
+    los.push([band.minK, n]);
+    his.push([band.maxK, n]);
+  }
+  const sample = sumCounts(los.map(([, n]) => n));
+  if (sample < SALARY_MIN_SAMPLE) return null;
+  const lo = weightedMedian(los);
+  const hi = weightedMedian(his);
+  const content = `公开在招岗位中明示薪资的约 ${sample} 个，月薪带集中在约 ${lo}–${hi}K（中位区间，仅供参考）。`;
   return makeDerivedView({
     dimension: "compensation_intensity",
     title: "薪资带 · 据在招岗位",
     content,
-    payload: { min_k: lo, max_k: hi, sample: bands.length },
+    payload: { min_k: lo, max_k: hi, sample },
     time_window: `截至 ${yyyymm(nowIso)}`,
-    sample_size: bands.length,
+    sample_size: sample,
     nowIso,
   });
 }
 
-// 出现频次最高的 1–2 个月（升序返回），用于「校招集中在 X、Y 月」
-function peakMonths(months: number[]): number[] {
-  const freq = new Map<number, number>();
-  for (const m of months) freq.set(m, (freq.get(m) || 0) + 1);
+// 岗位数最多的 1–2 个月（升序返回），用于「校招集中在 X、Y 月」。入参：月份 → 岗位数。
+function peakMonths(freq: Map<number, number>): number[] {
   return Array.from(freq.entries())
     .sort((a, b) => b[1] - a[1] || a[0] - b[0])
     .slice(0, 2)
@@ -280,36 +351,44 @@ function peakMonths(months: number[]): number[] {
 // ⚠️ 想恢复「社招集中在某月」，只能等有了不受删除影响的逐月新增记录并攒够一整年（company_hiring_monthly 表
 //    建了但至今 0 行，没有任何代码写它；insight_subject_daily 从 2026-09-03 起、只记在招总数）。
 //    别再从在招岗的日期里算，更别把首抓日请回来（那样 11 月起约 176 家会因为「我们抓满了 6 个自然月」被写成全年滚动）。
-// ⚠️ 取数最多 3000 行且没有排序（见 /api/insights 的 DERIVE_JOB_CAP）：在招超过 3000 的 20 家是按其中一部分算的。
+// 香港库那条路按全部在招岗算；只有 Supabase 兜底取数还封顶 3000 行（见 /api/insights 的 DERIVE_JOB_CAP）。
 export function deriveTiming(jobs: Job[], nowIso: string): InsightItemView | null {
+  return timingOf(facetsFromJobs(jobs), nowIso);
+}
+
+function timingOf(f: DeriveFacets, nowIso: string): InsightItemView | null {
   const nowMs = new Date(nowIso).getTime();
   const sinceMs = nowMs - TIMING_WINDOW_DAYS * 86_400_000;
 
-  const campusMonths: number[] = [];
-  const socialMonths: number[] = [];
+  const campusMonths = new Map<number, number>(); // 月份 → 岗位数
+  const socialMonths = new Map<number, number>();
   let campusTotal = 0; // 判成校招的在招岗（带不带发布日都算）：覆盖率的分母
   let dated = 0; // 带发布日且落在窗内的岗（不分桶）
-  for (const jb of jobs) {
+  for (const [jb, n] of f.byTypeDate) {
     const b = recruitBucket(jb);
-    if (b === "campus") campusTotal++;
+    if (b === "campus") campusTotal += n;
     const t = jb.posted_at ? new Date(jb.posted_at).getTime() : NaN;
     if (!(t >= sinceMs && t <= nowMs)) continue; // 写成「不在窗内就跳过」：日期解析不出来（NaN）也落在这一支
-    dated++;
-    if (b === "campus") campusMonths.push(beijingMonth(t));
-    else if (b === "social") socialMonths.push(beijingMonth(t));
+    dated += n;
+    const months = b === "campus" ? campusMonths : b === "social" ? socialMonths : null;
+    if (months) {
+      const mo = beijingMonth(t);
+      months.set(mo, (months.get(mo) || 0) + n);
+    }
   }
   if (dated < TIMING_MIN_SAMPLE) return null;
 
   const parts: string[] = [];
   let basis = 0; // 撑起写出来那几句的岗数（没用上的桶不算）
+  const campusDated = sumCounts(campusMonths.values());
   // 校招不足 3 个不下结论
-  if (campusMonths.length >= 3 && campusMonths.length >= campusTotal * TIMING_CAMPUS_MIN_COVERAGE) {
+  if (campusDated >= 3 && campusDated >= campusTotal * TIMING_CAMPUS_MIN_COVERAGE) {
     parts.push(`校招集中在 ${peakMonths(campusMonths).join("、")} 月`);
-    basis += campusMonths.length;
+    basis += campusDated;
   }
-  if (new Set(socialMonths).size >= 6) {
+  if (socialMonths.size >= 6) {
     parts.push("社招全年滚动");
-    basis += socialMonths.length;
+    basis += sumCounts(socialMonths.values());
   }
   if (parts.length === 0) return null;
 
@@ -324,12 +403,10 @@ export function deriveTiming(jobs: Job[], nowIso: string): InsightItemView | nul
   });
 }
 
-// 频次 Top-n（key→count），用于热门城市/方向。
-// 并列按 key 的码点升序定序：取数没有 order by（行序 = 堆物理顺序，岗位一被改写就变），只按 count 排的话
-// 并列的几个谁被截在前 n 之外随行序变，同一家公司刷新两次第三名会换人。
-function topN(keys: string[], n: number): Array<{ key: string; count: number }> {
-  const freq = new Map<string, number>();
-  for (const k of keys) freq.set(k, (freq.get(k) || 0) + 1);
+// 个数最多的前 n 个（名称 → 个数），用于热门城市/方向。
+// 并列按名称的码点升序定序：分面回来的顺序不保证（库里 group by 不排序），只按个数排的话
+// 并列的几个谁被截在前 n 之外随顺序变，同一家公司刷新两次第三名会换人。
+function topN(freq: Map<string, number>, n: number): Array<{ key: string; count: number }> {
   return Array.from(freq.entries())
     .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
     .slice(0, n)
@@ -337,7 +414,7 @@ function topN(keys: string[], n: number): Array<{ key: string; count: number }> 
 }
 
 // 取城市主名：按常见分隔切第一段，去「市/地区」后缀。
-// 西文地名词间本来就是空格（"New York, NY"），空格不算分隔；中文（「北京 海淀」）词间没有空格，空格就是分隔。
+// 纯西文地名词间本来就是空格（"New York, NY"），空格不算分隔；带汉字的（「北京 海淀」「上海 Shanghai」）照旧按空格切。
 // 短横两边都照旧切：外企常拿它当层级分隔（"USA-CA-San Jose"），比城市名自带短横的多。
 // ❌ 此前不分中西文一律按空格切："New York" / "San Jose" / "San Diego" 只剩 "New" / "San"，三个城市并成一个。
 // 数字开头的不是城市（门牌号）：地点列里还有抓取端修不到的门牌地址（列表翻不到的存量行、"1 New York Plaza" 这种
@@ -345,7 +422,7 @@ function topN(keys: string[], n: number): Array<{ key: string; count: number }> 
 function cityOf(location: string | null): string | null {
   if (!location) return null;
   const head = location.split(/[·、,，/-]+/).map((s) => s.trim()).filter(Boolean)[0] || "";
-  const first = /[A-Za-z]/.test(head) ? head : head.split(/\s+/)[0];
+  const first = /[一-鿿]/.test(head) ? head.split(/\s+/)[0] : head;
   const city = first.replace(/(市|地区)$/, "").trim();
   return city && !/^\d/.test(city) ? city : null;
 }
@@ -441,53 +518,58 @@ function hiringSignalSentence(sig: HiringSignal): string {
 }
 
 // 招聘动态（hiring, fact）：在招规模 + 热门城市/方向 + 校社占比 + 新增趋势 + 大小年/HC 强度信号。
-export function deriveHiring(
-  jobs: Job[],
-  nowIso: string,
-  // sampleCapped：调用方只取了前 N 行做样本、且取满了 —— 真实在招数不止 active.length。
-  opts: { headcountBand?: string | null; trendPct?: number | null; sampleCapped?: boolean } = {},
-): InsightItemView | null {
-  const active = jobs.filter((jb) => jb.status === "active");
-  if (active.length < HIRING_MIN_SAMPLE) return null;
+type HiringOpts = {
+  headcountBand?: string | null;
+  trendPct?: number | null;
+  // sampleCapped：调用方只取了前 N 行做样本、且取满了 —— 真实在招数不止这些。
+  // 只有 Supabase 兜底取数会走到（它仍是取行、封顶）；香港库那条路回传的是全部在招岗的计数，不传这个开关。
+  sampleCapped?: boolean;
+};
 
-  const cities = topN(
-    active.map((jb) => cityOf(jb.location)).filter((x): x is string => Boolean(x)),
-    3,
-  );
+export function deriveHiring(jobs: Job[], nowIso: string, opts: HiringOpts = {}): InsightItemView | null {
+  return hiringOf(facetsFromJobs(onlyActive(jobs)), nowIso, opts);
+}
+
+function hiringOf(f: DeriveFacets, nowIso: string, opts: HiringOpts = {}): InsightItemView | null {
+  const activeCount = f.total;
+  if (activeCount < HIRING_MIN_SAMPLE) return null;
+
+  const cities = topN(tally(f.byLocation, (jb) => cityOf(jb.location)), 3);
   const functions = topN(
-    active
-      .map((jb) => titleFunction(jb.title))
-      .filter((x): x is string => Boolean(x) && x !== "其他"),
+    tally(f.byTitle, (jb) => {
+      const fn = titleFunction(jb.title);
+      return fn === "其他" ? null : fn;
+    }),
     3,
   );
   const mix = { campus: 0, intern: 0, social: 0, unknown: 0 };
-  for (const jb of active) mix[recruitBucket(jb)]++;
+  for (const [jb, n] of f.byTypeDate) mix[recruitBucket(jb)] += n;
   // 趋势只接受外部注入的快照派生值；本函数手里只有「当前 active」，算不出无偏趋势（见上方 F4 注释）。
   const trend = typeof opts.trendPct === "number" ? opts.trendPct : null;
-  const signal = classifyHiringSignal(active.length, trend, opts.headcountBand);
+  const signal = classifyHiringSignal(activeCount, trend, opts.headcountBand);
 
   const cityStr = cities.length ? `主要在 ${cities.map((c) => c.key).join("、")}` : "";
-  const fnStr = functions.length ? `热门方向 ${functions.map((f) => f.key).join("、")}` : "";
+  const fnStr = functions.length ? `热门方向 ${functions.map((x) => x.key).join("、")}` : "";
   const trendStr = trend !== null ? `近一月收录岗位环比 ${trend > 0 ? "+" : ""}${trend}%` : "";
   const tail = [cityStr, fnStr, trendStr].filter(Boolean).join("，");
   // 样本取满上限时写「N+」并说明下面是按样本算的：字节跳动在招 2 万多个，抽屉里却写着
   // 「当前收录 3000 个在招岗位」—— 那是取数上限，不是它的岗位数（2026-10-10 走查发现）。
   const countStr = opts.sampleCapped
-    ? `${active.length}+ 个在招岗位（以下按其中 ${active.length} 个统计）`
-    : `${active.length} 个在招岗位`;
+    ? `${activeCount}+ 个在招岗位（以下按其中 ${activeCount} 个统计）`
+    : `${activeCount} 个在招岗位`;
   const content = `本平台当前收录 ${countStr}${tail ? "，" + tail : ""}。${hiringSignalSentence(signal)}。`;
 
   // 经验分布（≥DIST_MIN_SAMPLE 个岗有 experience 字段才输出）
-  const expBuckets = active.map((jb) => bucketExperience(jb.experience)).filter(Boolean) as string[];
+  const expBuckets = tally(f.byExperience, (jb) => bucketExperience(jb.experience));
   const experience_dist: Record<string, number> | undefined =
-    expBuckets.length >= DIST_MIN_SAMPLE
+    sumCounts(expBuckets.values()) >= DIST_MIN_SAMPLE
       ? Object.fromEntries(topN(expBuckets, 6).map(({ key, count }) => [key, count]))
       : undefined;
 
   // 学历分布（≥DIST_MIN_SAMPLE 个岗有 education 字段才输出）
-  const eduBuckets = active.map((jb) => bucketEducation(jb.education)).filter(Boolean) as string[];
+  const eduBuckets = tally(f.byEducation, (jb) => bucketEducation(jb.education));
   const education_dist: Record<string, number> | undefined =
-    eduBuckets.length >= DIST_MIN_SAMPLE
+    sumCounts(eduBuckets.values()) >= DIST_MIN_SAMPLE
       ? Object.fromEntries(topN(eduBuckets, 5).map(({ key, count }) => [key, count]))
       : undefined;
 
@@ -504,23 +586,24 @@ export function deriveHiring(
 
   // 在架时长中位数（active 岗 now−first_seen_at 天数；语义=这家公司的岗位平均在架多久）
   const nowMs = new Date(nowIso).getTime();
-  const openAges = active
-    .map((jb) => {
-      if (!jb.first_seen_at) return null;
-      const t = new Date(jb.first_seen_at).getTime();
-      return Number.isNaN(t) ? null : Math.round((nowMs - t) / 86_400_000);
-    })
-    .filter((d): d is number => d !== null && d >= 0);
+  const openAges: Array<[number, number]> = []; // [在架天数, 岗位数]
+  for (const [jb, n] of f.byFirstSeen) {
+    if (!jb.first_seen_at) continue;
+    const t = new Date(jb.first_seen_at).getTime();
+    if (Number.isNaN(t)) continue;
+    const days = Math.round((nowMs - t) / 86_400_000);
+    if (days >= 0) openAges.push([days, n]);
+  }
   // ≥5 样本才有代表性
   const open_age_days_median: number | undefined =
-    openAges.length >= 5 ? median(openAges) : undefined;
+    sumCounts(openAges.map(([, n]) => n)) >= 5 ? weightedMedian(openAges) : undefined;
 
   return makeDerivedView({
     dimension: "hiring",
     title: "招聘动态 · 据在招岗位",
     content,
     payload: {
-      active_count: active.length, top_cities: cities, top_functions: functions, mix, trend,
+      active_count: activeCount, top_cities: cities, top_functions: functions, mix, trend,
       hiring_signal: signal,
       ...(experience_dist !== undefined && { experience_dist }),
       ...(education_dist !== undefined && { education_dist }),
@@ -546,6 +629,24 @@ export function deriveCompanyInsights(
   const hiring = deriveHiring(jobs, nowIso, opts);
   if (hiring) out.hiring = [hiring];
   const salary = deriveSalaryBand(jobs, nowIso);
+  if (salary) out.compensation_intensity = [salary];
+  return out;
+}
+
+// 同一个入口，输入是分面计数（/api/insights 走这条：香港库聚合回传的，或兜底取到的行经 facetsFromJobs 转的）。
+// 分面里全是在招岗（取数那头按 status = 'active' 取）。
+export function deriveCompanyInsightsFromFacets(
+  facets: DeriveFacets,
+  now: Date = new Date(),
+  opts: Pick<HiringOpts, "headcountBand" | "sampleCapped"> = {},
+): Partial<Record<InsightDimension, InsightItemView[]>> {
+  const nowIso = now.toISOString();
+  const out: Partial<Record<InsightDimension, InsightItemView[]>> = {};
+  const timing = timingOf(facets, nowIso);
+  if (timing) out.timing = [timing];
+  const hiring = hiringOf(facets, nowIso, opts);
+  if (hiring) out.hiring = [hiring];
+  const salary = salaryBandOf(facets, nowIso);
   if (salary) out.compensation_intensity = [salary];
   return out;
 }

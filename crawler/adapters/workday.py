@@ -549,7 +549,7 @@ class WorkdayAdapter(BaseAdapter):
         ✅ 列表接口每行的 locationsText 就是没被 slug 过的原文；一岗多地时它是「2 Locations」，
            这时用同一批里别的岗自报过的原文补（_fill_primary_locations），再补不到才回到路径还原。
         """
-        text = (p.get("_primary_location") or p.get("locationsText") or "").strip()
+        text = str(p.get("_primary_location") or p.get("locationsText") or "").strip()
         if text and not _N_LOCATIONS_RE.match(text):
             # 两边带空格的短横是层级分隔（"US - Austin, TX" / "BR - Remote - Brazil"），统一成逗号：
             # geo 认「开头两字母国别码 + 逗号」，不换的话这批岗的国家判不出来。词内的连字符（Winston-Salem）不动。
@@ -570,19 +570,24 @@ class WorkdayAdapter(BaseAdapter):
         地点段是主地点原文的 slug，段相同 = 同一个地点名。借不到的不动（_post_location 回到路径还原）。
         同一个段出现几种写法时取出现最多的，并列取字典序最小的——同一份列表每次算出同一个值。
         """
-        seen: dict = {}
+        texts_by_slug: dict = {}
+        waiting = []  # (地点段, 岗)：locationsText 只是「N Locations」的岗
         for p in posts:
-            text = (p.get("locationsText") or "").strip()
-            slug = WorkdayAdapter._location_slug((p.get("externalPath") or "").strip())
-            if slug and text and not _N_LOCATIONS_RE.match(text):
-                counts = seen.setdefault(slug, {})
-                counts[text] = counts.get(text, 0) + 1
-        for p in posts:
-            if not _N_LOCATIONS_RE.match((p.get("locationsText") or "").strip()):
+            if not isinstance(p, dict):
                 continue
-            texts = seen.get(WorkdayAdapter._location_slug((p.get("externalPath") or "").strip()))
-            if texts:
-                p["_primary_location"] = min(texts, key=lambda t: (-texts[t], t))
+            text = str(p.get("locationsText") or "").strip()
+            slug = WorkdayAdapter._location_slug(str(p.get("externalPath") or "").strip()) if text else None
+            if not slug:
+                continue
+            if _N_LOCATIONS_RE.match(text):
+                waiting.append((slug, p))
+            else:
+                counts = texts_by_slug.setdefault(slug, {})
+                counts[text] = counts.get(text, 0) + 1
+        for slug, p in waiting:
+            counts = texts_by_slug.get(slug)
+            if counts:
+                p["_primary_location"] = min(counts, key=lambda t: (-counts[t], t))
 
     @staticmethod
     def _loc_from_path(ep: str) -> Optional[str]:

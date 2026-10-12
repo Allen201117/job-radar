@@ -176,3 +176,31 @@ test("旧调用方（不传 campusJobCount）行为不变，只是措辞自陈�
   assert.equal(r.season, "秋招");
   assert.equal(r.phaseLabel, "推测已近尾声");
 });
+
+// 2026-10-11：时间线归属改成「精确优先」。改前拿清单名逐个去比画像，京东科技被画像「京东」放行（「科技」是装饰词），
+// 校招专区的京东科技卡上挂的是京东的 2 条时间线；全集回放 311 家清单里只有这一家受影响。
+test("校招时间线归属：清单名另有精确画像时，不拿别的画像的时间线", () => {
+  const S = loadTs(path.join(__dirname, "..", "lib", "recruitment-cycle-store.ts"));
+  const profiles = [
+    { id: "jd", company: "京东", aliases: ["JD", "京东集团"] },
+    { id: "jdt", company: "京东科技", aliases: [] },
+    { id: "zto", company: "中通快递", aliases: [] },
+  ];
+  const rows = [
+    { company_id: "jd", season: "秋招", value_text: "8-10月" },
+    { company_id: "zto", season: "秋招", value_text: "9月" },
+    { company_id: "jd", season: "春招", value_text: "3-4月" },
+  ];
+  const list = [
+    { name: "京东", pattern: "%京东%" },
+    { name: "京东科技", pattern: "%京东科技%" },
+    { name: "中通", pattern: "%中通%" },
+    { name: "腾讯", pattern: "%腾讯%" },
+  ];
+  const out = S.matchCyclesToCompanies(list, rows, profiles);
+  assert.deepEqual(out.get("%京东%").map((r) => r.value_text), ["8-10月", "3-4月"]); // 保持查询返回的顺序
+  assert.equal(out.has("%京东科技%"), false);
+  // 清单名没有精确画像的，仍按门归属（中通 → 中通快递）
+  assert.deepEqual(out.get("%中通%").map((r) => r.value_text), ["9月"]);
+  assert.equal(out.has("%腾讯%"), false);
+});

@@ -375,6 +375,25 @@ def retire_posted_before(conn, source_id, cutoff_date) -> int:
         return cur.rowcount
 
 
+def retire_out_of_policy(conn, jd_urls) -> int:
+    """按抓取口径下架：adapter 这一轮在对方列表里见到、但按口径不再收的岗（如 moka 超过发布年限的），
+    库里还是 active 的 → removed。返回受影响行数。
+
+    和 retire_posted_before 是同一件事的另一个入口：那个按库里的 posted_at 认，这个按链接认——moka 不写
+    posted_at，发布日期只在卡片上，只有 adapter 知道哪些岗超龄。
+    用可逆的 removed、不写 expired（岗多半还在招，只是超出口径；expired 次日会被 purge-expired 永久删除）。
+    日后岗被重新发布、adapter 又收它时，upsert 会把同一行置回 active。
+    只动 active 行（走 canonical 的 active 唯一索引）；这些链接这一轮没进 upsert，不存在先下架又被写回。"""
+    canons = sorted({canonicalize_jd_url(u) for u in jd_urls if u})
+    if not canons:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute(
+            "update jobs set status = 'removed' where status = 'active' and canonical_jd_url = any(%s)",
+            (canons,))
+        return cur.rowcount
+
+
 def clear_deadlines(conn, jd_urls) -> int:
     """把这些岗在库里的截止日清掉，返回受影响行数。只给「对方明确没有截止日」的岗用
     （RawJob.deadline_absent，见 adapters/base.py）。

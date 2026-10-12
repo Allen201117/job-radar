@@ -1,0 +1,585 @@
+{
+ "_about": "必投清单独占归属的两端共用夹具：crawler/gap_census.resolve_owner 与 lib/must-apply-owner.ts 的 resolveOwner 必须逐条给出同一个 owner。清单改了口径这里会红，用 crawler/gap_census 重新生成并在提交说明里写清哪几条变了、为什么。",
+ "cases": [
+  {
+   "scope": "domestic",
+   "name": "京东",
+   "owner": "京东"
+  },
+  {
+   "scope": "domestic",
+   "name": "京东方 BOE",
+   "owner": "京东方"
+  },
+  {
+   "scope": "domestic",
+   "name": "京东物流",
+   "owner": "京东物流"
+  },
+  {
+   "scope": "domestic",
+   "name": "京东科技",
+   "owner": "京东科技"
+  },
+  {
+   "scope": "domestic",
+   "name": "京东集团",
+   "owner": "京东"
+  },
+  {
+   "scope": "domestic",
+   "name": "腾讯音乐 TME",
+   "owner": "腾讯音乐"
+  },
+  {
+   "scope": "domestic",
+   "name": "腾讯微保 WeSure",
+   "owner": "腾讯"
+  },
+  {
+   "scope": "domestic",
+   "name": "网易云音乐",
+   "owner": "网易云音乐"
+  },
+  {
+   "scope": "domestic",
+   "name": "网易有道",
+   "owner": "网易有道"
+  },
+  {
+   "scope": "domestic",
+   "name": "阿里影业",
+   "owner": "阿里影业"
+  },
+  {
+   "scope": "domestic",
+   "name": "阿里云",
+   "owner": "阿里巴巴"
+  },
+  {
+   "scope": "domestic",
+   "name": "ABB",
+   "owner": "ABB"
+  },
+  {
+   "scope": "domestic",
+   "name": "AbbVie",
+   "owner": ""
+  },
+  {
+   "scope": "domestic",
+   "name": "雅培 Abbott",
+   "owner": ""
+  },
+  {
+   "scope": "domestic",
+   "name": "MiniMax 稀宇科技",
+   "owner": ""
+  },
+  {
+   "scope": "domestic",
+   "name": "Flexport",
+   "owner": ""
+  },
+  {
+   "scope": "domestic",
+   "name": "Grab",
+   "owner": ""
+  },
+  {
+   "scope": "domestic",
+   "name": "马士基 Maersk",
+   "owner": ""
+  },
+  {
+   "scope": "domestic",
+   "name": "埃克森美孚 ExxonMobil",
+   "owner": ""
+  },
+  {
+   "scope": "domestic",
+   "name": "GE Healthcare",
+   "owner": ""
+  },
+  {
+   "scope": "domestic",
+   "name": "Biogen",
+   "owner": ""
+  },
+  {
+   "scope": "domestic",
+   "name": "采埃孚 ZF",
+   "owner": "采埃孚"
+  },
+  {
+   "scope": "domestic",
+   "name": "UPS",
+   "owner": "UPS"
+  },
+  {
+   "scope": "domestic",
+   "name": "Startups Inc",
+   "owner": ""
+  },
+  {
+   "scope": "domestic",
+   "name": "Continental",
+   "owner": "大陆集团"
+  },
+  {
+   "scope": "domestic",
+   "name": "拜耳 Bayer",
+   "owner": "拜耳"
+  },
+  {
+   "scope": "domestic",
+   "name": "Shell",
+   "owner": "壳牌"
+  },
+  {
+   "scope": "domestic",
+   "name": "吉利德 Gilead",
+   "owner": ""
+  },
+  {
+   "scope": "domestic",
+   "name": "吉利汽车",
+   "owner": "吉利"
+  },
+  {
+   "scope": "domestic",
+   "name": "浙江吉利控股集团",
+   "owner": "吉利"
+  },
+  {
+   "scope": "domestic",
+   "name": "国投泰康信托有限公司（国投集团）",
+   "owner": ""
+  },
+  {
+   "scope": "domestic",
+   "name": "泰康人寿保险有限责任公司湖北分公司",
+   "owner": "泰康保险"
+  },
+  {
+   "scope": "domestic",
+   "name": "中建研科技股份有限公司（中国建研院）",
+   "owner": ""
+  },
+  {
+   "scope": "domestic",
+   "name": "中建材海外经济合作有限公司",
+   "owner": ""
+  },
+  {
+   "scope": "domestic",
+   "name": "中建四局建设发展有限公司（中国建筑）",
+   "owner": "中国建筑"
+  },
+  {
+   "scope": "domestic",
+   "name": "中铁物总供应链科技集团有限公司（中国物流集团）",
+   "owner": ""
+  },
+  {
+   "scope": "domestic",
+   "name": "中铁置业集团有限公司（中国中铁）",
+   "owner": "中国中铁"
+  },
+  {
+   "scope": "domestic",
+   "name": "中铁十七局集团有限公司（中国铁建）",
+   "owner": "中国铁建"
+  },
+  {
+   "scope": "domestic",
+   "name": "化学工业出版社有限公司（中国石油和化学工业联合会）",
+   "owner": ""
+  },
+  {
+   "scope": "domestic",
+   "name": "中国石油工程建设有限公司天津分公司",
+   "owner": "中国石油"
+  },
+  {
+   "scope": "domestic",
+   "name": "连云港新东方国际货柜码头有限公司（中远海运集团）",
+   "owner": "中远海运"
+  },
+  {
+   "scope": "domestic",
+   "name": "新东方 New Oriental",
+   "owner": "新东方"
+  },
+  {
+   "scope": "domestic",
+   "name": "宁德新能源",
+   "owner": ""
+  },
+  {
+   "scope": "domestic",
+   "name": "宁德时代 CATL",
+   "owner": "宁德时代"
+  },
+  {
+   "scope": "domestic",
+   "name": "中储恒科物联网系统有限公司（中国物流集团）",
+   "owner": ""
+  },
+  {
+   "scope": "domestic",
+   "name": "中储智运",
+   "owner": "中储智运"
+  },
+  {
+   "scope": "domestic",
+   "name": "国投甘肃小三峡发电有限公司（国投集团）",
+   "owner": ""
+  },
+  {
+   "scope": "domestic",
+   "name": "三峡集团",
+   "owner": "三峡集团"
+  },
+  {
+   "scope": "domestic",
+   "name": "内蒙古蒙牛乳业（集团）股份有限公司（中粮集团）",
+   "owner": "蒙牛"
+  },
+  {
+   "scope": "domestic",
+   "name": "中海油田服务股份有限公司（中国海油）",
+   "owner": "中海油"
+  },
+  {
+   "scope": "domestic",
+   "name": "好未来（学而思）",
+   "owner": "学而思"
+  },
+  {
+   "scope": "domestic",
+   "name": "好未来",
+   "owner": "好未来"
+  },
+  {
+   "scope": "domestic",
+   "name": "中国能源建设集团湖南火电建设有限公司（中国能建）",
+   "owner": "中国能建"
+  },
+  {
+   "scope": "domestic",
+   "name": "中国电建集团华东勘测设计研究院有限公司",
+   "owner": "中国电建"
+  },
+  {
+   "scope": "domestic",
+   "name": "沃尔沃 Volvo Cars",
+   "owner": ""
+  },
+  {
+   "scope": "domestic",
+   "name": "药明生物",
+   "owner": "药明康德"
+  },
+  {
+   "scope": "domestic",
+   "name": "不在清单里的公司",
+   "owner": ""
+  },
+  {
+   "scope": "domestic",
+   "name": "",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "京东",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "京东方 BOE",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "京东物流",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "京东科技",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "京东集团",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "腾讯音乐 TME",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "腾讯微保 WeSure",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "网易云音乐",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "网易有道",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "阿里影业",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "阿里云",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "ABB",
+   "owner": "ABB"
+  },
+  {
+   "scope": "overseas",
+   "name": "AbbVie",
+   "owner": "AbbVie"
+  },
+  {
+   "scope": "overseas",
+   "name": "雅培 Abbott",
+   "owner": "Abbott"
+  },
+  {
+   "scope": "overseas",
+   "name": "MiniMax 稀宇科技",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "Flexport",
+   "owner": "Flexport"
+  },
+  {
+   "scope": "overseas",
+   "name": "Grab",
+   "owner": "Grab"
+  },
+  {
+   "scope": "overseas",
+   "name": "马士基 Maersk",
+   "owner": "Maersk"
+  },
+  {
+   "scope": "overseas",
+   "name": "埃克森美孚 ExxonMobil",
+   "owner": "ExxonMobil"
+  },
+  {
+   "scope": "overseas",
+   "name": "GE Healthcare",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "Biogen",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "采埃孚 ZF",
+   "owner": "ZF"
+  },
+  {
+   "scope": "overseas",
+   "name": "UPS",
+   "owner": "UPS"
+  },
+  {
+   "scope": "overseas",
+   "name": "Startups Inc",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "Continental",
+   "owner": "Continental"
+  },
+  {
+   "scope": "overseas",
+   "name": "拜耳 Bayer",
+   "owner": "Bayer"
+  },
+  {
+   "scope": "overseas",
+   "name": "Shell",
+   "owner": "Shell"
+  },
+  {
+   "scope": "overseas",
+   "name": "吉利德 Gilead",
+   "owner": "Gilead Sciences"
+  },
+  {
+   "scope": "overseas",
+   "name": "吉利汽车",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "浙江吉利控股集团",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "国投泰康信托有限公司（国投集团）",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "泰康人寿保险有限责任公司湖北分公司",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "中建研科技股份有限公司（中国建研院）",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "中建材海外经济合作有限公司",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "中建四局建设发展有限公司（中国建筑）",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "中铁物总供应链科技集团有限公司（中国物流集团）",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "中铁置业集团有限公司（中国中铁）",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "中铁十七局集团有限公司（中国铁建）",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "化学工业出版社有限公司（中国石油和化学工业联合会）",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "中国石油工程建设有限公司天津分公司",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "连云港新东方国际货柜码头有限公司（中远海运集团）",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "新东方 New Oriental",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "宁德新能源",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "宁德时代 CATL",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "中储恒科物联网系统有限公司（中国物流集团）",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "中储智运",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "国投甘肃小三峡发电有限公司（国投集团）",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "三峡集团",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "内蒙古蒙牛乳业（集团）股份有限公司（中粮集团）",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "中海油田服务股份有限公司（中国海油）",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "好未来（学而思）",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "好未来",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "中国能源建设集团湖南火电建设有限公司（中国能建）",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "中国电建集团华东勘测设计研究院有限公司",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "沃尔沃 Volvo Cars",
+   "owner": "Volvo"
+  },
+  {
+   "scope": "overseas",
+   "name": "药明生物",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "不在清单里的公司",
+   "owner": ""
+  },
+  {
+   "scope": "overseas",
+   "name": "",
+   "owner": ""
+  }
+ ]
+}

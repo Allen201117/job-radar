@@ -24,8 +24,8 @@ class LenovoParseTest(unittest.TestCase):
         job = jobs[0]
         self.assertEqual(job.company, "联想 Lenovo")
         self.assertEqual(job.title, "数据开发工程师")
-        # 多城市取字典翻译后的第一个（天津），不是原始字典码
-        self.assertEqual(job.location, "天津")
+        # 多城市按字典翻译后每个都交出去（入库是「天津/北京/深圳」），不是原始字典码
+        self.assertEqual(job.location, "天津、北京、深圳")
         self.assertEqual(job.job_type, "校招")  # projectType=1 → 应届生招聘
         self.assertEqual(job.education, "本科")  # educationRequired="2"
         self.assertEqual(job.jd_url, "https://talent.lenovo.com.cn/position/detail?id=2339")

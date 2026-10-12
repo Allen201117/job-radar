@@ -1,0 +1,65 @@
+name: byd-liveness
+
+# 比亚迪撤岗核验（2026-10-11）：官网全量列表 + 逐岗详情接口双条件判死，顺带修「// 被压成 /」的坏链接。
+# 比亚迪撤岗后的详情页是空壳、没有任何「已下线」文案，浏览器巡检判不出来（只能落 suspect），
+# 所以单独一条链。逐岗判据与安全闸见 crawler/byd_liveness.py 的模块注释。
+# 每日定时真跑（写库）；手动触发默认 dry-run。判死占比超过 max_expire_fraction 时整轮不下架
+# （日常撤岗 ≤7%，默认 0.3；2026-10-12 清存量那一次 72% 是手动放到 0.75 跑的）。
+
+on:
+  schedule:
+    # UTC 00:20 = 北京 08:20。当天下架的行赶得上 purge-expired（UTC 02:30）；重档抓比亚迪在 UTC 21~23 点，错开。
+    - cron: "20 0 * * *"
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "true = 真的写库；留空/false = 只 dry-run 报数"
+        required: false
+        default: "false"
+      max_expire_fraction:
+        description: "本轮拟下架占在招行数的上限，超了整轮不下架（日常 0.3；清存量时由人放宽）"
+        required: false
+        default: "0.3"
+
+concurrency:
+  group: byd-liveness
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90   # 日常几分钟；清存量那一次要问一万多次详情接口
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: crawler/requirements.txt
+      - run: pip install -r crawler/requirements.txt
+
+      # 库里的详情链接要靠官方页面的路由解回岗位 id（一次页面加载解完全部）。
+      - name: Install Playwright browser
+        run: python -m playwright install --with-deps chromium
+
+      - name: Verify BYD jobs against the official list and detail API
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+          JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+          JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
+          APPLY: ${{ github.event_name == 'schedule' && 'true' || github.event.inputs.apply }}
+          MAX_EXPIRE_FRACTION: ${{ github.event.inputs.max_expire_fraction }}
+        run: |
+          set -euo pipefail
+          args=(--out byd-liveness-report.json --max-expire-fraction "${MAX_EXPIRE_FRACTION:-0.3}")
+          if [ "${APPLY:-}" = "true" ]; then args+=(--apply); fi
+          python3 crawler/byd_liveness.py "${args[@]}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: byd-liveness-report
+          path: byd-liveness-report.json
+          if-no-files-found: ignore

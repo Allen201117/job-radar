@@ -6,6 +6,7 @@
 
 import type { CompanyProfile } from "./types";
 import { CHINA_CJK_PLACE_MARKERS } from "./geo";
+import distinctCompanies from "./insight-distinct-companies.json";
 
 // 归一化：小写、去空白与常见公司后缀/地域装饰，便于宽松比对
 const STRIP_PATTERNS: RegExp[] = [
@@ -49,9 +50,11 @@ const COMPANY_UNIT_TOKENS = [
   "中国区", "大中华区", "中国", "总部", "事业部", "事业群", "分公司", "子公司", "分行", "支行", "研发中心", "技术中心",
   "校招", "校园招聘", "社招", "实习", "招聘",
   // 品牌 + 行业描述词 = 同一家（全集对拍里真实存在：大疆创新 / 滴滴出行 / 申通快递 / 斗鱼直播 / 极兔速递 / 万科企业 /
-  // 蒙牛乳业 / 贝壳找房 / 东鹏饮料 / 深圳前海微众银行）。⚠️ 刻意不收「物流 / 音乐 / 云 / 金融 / 证券 / 汽车」——
+  // 蒙牛乳业 / 贝壳找房 / 深圳前海微众银行）。⚠️ 刻意不收「物流 / 音乐 / 云 / 金融 / 证券 / 汽车」——
   // 京东物流 / 腾讯音乐 / 阿里云 / 中信证券 是独立法人，要归集团靠 aliases。
-  "创新", "出行", "快递", "速递", "直播", "企业", "乳业", "饮料", "找房", "前海",
+  // 📌 2026-10-11 移出「饮料」：当初收它的依据是「东鹏饮料 = 东鹏」，而那条源抓的其实是东鹏控股（瓷砖卫浴）。
+  //    全集回放：移出后只拆开「东鹏 / 东鹏饮料」这一对，其余 1,725 个在招公司名的归属一个没变。
+  "创新", "出行", "快递", "速递", "直播", "企业", "乳业", "找房", "前海",
   // normalizeCompany 会把「公司」从串**中间**剥掉，「分公司 / 子公司 / 有限责任公司」因此剩下残尾，这里一并认。
   "有限责任", "有限", "分", "子",
 ];
@@ -111,7 +114,11 @@ function containedNameOk(short: string, long: string): boolean {
   }
   const idx = main.indexOf(short);
   if (idx < 0) return false;
-  return remainderIsSameCompany(main.slice(0, idx) + main.slice(idx + short.length)); // ②③
+  const remainder = main.slice(0, idx) + main.slice(idx + short.length);
+  // 短名自己带英文时，多出来的英文是另一个名字，不是拼音尾巴：「沃尔沃 Volvo」+「Cars」是沃尔沃汽车，
+  // 不是沃尔沃集团（2026-10-11 全集回放：只拆开这一对，其余归属不变）。纯中文短名的英文尾巴照旧算装饰。
+  if (/[a-z]/.test(short) && /[a-z]/.test(remainder)) return false;
+  return remainderIsSameCompany(remainder); // ②③
 }
 
 // n、q 均为归一化后的非空串：全等，或「被包含方有资格」的子串命中
@@ -122,8 +129,47 @@ function nameMatches(n: string, q: string): boolean {
   return false;
 }
 
+function profileRawNames(p: Pick<CompanyProfile, "company" | "aliases">): string[] {
+  return [p.company, ...(p.aliases || [])].filter(Boolean) as string[];
+}
+
 function profileNames(p: Pick<CompanyProfile, "company" | "aliases">): string[] {
-  return [p.company, ...(p.aliases || [])].map(normalizeCompany).filter(Boolean);
+  return profileRawNames(p).map(normalizeCompany).filter(Boolean);
+}
+
+// ── 名字分不开、但确实是两家公司的（lib/insight-distinct-companies.json，2026-10-11 立）──
+// 「大华集团」（上海，地产）与「浙江大华技术」（安防）去掉装饰词都只剩「大华」，上面的规则没有任何东西可以区分。
+// 平时靠「两个画像都在 + 精确优先」各归各；哪天其中一个画像没了，它名下的岗会整批落到另一家头上。
+// 名单按「含这个核心词的名字里，带哪个标记词的是哪一家」登记；两边的名字互不放行，判不出是哪一边的不拦。
+type DistinctEntry = { core: string; sides: Array<{ label: string; markers: string[] }> };
+const DISTINCT_ENTRIES = distinctCompanies as DistinctEntry[];
+
+// 这个名字在某条登记里属于哪一边；不含核心词、或标记词指向不止一边 → -1（判不出）
+function distinctSideOf(entry: DistinctEntry, raw: string): number {
+  const low = raw.toLowerCase();
+  if (!low.includes(entry.core)) return -1;
+  let side = -1;
+  for (let i = 0; i < entry.sides.length; i++) {
+    if (!entry.sides[i].markers.some((m) => low.includes(m))) continue;
+    if (side >= 0) return -1;
+    side = i;
+  }
+  return side;
+}
+
+// query 在每条登记里属于哪一边；全都判不出（绝大多数名字）返回 null，调用方整段跳过。
+function distinctSidesOf(query: string): number[] | null {
+  const sides = DISTINCT_ENTRIES.map((entry) => distinctSideOf(entry, query));
+  return sides.some((s) => s >= 0) ? sides : null;
+}
+
+function knownDistinct(profile: Pick<CompanyProfile, "company" | "aliases">, querySides: number[] | null): boolean {
+  if (!querySides) return false;
+  return DISTINCT_ENTRIES.some((entry, i) => {
+    if (querySides[i] < 0) return false;
+    const profileSides = profileRawNames(profile).map((n) => distinctSideOf(entry, n)).filter((s) => s >= 0);
+    return profileSides.length > 0 && !profileSides.includes(querySides[i]);
+  });
 }
 
 // query 是否命中某个画像的 company 或任一 alias
@@ -133,7 +179,51 @@ export function companyMatches(
 ): boolean {
   const q = normalizeCompany(query);
   if (!q) return false;
+  if (knownDistinct(profile, distinctSidesOf(query))) return false;
   return profileNames(profile).some((n) => nameMatches(n, q));
+}
+
+// ── 精确优先（2026-10-11 立）──
+// companyMatches 是一对一的判断，不知道别的画像存在：「京东科技」自己有画像，照样被「京东」放行
+// （「科技」是装饰词）。findCompanyProfile 有「全等优先」兜着；直接拿 companyMatches 逐个比的调用方没有——
+// 校招专区的时间线就这么把京东的 2 条挂到了京东科技卡上。要回答「这个名字归不归这个画像」，用下面两个。
+
+type ProfileKey = Pick<CompanyProfile, "id" | "company" | "aliases">;
+export type ExactProfileIndex = Map<string, ProfileKey[]>;
+
+/** 归一名 → 精确登记了它（正名或别名）的画像。 */
+export function buildExactProfileIndex(profiles: ProfileKey[]): ExactProfileIndex {
+  const index: ExactProfileIndex = new Map();
+  for (const p of profiles) {
+    for (const n of profileNames(p)) {
+      const owners = index.get(n);
+      if (!owners) index.set(n, [p]);
+      else if (!owners.includes(p)) owners.push(p);
+    }
+  }
+  return index;
+}
+
+/** 这个名字归不归这个画像：门放行，且名字没有被别的画像精确登记。 */
+export function companyOwnsName(profile: ProfileKey, query: string, exactIndex: ExactProfileIndex): boolean {
+  if (!companyMatches(profile, query)) return false;
+  // 「大华股份」归一后是「大华」，精确登记它的是大华集团的画像——而名单说那是另一家，不能让它把名字占住。
+  const querySides = distinctSidesOf(query);
+  const owners = (exactIndex.get(normalizeCompany(query)) || []).filter((o) => !knownDistinct(o, querySides));
+  return owners.length === 0 || owners.some((o) => o.id === profile.id);
+}
+
+/** 画像名下的在招岗数（按 companyOwnsName 归属）。 */
+export function ownedJobCount(
+  profile: ProfileKey,
+  counts: Array<{ company: string; job_count: number }>,
+  exactIndex: ExactProfileIndex,
+): number {
+  let sum = 0;
+  for (const row of counts) {
+    if (companyOwnsName(profile, row.company, exactIndex)) sum += row.job_count || 0;
+  }
+  return sum;
 }
 
 // 在画像列表中找最佳匹配：优先归一化全等，其次（有资格的）子串包含
@@ -144,8 +234,10 @@ export function findCompanyProfile(
   const q = normalizeCompany(query);
   if (!q) return null;
 
+  const querySides = distinctSidesOf(query);
   let substringHit: CompanyProfile | null = null;
   for (const p of profiles) {
+    if (knownDistinct(p, querySides)) continue;
     const names = profileNames(p);
     if (names.some((n) => n === q)) return p; // 全等优先
     if (!substringHit && names.some((n) => nameMatches(n, q))) {

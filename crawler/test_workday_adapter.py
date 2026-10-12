@@ -315,6 +315,15 @@ class WorkdayLocationSourceTest(unittest.TestCase):
         WorkdayAdapter._fill_primary_locations(b)
         self.assertEqual(a[0]["_primary_location"], b[0]["_primary_location"])
 
+    def test_malformed_posts_do_not_break_the_fill(self):
+        # 列表里混进非对象 / 非字符串字段时，同文件其它步骤都是跳过，这里也不能把整源抓取炸掉
+        ok = self._post("Austin-TX", "2 Locations")
+        posts = [None, "junk", {"title": "T", "externalPath": None, "locationsText": 7}, ok,
+                 self._post("Austin-TX", "Austin, TX")]
+        WorkdayAdapter._fill_primary_locations(posts)
+        self.assertEqual(ok["_primary_location"], "Austin, TX")
+        self.assertEqual(WorkdayAdapter._post_location({"externalPath": "/job/Austin-TX/T_1", "locationsText": 7}), "7")
+
     def test_count_placeholder_never_becomes_the_location(self):
         self.assertEqual(WorkdayAdapter._post_location(self._post("China-Beijing", "2 Locations")), "China, Beijing")
         self.assertEqual(WorkdayAdapter._post_location(self._post("China-Beijing", "1 Location")), "China, Beijing")

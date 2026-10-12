@@ -35,6 +35,7 @@ from typing import List, Optional
 
 import httpx
 
+import normalizer
 from .base import BaseAdapter, RawJob, resolve_detail_cap
 
 _GATEWAY = "https://apigw-dgg-b0.huawei.com/api/apig/channelhw"
@@ -203,7 +204,7 @@ class HuaweiCampusAdapter(BaseAdapter):
             # 城市筛选一个都命中不了。normalizer 认得这个格式（实测 → 「深圳」）。
             # 中文城市串（意向接口的 jobPlaceName）拿到就用，只用于 summary 展示。
             addresses = [x.strip() for x in str(row.get("jobAddress") or "").split(",") if x.strip()]
-            location = addresses[0] if addresses else ""
+            location = normalizer.join_places(addresses) or ""   # 每个地点都交出去（2026-10-11 前只取第一个）
             # summary 里的「多地可投」展示串**只用意向接口给的中文城市名**。快档（不富化）拿不到它时
             # 宁可不写这一行：clean_location 的城市别名表只覆盖主要城市，逐个归一会拼出
             # 「苏州/杭州/北京/China\\Hunan-Changsha/…」这种中英混杂串，比不写更糟。
