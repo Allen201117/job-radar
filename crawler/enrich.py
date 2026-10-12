@@ -1473,6 +1473,18 @@ def _joined(*parts):
     return "\n".join(str(p).strip() for p in parts if isinstance(p, str) and p.strip())
 
 
+def _flag(value):
+    """状态位 / 返回码只认整数或纯数字字符串，其余（bool、浮点、空串、None）一律 None。
+    不用 _int_or_none：它把 False 读成 0——在「0 = 已下架」的站上，一个类型变了的字段就是整源错杀。"""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
 # ---------- 网易 hr.163.com ----------
 _NETEASE_DETAIL_API = "https://hr.163.com/api/hr163/position/query"
 _NETEASE_LIST_API = "https://hr.163.com/api/hr163/position/queryPage"
@@ -1480,6 +1492,7 @@ _NETEASE_HEADERS = {**_SITE_HEADERS, "Referer": "https://hr.163.com/job-list.htm
 _NETEASE_OK_CODE = 200
 _NETEASE_GONE_CODE = 402
 _NETEASE_GONE_MSG = "失效或者不存在"
+_NETEASE_JOB_URL = re.compile(r"^https://hr\.163\.com/job-detail\.html\?id=(\d+)$")
 
 
 def _netease_read(job_id):
@@ -1489,7 +1502,7 @@ def _netease_read(job_id):
     payload = _loads_object(r)
     if payload is None:
         return "unknown", "non-JSON response"
-    code = _int_or_none(payload.get("code"))
+    code = _flag(payload.get("code"))
     data = payload.get("data")
     if code == _NETEASE_OK_CODE and isinstance(data, dict):
         if str(data.get("id") or "") == job_id and str(data.get("name") or "").strip():
@@ -1511,17 +1524,18 @@ def _netease_canary():
 def _detail_netease(row, src):
     """网易：GET position/query?id=。在招 code=200 且回带的 id 相同；已撤 code=402 +「职位失效或者不存在」
     + data=null（三样都要对上）。不存在的超大 id 回 code=500，不判。"""
-    job_id = (parse_qs(urlparse(row.get("jd_url") or "").query).get("id") or [""])[0].strip()
-    if not job_id.isdigit():
-        raise DetailUnknownError("netease jd_url without numeric id")
-    return _settle("netease", job_id, _netease_read, _netease_canary)
+    match = _NETEASE_JOB_URL.match(str(row.get("jd_url") or "").strip())
+    if not match:
+        raise DetailUnknownError("netease jd_url is not a job-detail page with a numeric id")
+    return _settle("netease", match.group(1), _netease_read, _netease_canary)
 
 
 # ---------- 携程 careers.ctrip.com ----------
 _CTRIP_API = "https://careers.ctrip.com/api/hrrecruit/getJobAd"
 _CTRIP_HEADERS = {**_SITE_HEADERS, "Referer": "https://careers.ctrip.com/", "Origin": "https://careers.ctrip.com"}
 _CTRIP_OK_CODE = "201"
-_CTRIP_FROM_ID = re.compile(r"/job-detail/([A-Za-z0-9_-]+)")
+# 整串匹配：fromId 里要是有这里没列的字符，截出来的前半段去查也是「空结果」，那就成了错杀。
+_CTRIP_JOB_URL = re.compile(r"^https://careers\.ctrip\.com/#/(?:experienced|campus)/job-detail/([A-Za-z0-9_-]+)$")
 
 
 def _ctrip_query(condition):
@@ -1543,7 +1557,7 @@ def _ctrip_rows(response):
         return None, None, False
     status = payload.get("ResponseStatus")
     acked = isinstance(status, dict) and status.get("Ack") == "Success"
-    return rows, _int_or_none(value.get("total")), acked
+    return rows, _flag(value.get("total")), acked
 
 
 def _ctrip_read(from_id):
@@ -1570,9 +1584,9 @@ def _ctrip_canary():
 def _detail_ctrip(row, src):
     """携程：详情页自己就是拿 fromId 去查列表接口。在招 = 结果里有这一条；已撤 = retCode 201 + Ack Success
     + total 0 + 空列表。⚠️ 不存在的 id 也是这个空结果，所以必须有阳性对照（_ctrip_canary）。"""
-    match = _CTRIP_FROM_ID.search(row.get("jd_url") or "")
+    match = _CTRIP_JOB_URL.match(str(row.get("jd_url") or "").strip())
     if not match:
-        raise DetailUnknownError("ctrip jd_url without fromId")
+        raise DetailUnknownError("ctrip jd_url is not a job-detail page")
     return _settle("ctrip", match.group(1), _ctrip_read, _ctrip_canary)
 
 
@@ -1616,7 +1630,7 @@ def _detail_baidu(row, src):
     5.8KB 的空壳（有站名、没有任何岗位数据，也没有任何「已下线」文案）。
     ⚠️ 招聘类型写错（拿社招的 postId 访问 /GRADUATE/）回的也是这个空壳——所以只按库里的 jd_url 原样去问，
     并且必须有阳性对照。只判活不补正文。"""
-    match = _BAIDU_DETAIL_KEY.match(row.get("jd_url") or "")
+    match = _BAIDU_DETAIL_KEY.match(str(row.get("jd_url") or "").strip())
     if not match:
         raise DetailUnknownError("baidu jd_url is not a detail page")
     return _settle("baidu", match.group(1), _baidu_read, _baidu_canary)
@@ -1629,7 +1643,7 @@ _BILIBILI_HEADERS = {**_SITE_HEADERS, "X-AppKey": "ops.ehr-api.auth", "X-UserTyp
 _BILIBILI_SESSION_TTL = 900
 _BILIBILI_SESSION = {"client": None, "at": 0.0}
 _BILIBILI_LOCK = threading.Lock()
-_BILIBILI_JOB_ID = re.compile(r"/positions/(\d+)")
+_BILIBILI_JOB_URL = re.compile(r"^https://jobs\.bilibili\.com/social/positions/(\d+)$")
 _BILIBILI_OPEN_STATUS = 1
 _BILIBILI_CLOSED_STATUS = 0
 
@@ -1664,13 +1678,13 @@ def _bilibili_read(job_id):
     if payload is None:
         return "unknown", "non-JSON response"
     data = payload.get("data")
-    if _int_or_none(payload.get("code")) != 0 or not isinstance(data, dict):
+    if _flag(payload.get("code")) != 0 or not isinstance(data, dict):
         with _BILIBILI_LOCK:
             _BILIBILI_SESSION["at"] = 0.0     # 可能是会话过期：下一次调用重新取 token
         return "unknown", f"code={payload.get('code')!r}"
     if str(data.get("id") or "") != job_id or not str(data.get("positionName") or "").strip():
         return "unknown", "data without matching id / positionName"
-    status = _int_or_none(data.get("positionStatus"))
+    status = _flag(data.get("positionStatus"))
     if status == _BILIBILI_OPEN_STATUS:
         return "live", str(data.get("positionDescription") or "")
     if status == _BILIBILI_CLOSED_STATUS:
@@ -1682,16 +1696,16 @@ def _detail_bilibili(row, src):
     """B 站：GET /api/srs/position/detail/{id}。`positionStatus` 1 = 在招，0 = 已下架——已下架的岗接口照样回
     完整记录，页面也照样渲染岗位名和正文，只把投递按钮换成「职位已下架」（50 个已下架样本逐个真渲染都是这样）。
     不存在的 id 回 code=60015，库里的岗没出现过这种情况，不判。"""
-    match = _BILIBILI_JOB_ID.search(row.get("jd_url") or "")
+    match = _BILIBILI_JOB_URL.match(str(row.get("jd_url") or "").strip())
     if not match:
-        raise DetailUnknownError("bilibili jd_url without position id")
+        raise DetailUnknownError("bilibili jd_url is not a position page")
     return _settle("bilibili", match.group(1), _bilibili_read)
 
 
 # ---------- 小红书 job.xiaohongshu.com ----------
 _XHS_DETAIL_API = "https://job.xiaohongshu.com/websiterecruit/position/queryPositionDetail"
 _XHS_HEADERS = {**_SITE_HEADERS, "Referer": "https://job.xiaohongshu.com/"}
-_XHS_JOB_ID = re.compile(r"/position/(\d+)")
+_XHS_JOB_URL = re.compile(r"^https://job\.xiaohongshu\.com/(?:social|campus)/position/(\d+)$")
 _XHS_OPEN_STATUS = "in_recruitment"
 _XHS_CLOSED_STATUS = "recruit_close"
 
@@ -1704,7 +1718,7 @@ def _xiaohongshu_read(position_id):
     if payload is None:
         return "unknown", "non-JSON response"
     data = payload.get("data")
-    if _int_or_none(payload.get("statusCode")) != 200 or not isinstance(data, dict):
+    if _flag(payload.get("statusCode")) != 200 or not isinstance(data, dict):
         return "unknown", f"statusCode={payload.get('statusCode')!r}"
     if str(data.get("positionId") or "") != position_id or not str(data.get("positionName") or "").strip():
         return "unknown", "data without matching positionId / positionName"
@@ -1720,16 +1734,16 @@ def _detail_xiaohongshu(row, src):
     """小红书：GET queryPositionDetail?positionId=。`recruitStatus` in_recruitment = 在招，recruit_close = 已关。
     已关的岗页面和在招页一模一样（仍有「投递简历」按钮），只有这个字段说得清。
     无效 id 回 statusCode=999「获取职位详情异常」，不判。"""
-    match = _XHS_JOB_ID.search(row.get("jd_url") or "")
+    match = _XHS_JOB_URL.match(str(row.get("jd_url") or "").strip())
     if not match:
-        raise DetailUnknownError("xiaohongshu jd_url without position id")
+        raise DetailUnknownError("xiaohongshu jd_url is not a position page")
     return _settle("xiaohongshu", match.group(1), _xiaohongshu_read)
 
 
 # ---------- OPPO careers.oppo.com ----------
 _OPPO_DETAIL_API = "https://careers.oppo.com/openapi/position/detail"
 _OPPO_HEADERS = {**_SITE_HEADERS, "Referer": "https://careers.oppo.com/university/oppo/campus/post"}
-_OPPO_JOB_ID = re.compile(r"/post/(\d+)")
+_OPPO_JOB_URL = re.compile(r"^https://careers\.oppo\.com/university/oppo/campus/post/(\d+)$")
 _OPPO_OPEN_STATUS = 0
 _OPPO_CLOSED_STATUS = 1
 
@@ -1742,14 +1756,15 @@ def _oppo_read(position_id):
     if payload is None:
         return "unknown", "non-JSON response"
     data = payload.get("data")
-    if _int_or_none(payload.get("code")) != 0 or not isinstance(data, dict):
+    if _flag(payload.get("code")) != 0 or not isinstance(data, dict):
         return "unknown", f"code={payload.get('code')!r}"
     if str(data.get("idRecruitPosition") or "") != position_id or not str(data.get("positionName") or "").strip():
         return "unknown", "data without matching idRecruitPosition / positionName"
-    status = _int_or_none(data.get("positionStatus"))
+    status = _flag(data.get("positionStatus"))
     if status == _OPPO_OPEN_STATUS:
         return "live", _joined(data.get("positionDesc"), data.get("positionRequire"))
-    if status == _OPPO_CLOSED_STATUS and not data.get("workCityVOList"):
+    cities = data.get("workCityVOList")
+    if status == _OPPO_CLOSED_STATUS and (cities is None or cities == []):
         return "gone", ""
     return "unknown", f"positionStatus={data.get('positionStatus')!r} (work cities present or unknown value)"
 
@@ -1759,9 +1774,9 @@ def _detail_oppo(row, src):
     🚩 这个含义是按全集推出来的，不是读对方前端代码读出来的：当天在列的 237 个岗全是 0；不在列的 53 个
     全是 1，且工作城市列表全空；随手问的往届项目（2022 届 / 2023 届）也全是 1。已关的岗页面照样渲染。
     所以判死要两个条件同时成立：状态位是 1 **且**工作城市为空；只有状态位是 1 的不判。"""
-    match = _OPPO_JOB_ID.search(row.get("jd_url") or "")
+    match = _OPPO_JOB_URL.match(str(row.get("jd_url") or "").strip())
     if not match:
-        raise DetailUnknownError("oppo jd_url without position id")
+        raise DetailUnknownError("oppo jd_url is not a campus post page")
     return _settle("oppo", match.group(1), _oppo_read)
 
 

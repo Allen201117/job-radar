@@ -619,6 +619,38 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #     详情探活 `enrich._detail_workday`：404/410 判死，其余非 2xx 判 unknown 不盖戳（429 是 Workday 按 IP 限流）。
 ```
 
+## 六家自建站的逐岗探活信号（2026-10-12，`enrich.py`「六家自建站」）
+
+网易 / 携程 / 百度 / B 站 / 小红书 / OPPO 此前只有浏览器巡检，判不出也轮不到（成因见 CLAUDE.md §4「六家自建站已有逐岗探活」）。
+接口都是匿名直连；数字是 2026-10-12 库里这六家全部 12,182 个在招岗逐个问出来的，同时对了各站当天的列表。
+
+| 站 | 接口 | 在招 | 已撤 | 伪 id | 在列→在招 | 不在列→已撤 | 不在列却在招 |
+|---|---|---|---|---|---|---|---|
+| 网易 | `GET hr.163.com/api/hr163/position/query?id=` | code=200 且回带 id 相同 | code=402 +「职位失效或者不存在」+ data=null | 超大 id 回 code=500 | 2,688 / 2,689 | 1,632 / 1,632 | 0 |
+| 携程 | `POST careers.ctrip.com/api/hrrecruit/getJobAd`，`condition.fromId=[id]` | 结果里有这一条 | retCode 201 + Ack Success + total 0 + 空列表 | 同「已撤」 | 520 / 521 | 813 / 815 | 2 |
+| 百度 | `GET` 详情页本身（服务端直出） | 带 `window.__INITIAL_DATA__` 且含 postId（23~35KB） | 5.7~5.9KB 空壳 | 同「已撤」；招聘类型写错也是 | 2,300 / 2,300 | 638 / 638 | 0 |
+| B 站 | 先 `GET /api/auth/v1/csrf/token`，再 `GET /api/srs/position/detail/{id}`（带 `X-CSRF`） | `positionStatus=1` | `positionStatus=0` | code=60015 | 462 / 462 | 402 / 404 | 2 |
+| 小红书 | `GET job.xiaohongshu.com/websiterecruit/position/queryPositionDetail?positionId=` | `recruitStatus=in_recruitment` | `recruit_close` | statusCode=999 | 1,322 / 1,322 | 1,083 / 1,109 | 26 |
+| OPPO | `GET careers.oppo.com/openapi/position/detail?id=` | `positionStatus=0` | `positionStatus=1` 且工作城市为空 | code=500 | 237 / 237 | 53 / 53 | 0 |
+
+- **撤岗页长什么样**（真渲染，每家 50 条已撤 + 15 条在招对照）：携程有文案「您查看的职位已下架」；网易是「--」占位的空骨架，
+  侧栏「相关职位」里的同名岗会让标题检查命中（50 条里 12 条被判 alive）；百度是空壳，无头浏览器里连在招页都落到 about:blank；
+  B 站照样渲染岗位名 + 正文，只把按钮换成「职位已下架」；小红书、OPPO 的已关页和在招页看不出区别。
+- **「查不到 = 已撤」的三家（网易 / 携程 / 百度）必须有阳性对照**：伪 id、传错的参数回的是同一个东西。`_canary_ok` 要求本进程用同一个
+  请求形状读到过在招岗（巡检里读到过，或现去问列表第一页的岗），做不出来就一行不判。
+- **OPPO 的状态位极性和 B 站相反**（OPPO 0 = 在招，B 站 1 = 在招），且 OPPO 的含义是按全集推的、没读对方前端代码——所以它判死要
+  「状态位是 1」和「工作城市为空」两个条件同时成立。
+- **同一个 id 会重新开放**：上线代码隔 3~5 小时把全集又过了一遍，小红书 19 行、网易 6 行从已关变回在招，逐条对官网当时的列表，
+  25 行里 23 行已经回到列表（另 2 行在招但不在列）。这是对方 HR 开关岗位，不是接口不稳——判死在当时是对的，重新开放的岗由列表抓取再收回来
+  （`job_closures.reopen_count` 会记）。另外四家两遍之间「已撤 → 在招」是 0。
+- **不能按列表缺席下架**：小红书 26 行、携程 2 行、B 站 2 行不在列表却在招。
+- **阿里系没接**：`POST https://{host}/position/detail?_csrf=` 的 `content=null` 不稳——1,422 个读到 null 的岗隔一两个小时再问有 28 个读到在招；
+  `channel` 传空或传错时**在招岗也回 null**（菜鸟回全空骨架）。连问两次（隔 2 秒）结果一致，所以二次确认救不了。它留在浏览器巡检：
+  页面文案「该职位已失效」可靠；菜鸟的撤岗页是无文案的空骨架（176 行），目前没有路。阿里国际 robots 禁抓，接口同样不问。
+- **快手没有便宜信号**：详情接口裸 GET 回 code=-1「系统错误」（要页面签名）；但页面文案「该职位已下线」词表认，留在浏览器巡检。
+- **本机验证的坑**：国内站必须直连——走系统代理时 B 站超时、百度返回体大小都不一样（Chrome 加 `--no-proxy-server`，httpx `trust_env=False`）。
+  这台 Windows 上一次性的 `httpx.get` 每次要 8~20 秒（常驻 Client 0.05 秒），本机跑全集要把传输换成常驻 Client；CI 上没有这个问题。
+
 ## 必投清单口径（`lib/must-apply-list.ts` / `.json`）
 
 ```

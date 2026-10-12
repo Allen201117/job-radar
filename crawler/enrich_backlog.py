@@ -368,6 +368,10 @@ def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, pe
                 a["err"] += 1
             if res == "expired":  # 巡检确认撤岗 → 收集 CLOSED（批量末尾一次性落库，避免每岗一次往返）
                 a["expired"] += 1
+                if dry_run:
+                    # dry-run 把拟下架的行点名打出来：只有计数的话，对不上数时无从查是哪几行（接新 adapter、
+                    # 清存量之前要拿这份名单和别处独立核过的名单逐行对，两个方向各数）。
+                    print(f"[dry-run expired] {adp} {row['id']}")
                 close_events.append(jobs_db.plan_close_event(row["id"], row.get("source_id"), day))
             # 源级自适应：miss+err 率异常高 → 熔断该 adapter 本轮剩余（一次性 warning，不默默失败）
             if adp not in tripped and should_trip_adapter(a["checked"], a["miss"] + a["err"]):

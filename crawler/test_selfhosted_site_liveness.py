@@ -205,6 +205,29 @@ class CtripTest(_Base):
         with self.assertRaises(enrich.DetailUnknownError):
             self._run(_ctrip_payload([]), row={"jd_url": "https://careers.ctrip.com/"})
 
+    def test_from_id_with_unexpected_characters_is_unknown(self):
+        """只截出 fromId 的前半段去查，回来的也是「空结果」——那不是撤岗，是我们问错了。"""
+        for url in ("https://careers.ctrip.com/#/experienced/job-detail/MJ036646.1",
+                    "https://careers.ctrip.com/#/experienced/job-detail/MJ036646/apply",
+                    "https://careers.ctrip.com/#/experienced/job-detail/MJ 036646",
+                    "https://careers.ctrip.com/#/other/job-detail/MJ036646"):
+            with self.assertRaises(enrich.DetailUnknownError):
+                self._run(_ctrip_payload([]), row={"jd_url": url})
+
+    def test_total_of_unexpected_type_is_unknown(self):
+        for total in (False, None, "", 0.0, "zero"):
+            payload = _ctrip_payload([])
+            payload["retValue"]["total"] = total
+            with self.assertRaises(enrich.DetailUnknownError):
+                self._run(payload)
+
+
+class FlagTest(unittest.TestCase):
+    def test_only_integers_and_digit_strings_count(self):
+        self.assertEqual([enrich._flag(v) for v in (0, 1, "0", " 2 ", 200)], [0, 1, 0, 2, 200])
+        for value in (False, True, None, "", 0.0, 1.0, "1.0", "-1", [], {}, "closed"):
+            self.assertIsNone(enrich._flag(value), repr(value))
+
 
 # ───────────────────────── 百度 ─────────────────────────
 
@@ -311,8 +334,8 @@ class BilibiliTest(_Base):
             self._run(_Resp(_bili_payload(status="0")))
 
     def test_missing_or_unknown_status_is_unknown(self):
-        """⚠️ 0 是「已下架」，所以缺字段绝不能被当成 0。"""
-        for status in (None, "", 2, "closed"):
+        """⚠️ 0 是「已下架」，所以缺字段、False、0.0 都绝不能被当成 0。"""
+        for status in (None, "", 2, "closed", False, 0.0):
             with self.assertRaises(enrich.DetailUnknownError):
                 self._run(_Resp(_bili_payload(status=status)))
         payload = _bili_payload()
@@ -432,9 +455,23 @@ class OppoTest(_Base):
             self._run(_Resp(_oppo_payload(status=1)))
 
     def test_missing_or_unknown_status_is_unknown(self):
-        for status in (None, "", 2):
+        for status in (None, "", 2, True, 1.0):
             with self.assertRaises(enrich.DetailUnknownError):
                 self._run(_Resp(_oppo_payload(status=status, cities=())))
+
+    def test_cities_of_unexpected_type_do_not_count_as_empty(self):
+        for cities in (False, 0, ""):
+            payload = _oppo_payload(status=1)
+            payload["data"]["workCityVOList"] = cities
+            with self.assertRaises(enrich.DetailUnknownError):
+                self._run(_Resp(payload))
+
+    def test_other_url_shapes_are_unknown(self):
+        for url in ("https://careers.oppo.com/university/oppo/campus/post/1612/apply",
+                    "https://careers.oppo.com/social/post/1612",
+                    "https://careers.oppo.com/university/oppo/campus/post?recruitType=Graduate"):
+            with self.assertRaises(enrich.DetailUnknownError):
+                self._run(_Resp(_oppo_payload(status=1, cities=())), row={"jd_url": url})
 
     def test_nonexistent_id_answer_is_unknown(self):
         with self.assertRaises(enrich.DetailUnknownError):
