@@ -435,6 +435,92 @@ def _moka_portal_total(document_html: str) -> Optional[int]:
     return None
 
 
+def _moka_list_filter(source_url: str) -> str:
+    """source_url 的 hash 里带的列表筛选 → 要打开的路由「#/jobs?<筛选>」；没带筛选返回空串。
+
+    写法就是门户自己选完筛选项后地址栏里的那一段，原样用、不重新编码（2026-10-12 在麦当劳老版门户上逐项点出来的：
+    `zhineng=<职能 id>`、`department=[id,id]`、`keyword=<词>`）。`page=N` 是翻页位置不是筛选，去掉后从第 1 页开始。
+    """
+    path, _, query = (source_url or "").partition("#")[2].partition("?")
+    if path != "/jobs":
+        return ""
+    kept = [part for part in query.split("&")
+            if "=" in part and part.split("=", 1)[0] != "page" and part.split("=", 1)[1]]
+    return "#/jobs?" + "&".join(kept) if kept else ""
+
+
+# ── 一个 Moka 门户发多家公司的岗（2026-10-12）────────────────────────────────────────────
+# 北森国寿 / 广发那块碑（_BEISEN_SHARED_TENANTS）在 Moka 上的同一种情况。
+# 租户 crland 是华润置地的，校招门户 168540（门户名「华润置地2027届秋招」）自报 441 个岗，其中 372 个的部门挂在
+# 「华润万象生活」节点下（必投清单里是另一家公司）。旧代码每条都贴 sources.company →
+# 缺口台账记华润置地校招 441、华润万象生活校招 5，按「华润万象生活」筛校招几乎看不到岗。
+#
+# 判据 = 标题末尾括号里「-」之前的那一段（「万象生-推广岗（商业-厦门)」→ 商业）。为什么是它：
+#   · 岗位卡只渲染标题和地点（门户配置 jobsListSettings.jobEnableFields = ["title", "location"]），部门不在卡片上；
+#   · 2026-10-12 全集对拍：用页面自己的部门筛选（hash 参数 department[0]=<部门 id>）把 46 个部门逐个取回来，
+#     每个部门的条数都等于门户内嵌数据 jobsGroupedByDepartment 的 jobCount（父节点的结果含整棵子树：
+#     商业航道 245 = 直属 17 + 11 个子部门，物业航道 123 = 直属 12 + 14 个子部门）。441 个岗逐个比「直属部门」与「标题这一段」：
+#       商业 242 / 物业 123 / 万象生活总部 4 / 写字楼 3 → 部门全在华润万象生活节点下（372）；
+#       开发 34 / 文体 23 / 有巢 7 / 酒管 5 → 部门全是华润置地其它航道（69）；对不上 0、认不出 0。
+#     逐条真值在 fixtures/moka_crland_campus_titles.json，test_moka_shared_portal 全量回放。
+#   · 不用页面上的「业务赛道」筛选（自定义字段 332245）：同日 10 个岗（全在商业华北大区）没填这个字段。
+#   · 不在抓取里用部门筛选逐个取：每晚要多翻一遍列表，而且筛选参数名一旦对不上页面会直接忽略它、
+#     返回整个列表（实测 departmentIds[0] / deptId[0] 都是这样）——那会把全部岗都判给别家。
+#   · 标题开头的校招品牌（百匠新人 / 万象生 / 万悦生 / 销冠生）不是判据：百匠新人同时出现在开发 32、商业 37、物业 12，
+#     万悦生在物业 111、酒管 5，万象生在商业 205、文体 18。
+# 认不出的业务段（含没有末尾括号的标题）一律留在门户本家，不猜；每轮在日志里点名。
+#
+# 「租户/门户号」→ {"owners": {业务段: 归属公司}, "home_segments": 核实过属于门户本家的业务段, "home_company": 门户本家}。
+# 按整段相等认，不按子串（同 _BEISEN_SHARED_TENANTS 用前缀不用子串的理由）。
+# 本家的行抓取时不写公司名、照旧由 sources.company 兜底（与别的 adapter 同一个约定）；home_company 是给存量脚本
+# 核对用的：那条源在 sources 里的名字和它对不上时，reattribute_moka_shared_portal 拒绝动库。
+# ⚠️ 只登记核实过的这一个门户：校招换期会换门户号，新门户要重新对拍后再登记（那条源的 notes 里也写了）。
+_MOKA_SHARED_PORTALS = {
+    "crland/168540": {
+        "owners": {"商业": "华润万象生活", "物业": "华润万象生活",
+                   "写字楼": "华润万象生活", "万象生活总部": "华润万象生活"},
+        "home_segments": frozenset({"开发", "文体", "有巢", "酒管"}),
+        "home_company": "华润置地",
+    },
+}
+# 门户页地址 / 岗位链接里的「租户/门户号」：…mokahr.com/{campus-recruitment|social-recruitment|apply|…}/{租户}/{门户号}
+_MOKA_PORTAL_KEY_RE = re.compile(r"^https?://[^/]*mokahr\.com/[^/#?]+/([^/#?]+)/(\d+)(?![\w-])", re.I)
+_MOKA_TITLE_TAIL_RE = re.compile(r"[（(]([^（()）]*)[)）]\s*$")
+_MOKA_SEGMENT_SEP_RE = re.compile(r"[-－—–]")
+
+
+def moka_portal_key(url: str) -> str:
+    """Moka 门户页地址或岗位链接 → 「租户/门户号」（小写，同 ops_watchdog.portal_identity）；认不出返回空串。"""
+    m = _MOKA_PORTAL_KEY_RE.match(url or "")
+    return f"{m.group(1)}/{m.group(2)}".lower() if m else ""
+
+
+def moka_title_segment(title: str) -> str:
+    """标题末尾括号里「-」之前的那一段；标题不以括号结尾返回空串。"""
+    m = _MOKA_TITLE_TAIL_RE.search(title or "")
+    return _MOKA_SEGMENT_SEP_RE.split(m.group(1))[0].strip() if m else ""
+
+
+def moka_shared_portal(url: str) -> Optional[dict]:
+    """门户页地址或岗位链接所在的门户若登记为「发多家公司的岗」，返回它的登记项；否则 None。"""
+    return _MOKA_SHARED_PORTALS.get(moka_portal_key(url))
+
+
+def moka_shared_portal_verdict(portal_url: str, title: str):
+    """共享门户里这个岗归谁 → (归属公司 | None, 判得了没有)。
+
+    (公司, True) = 归别家；(None, True) = 不是共享门户，或业务段核实过属于门户本家；
+    (None, False) = 共享门户里认不出的业务段，留在本家（沿用 sources.company），调用方要点名。"""
+    portal = moka_shared_portal(portal_url)
+    if not portal:
+        return None, True
+    segment = moka_title_segment(title)
+    owner = portal["owners"].get(segment)
+    if owner:
+        return owner, True
+    return None, segment in portal["home_segments"]
+
+
 class MokaAdapter(PlaywrightAdapter):
     """Moka 招聘（{tenant}.mokahr.com / app.mokahr.com）—— 大量消费/互联网/游戏私企在用。
 
@@ -442,6 +528,8 @@ class MokaAdapter(PlaywrightAdapter):
     故改为**渲染后解析 DOM**：页面 JS 解密后岗位卡渲染为 `a[href*='#/job/{uuid}']`，
     per-job 详情链接 = `{base}#/job/{uuid}`（hash 路由，可直达岗位）。
     source_url 填某公司 Moka 公开招聘页（如 https://app.mokahr.com/apply/shein/2933）。
+    只要门户里的一部分岗时，把门户自己的筛选写在 source_url 的 hash 里
+    （…/social-recruitment/mcdchina/4610#/jobs?keyword=…，见 _moka_list_filter 与 _LEGACY_LIST_CARD_SEL）。
     """
 
     name = "moka"
@@ -464,6 +552,17 @@ class MokaAdapter(PlaywrightAdapter):
     # 关停文案同时看 <title>：它是服务端直接写进 HTML 的（httpx 读过中英两种关停页，标题都与那句话同文），
     # 不依赖前端把那句话渲染出来；比对不分大小写（innerText 会跟着 CSS 的 text-transform 变）。
     _CLOSED_MARKERS = ("当前网页已关停", "This website has been shut down")
+    # 岗位卡的选择器。下面几段页面脚本里写的也是这一串（_scoped 按它替换），改这里要一起改。
+    _CARD_SEL = "a[href*='#/job/']"
+    # 带筛选的源（source_url 的 hash 里写了筛选，见 _moka_list_filter）只读列表区：
+    # 老版门户的页面是两栏，列表和翻页器在 .col-xs-9 里，右栏「最新职位」（.col-xs-3，5 张）不受筛选影响。
+    # 2026-10-12 麦当劳门户实测：筛出 0 条时列表区只有一句「尚无任何相关职位」，右栏照样挂着 5 个门店岗——
+    # 不限定列表区，每晚会把这 5 个筛选之外的岗收进来。
+    # ⚠️ 筛选只在老版门户（websiteVersion=1）上验过。新版门户没有这个两栏结构，带筛选的源会等不到列表区的岗位卡、
+    #    记成失败——这是有意的：没验过的门户上宁可报错，也不把整站的岗当成筛选结果收进来。
+    _LEGACY_LIST_CARD_SEL = ".col-xs-9 a[href*='#/job/']"
+    _card_sel = _CARD_SEL     # 这条源读哪里的岗位卡（fetch 开头按有没有筛选定）
+    _list_filter = ""         # 这条源要打开的筛选路由（没有筛选为空串）
     _READY_TIMEOUT_MS = 20000
     _READY_JS = ("([markers, closed]) => {"
                  " if (document.querySelectorAll(\"a[href*='#/job/']\").length > 0) return 'cards';"
@@ -604,6 +703,8 @@ class MokaAdapter(PlaywrightAdapter):
         「别名不同」本身不够：租户常同时开着几个门户，别名也可能指向没配置过的空模板（华虹 74008）。
         所以要在同一个浏览器里把别名门户打开看一眼——那边也是空的，就当本门户只是休眠，照常记 0 岗。
         打不开 / 看不清一律不报（宁可漏报，不把休眠记成失败）。"""
+        if self._list_filter:
+            return  # 带筛选的源：筛出 0 条只说明这一类岗现在没有，不说明门户换了期
         m = self._CAMPUS_PORTAL_RE.match(source_url or "")
         if not m:
             return  # 不是带 id 的校招门户（社招 / 无 id 别名本身就跟着当前期走）
@@ -637,6 +738,10 @@ class MokaAdapter(PlaywrightAdapter):
         except Exception:
             pass
 
+    def _scoped(self, js: str) -> str:
+        """页面脚本里数岗位卡的那个选择器，换成这条源该读的范围（带筛选的源只数列表区，其余原样）。"""
+        return js if self._card_sel == self._CARD_SEL else js.replace(self._CARD_SEL, self._card_sel)
+
     def _active_page_text(self, page) -> str:
         """翻页器上当前页的页码文字；读不到返回空串（_TURNED_JS 此时只看卡片换没换）。"""
         try:
@@ -649,7 +754,8 @@ class MokaAdapter(PlaywrightAdapter):
         """点完「下一页」后等列表渲染回来。返回等到没有；没等到不抛，由调用方按「这一页没翻过去」处理。"""
         try:
             page.wait_for_function(
-                self._TURNED_JS, arg=[self._next_sel, self._active_page_sel, prev_cards, prev_active],
+                self._scoped(self._TURNED_JS),
+                arg=[self._next_sel, self._active_page_sel, prev_cards, prev_active],
                 timeout=self._TURN_TIMEOUT_MS, polling=200)
         except Exception as e:  # noqa: BLE001 —— 超时是这里的正常分支之一
             if "Timeout" not in type(e).__name__:
@@ -666,7 +772,8 @@ class MokaAdapter(PlaywrightAdapter):
         if not total:
             return
         try:
-            page.wait_for_function(self._FIRST_PAGE_JS, arg=[self._next_sel, total - self._PORTAL_SHORT_MIN],
+            page.wait_for_function(self._scoped(self._FIRST_PAGE_JS),
+                                   arg=[self._next_sel, total - self._PORTAL_SHORT_MIN],
                                    timeout=self._FIRST_PAGE_TIMEOUT_MS, polling=250)
         except Exception as e:  # noqa: BLE001
             if "Timeout" not in type(e).__name__:
@@ -699,7 +806,7 @@ class MokaAdapter(PlaywrightAdapter):
         self._dismiss_cookie_banner(page)   # 翻页前先清场，否则首次点击就会被它挡住
         page_cap = self._page_cap or resolve_page_cap(self._rows_per_page, self._MAX_JOBS)
         for attempt in range(page_cap):
-            cards = page.eval_on_selector_all("a[href*='#/job/']", self._cards_js)
+            cards = page.eval_on_selector_all(self._card_sel, self._cards_js)
             before = len(union)
             upgraded = False
             fresh_titles = []   # 这一页新见到的岗的标题，喂给重复度刹车
@@ -843,7 +950,10 @@ class MokaAdapter(PlaywrightAdapter):
         """从本源主文档的响应体里记下门户自报的岗位总数。读不到就保持原值，绝不抛。
 
         只认本源自己的地址：校招换期检查会在同一个浏览器里打开别的门户，那边的总数不是这条源的分母。
-        只换 hash 的跳转是同文档导航，goto 返回 None，沿用第一次读到的值。"""
+        只换 hash 的跳转是同文档导航，goto 返回 None，沿用第一次读到的值。
+        带筛选的源不记：门户自报的是整站总数（麦当劳 58,187），不是筛选后那个列表的；分母退回翻页器的总页数。"""
+        if self._list_filter:
+            return
         if response is None or not self._own_base or url.split("#")[0] != self._own_base:
             return
         try:
@@ -861,14 +971,22 @@ class MokaAdapter(PlaywrightAdapter):
         渲染出来后仍等 wait_ms 再数卡：一是等整页卡片渲染齐，二是防「数据回来前先闪一下空态」。
         """
         self._note_portal_total(page.goto(url, wait_until="domcontentloaded", timeout=35000), url)
-        handle = page.wait_for_function(self._READY_JS,
+        handle = page.wait_for_function(self._scoped(self._READY_JS),
                                         arg=[list(self._EMPTY_MARKERS), list(self._CLOSED_MARKERS)],
                                         timeout=self._READY_TIMEOUT_MS, polling=250)
         if handle.json_value() == "closed":
             return "closed", []
         page.wait_for_timeout(self.wait_ms)
-        cards = page.eval_on_selector_all("a[href*='#/job/']", self._cards_js)
+        cards = page.eval_on_selector_all(self._card_sel, self._cards_js)
         return ("cards" if cards else "empty"), cards
+
+    def _plan_routes(self, source_url: str) -> tuple:
+        """这条源要试哪些列表路由，并定下读哪里的岗位卡。
+
+        带筛选的源只开筛选那一个路由、只读列表区：别的路由是不带筛选的整站列表，在那上面抓到的不是这条源要的岗。"""
+        self._list_filter = _moka_list_filter(source_url)
+        self._card_sel = self._LEGACY_LIST_CARD_SEL if self._list_filter else self._CARD_SEL
+        return (self._list_filter,) if self._list_filter else self._routes
 
     def fetch(self, source_url: str) -> str:
         from playwright.sync_api import sync_playwright
@@ -883,6 +1001,7 @@ class MokaAdapter(PlaywrightAdapter):
         self._portal_total = None
         base = source_url.split("#")[0]
         self._own_base = base
+        routes = self._plan_routes(source_url)
         best: List[dict] = []
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
@@ -895,7 +1014,7 @@ class MokaAdapter(PlaywrightAdapter):
                 rendered_empty = False
                 route_errors = []
                 last_route = None   # 页面当前停在哪个路由（且已渲染完）
-                for route in self._routes:
+                for route in routes:
                     last_route = None
                     try:
                         state, first = self._open_route(page, base + route)
@@ -918,7 +1037,9 @@ class MokaAdapter(PlaywrightAdapter):
                     # ⚠️ 不许安静返回 0 岗：那会记成 success，2026-09-10 起 312 个源天天「0 岗成功」没人发现。
                     raise RuntimeError(
                         "moka job list not found on any route (no job cards, no empty state): "
-                        + ", ".join(route_errors))
+                        + ", ".join(route_errors)
+                        + ("；这条源带筛选，只读老版门户的列表区（.col-xs-9）——门户换了版式就读不到，到页面上核一下"
+                           if self._list_filter else ""))
                 if best_route is None:
                     # 渲染出了空态、一张卡都没有：先排除「我们指着一个已换期的旧门户」再认 0 岗。
                     self._raise_if_campus_portal_superseded(page, source_url)
@@ -950,6 +1071,8 @@ class MokaAdapter(PlaywrightAdapter):
         seen = set()
         too_old = []
         oldest_kept = self._today() - timedelta(days=self._MAX_AGE_DAYS) if self._MAX_AGE_DAYS else None
+        shared = moka_shared_portal(base) is not None   # 一个门户发多家公司的岗：逐行归属
+        unknown_titles = []
         for c in data.get("cards", []):
             m = re.search(r"#/job/([\w-]+)", c.get("href") or "")
             if not m:
@@ -965,8 +1088,13 @@ class MokaAdapter(PlaywrightAdapter):
             if jd_url in seen:
                 continue
             seen.add(jd_url)
+            owner = None
+            if shared:
+                owner, known = moka_shared_portal_verdict(base, title)
+                if not known:
+                    unknown_titles.append(title)
             out.append(RawJob(
-                company=self.company_name or "",
+                company=owner or self.company_name or "",
                 title=title,
                 location=location,
                 job_type=None,
@@ -975,6 +1103,17 @@ class MokaAdapter(PlaywrightAdapter):
                 apply_url=jd_url,
                 posted_at=None,
             ))
+        if len(unknown_titles) * 2 > len(out):
+            # 过半的岗认不出业务段 = 标题写法变了，登记的规则已经对不上这个门户。照常入库会把这些岗（包括库里已经
+            # 归到别家的）悄悄贴回 sources.company，正是要修的错（同北森共享租户「整批没有招聘机构」那条）：
+            # 记失败、这一轮不写，让人来重新对拍。个别认不出的不在此列，走下面的日志。
+            raise RuntimeError(
+                f"moka: shared portal {moka_portal_key(base)} 的 {len(out)} 个岗里 {len(unknown_titles)} 个认不出业务段"
+                f"（例：{unknown_titles[0]}）；拒绝把它们贴给 sources.company，先重新核对标题写法")
+        if unknown_titles:
+            _log.warning("moka: shared portal %s 有 %d/%d 个岗的业务段认不出，留在门户本家：%s",
+                         moka_portal_key(base), len(unknown_titles), len(out),
+                         "；".join(dict.fromkeys(unknown_titles[:8])))
         if too_old:
             # 同一个岗万一有两张卡（一张写着旧日期、一张没日期），以写了日期的为准：不能一边点名下架、一边又收进来，
             # 那样库里这一行每晚先下架再被写回。
