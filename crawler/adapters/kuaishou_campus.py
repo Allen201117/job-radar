@@ -158,9 +158,8 @@ class KuaishouCampusAdapter(PlaywrightAdapter):
         demand = (post.get("positionDemand") or "").strip()
         summary = (desc + ("\n\n【任职要求】\n" + demand if demand else "")).strip() or None
         locs = post.get("workLocationDicts")
-        location = None
-        if isinstance(locs, list) and locs and isinstance(locs[0], dict):
-            location = (locs[0].get("name") or "").strip() or None
+        # 每个城市都交出去（2026-10-11 前只取第一个）。
+        location = normalizer.join_places(d.get("name") for d in locs if isinstance(d, dict)) if isinstance(locs, list) else None
         jd_url = _DETAIL.format(id=pid)
         # 子项目名（"2027应届生"/"2027实习生"）进 job_type：既让 recruitmentCategory 分对校招/实习桶，
         # 也让 grad_class 抽到准确届别（比从标题猜可靠得多）。

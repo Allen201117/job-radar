@@ -40,6 +40,7 @@ from typing import List, Optional
 
 import httpx
 
+import normalizer
 from .base import BaseAdapter, RawJob
 from .china_location import is_china_company_location
 
@@ -170,9 +171,10 @@ class AlibabaCampusPortalAdapter(BaseAdapter):
             if str(row.get("status") or "").strip().lower() not in ("", "recruit"):
                 continue
             places = [str(x).strip() for x in (row.get("workLocations") or []) if str(x).strip()]
-            location = places[0] if places else ""
-            if location and not is_china_company_location(location):
+            # 地区过滤照旧只看第一个城市；写出去的是每个城市（2026-10-11 前只写第一个）。
+            if places and not is_china_company_location(places[0]):
                 continue
+            location = normalizer.join_places(places) or ""
             bits = []
             if places:
                 bits.append("工作地点：" + " / ".join(places))

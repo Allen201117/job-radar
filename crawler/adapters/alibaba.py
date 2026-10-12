@@ -294,8 +294,9 @@ class AlibabaAdapter(PlaywrightAdapter):
         req = _first(post, ("requirement",))
         summary = (desc + ("\n\n【任职要求】\n" + req if req else "")).strip() or None
         jd_url = f"https://{host}/{self._PORTAL}/position-detail?lang=zh&positionId={pid}"
+        # workLocations 全部交出去（2026-10-11 前只取第一个：live 1,793 岗里 562 个列了不止一个城市）。
         locs = post.get("workLocations")
-        location = locs[0] if isinstance(locs, list) and locs and isinstance(locs[0], str) else None
+        location = normalizer.join_places(x for x in locs if isinstance(x, str)) if isinstance(locs, list) else None
         return RawJob(
             company=_derive_company(host, title) or self.company_name or "",
             title=title,

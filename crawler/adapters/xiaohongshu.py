@@ -137,9 +137,9 @@ class XiaohongshuAdapter(PlaywrightAdapter):
         summary = (duty + ("\n\n【任职资格】\n" + qual if qual else "")).strip() or None
         channel = post.get("_channel") or "social"
         jd_url = self._DETAIL.format(path=_CHANNEL_PATH.get(channel, "social"), id=pid)
-        # workplace 形如「上海市，北京市」，取首城作主地点
+        # workplace 形如「上海市，北京市」：每个城市都交出去（2026-10-11 前只取第一个：live 1,321 岗里 978 个不止一个城市）。
         workplace = _first(post, ("workplace",))
-        location = workplace.split("，")[0].strip() if workplace else None
+        location = normalizer.join_places(workplace.split("，")) if workplace else None
         return RawJob(
             company=self.company_name,
             title=title,

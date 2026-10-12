@@ -263,7 +263,7 @@ class JdCampusAdapter(PlaywrightAdapter):
             bg = str(req.get("positionBg") or "").strip()
             if bg and bg not in bgs:
                 bgs.append(bg)
-        location = cities[0] if cities else None
+        location = normalizer.join_places(cities)   # 每个城市都交出去（2026-10-11 前只取第一个）
 
         bits = []
         if len(cities) > 1:
