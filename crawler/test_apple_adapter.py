@@ -180,3 +180,83 @@ class AppleMidPageRetryTest(unittest.TestCase):
     def test_first_page_error_is_not_retried(self):
         with self.assertRaises(RuntimeError):
             self._run({1: ("raise", 99)})
+
+
+def _loc(name, iso3=None):
+    loc = {"name": name}
+    if iso3:
+        loc["countryID"] = f"iso-country-{iso3}"
+    return loc
+
+
+def _row(*locations):
+    return {"id": "200686987-3154", "postingTitle": "US-Manager", "team": {"teamCode": "APPST"},
+            "locations": list(locations), "type": "REQ"}
+
+
+class AppleDeclaredCountryTest(unittest.TestCase):
+    """列表行的 locations[].countryID 是 Apple 自报的国家，adapter 必须交给 RawJob.country_code。
+
+    2026-10-12 香港库实测：这条源 4,773 个在招岗里 291 个 country_code 为空、job_scope=domestic，
+    地点是 155 种门店 / 园区 / 城市名（Cambridge 20 / Maiden 13 / Prineville 13 / Melbourne 7 /
+    Bellevue Square 6 / Vancouver 4 / Toledo 2 …）。搜索本身只查美国，每一行都带
+    countryID='iso-country-USA'，adapter 只取了 name → 判不出国家 → 按源的 regions（CN）猜成国内岗。
+    """
+
+    def _parse(self, *locations):
+        import json as _json
+        return AppleAdapter().parse(_json.dumps([_row(*locations)]))[0]
+
+    def _normalized(self, raw, regions=("CN",)):
+        import normalizer
+        job = normalizer.normalize(raw, source_id="s", company="Apple", regions=list(regions))
+        return job["location"], job["country_code"], job["job_scope"]
+
+    def test_store_name_without_a_country_uses_the_country_apple_reports(self):
+        for name in ("Cambridge", "Maiden", "Bellevue Square", "Anchorage 5th Avenue Mall"):
+            raw = self._parse(_loc(name, "USA"))
+            self.assertEqual(raw.country_code, "US", name)
+            self.assertEqual(self._normalized(raw), (name, "US", "overseas"), name)
+
+    def test_same_name_in_another_country_follows_the_report_not_the_name(self):
+        # Cambridge（美国麻省 / 英国）、Melbourne（佛州 / 澳大利亚）、Vancouver（华盛顿州 / 加拿大）：
+        # 名字一个字不差，国家只能问对方。
+        for name, iso3, iso2 in (("Cambridge", "GBR", "GB"), ("Melbourne", "AUS", "AU"),
+                                 ("Vancouver", "CAN", "CA"), ("Toledo", "ESP", "ES")):
+            self.assertEqual(self._parse(_loc(name, iso3)).country_code, iso2, name)
+            self.assertEqual(self._parse(_loc(name, "USA")).country_code, "US", name)
+
+    def test_reported_greater_china_keeps_the_job_domestic_even_on_an_overseas_only_source(self):
+        # 反方向：门店名判不出国家、源又是纯海外 regions 时，原本会按 regions 猜成境外。
+        raw = self._parse(_loc("Taikoo Li Sanlitun", "CHN"))
+        self.assertEqual(raw.country_code, "CN")
+        self.assertEqual(self._normalized(raw, regions=("US",)), ("Taikoo Li Sanlitun", "CN", "domestic"))
+        self.assertEqual(self._parse(_loc("Festival Walk", "HKG")).country_code, "HK")
+
+    def test_any_greater_china_location_wins_on_a_multi_location_row(self):
+        raw = self._parse(_loc("Cupertino", "USA"), _loc("Pudong", "CHN"))
+        self.assertEqual(raw.country_code, "CN")
+
+    def test_several_overseas_countries_report_the_first(self):
+        self.assertEqual(self._parse(_loc("Cambridge", "USA"), _loc("Cork", "IRL")).country_code, "US")
+
+    def test_missing_or_unknown_report_gives_nothing(self):
+        # 没报 / 报的不是 ISO 码 / 多个地点里有一个没报：都不替对方猜，回到改前的行为。
+        self.assertIsNone(self._parse(_loc("Cambridge")).country_code)
+        self.assertIsNone(self._parse({"name": "Cambridge", "countryID": "iso-country-ZZZ"}).country_code)
+        self.assertIsNone(self._parse({"name": "Cambridge", "countryID": "USA"}).country_code)
+        self.assertIsNone(self._parse({"name": "Cambridge", "countryID": None}).country_code)
+        self.assertIsNone(self._parse(_loc("Cambridge", "USA"), _loc("Somewhere")).country_code)
+        self.assertEqual(self._normalized(self._parse(_loc("Cambridge"))), ("Cambridge", None, "domestic"))
+
+    def test_location_text_and_title_are_untouched(self):
+        raw = self._parse(_loc("Cupertino", "USA"), _loc("Austin", "USA"))
+        self.assertEqual(raw.location, "Cupertino, Austin")
+        self.assertEqual(raw.title, "US-Manager")
+
+    def test_iso3_table_covers_exactly_the_iso2_codes_normalize_accepts(self):
+        import geo
+        from adapters.apple import _ISO3_TO_ISO2
+        self.assertEqual(sorted(_ISO3_TO_ISO2.values()), sorted(geo.ISO_ALPHA2_CODES))  # 一一对应，不多不少
+        for iso3 in _ISO3_TO_ISO2:
+            self.assertRegex(iso3, r"^[A-Z]{3}$")

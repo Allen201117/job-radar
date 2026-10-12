@@ -81,7 +81,12 @@ def build_adapter(row):
 
 def current_portal_map(ad, host):
     """用线上 adapter 同一套逻辑取公开列表 → ({jid: 门户}, 是否抓全)；没打通 → (None, False)。"""
-    rows, total, reached = ad._httpx_fetch(host)
+    try:
+        rows, total, reached = ad._httpx_fetch(host)
+    except RuntimeError:
+        # 共享租户：归属门户的列表没取全，adapter 拒绝给出半截结果（adapters/feishu._SHARED_TENANT_PORTAL_OWNER）
+        # → 按「列表没打通」算，这条源本轮不据列表判，别让一条源掀掉整轮对账。
+        return None, False
     if not reached:
         return None, False
     default = ad.website_path or (ad.detail_template.split("/")[3] if ad.detail_template else "index")
