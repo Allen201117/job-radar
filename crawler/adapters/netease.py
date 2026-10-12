@@ -188,7 +188,7 @@ class NeteaseAdapter(PlaywrightAdapter):
         loc = None
         wpnl = post.get("workPlaceNameList")
         if isinstance(wpnl, list) and wpnl and isinstance(wpnl[0], str) and wpnl[0].strip():
-            loc = wpnl[0].strip()
+            loc = normalizer.join_places(x for x in wpnl if isinstance(x, str))   # 每个城市都交出去，不只取第一个
         if loc is None:
             wpl = post.get("workPlaceList")
             if isinstance(wpl, list) and wpl and isinstance(wpl[0], dict):

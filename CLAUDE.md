@@ -657,6 +657,14 @@ tests/                   # node --test 单测（*.test.js）；crawler 侧 unitt
 
 `jd_url` 准确性高于一切。**禁止写入 active jobs**：招聘首页 / 搜索页 / 导航页 / 帮助页·FAQ / 登录页 / 语言切换页 / 专题入口页 / 空链接或猜测链接。拿不到稳定岗位详情链接的 source 只能记 `partial_success`，不得标记完整成功。质量门：`company/title/jd_url` 非空 + HTTP 200 + 页面含标题或核心片段。
 
+🚫 **借官网前端路由生成的 jd_url，要用它自己的解码器解回同一个岗才写库（2026-10-12 立）**：
+❌ 比亚迪详情链接的查询串是前端加密的，adapter 让页面的 Vue Router `resolve` 批量生成，取的是 `.href` → 约 1.5% 的链接打开是空白详情页
+（HTTP 200、没有任何下线文案）：库里社招在招 7,481 条里 96 条，最早的 2026-06-20 入库，其中 57 条被巡检看过仍是 active；校招首轮 386 条里 6 条。
+✅ 根因：`href` 会过 vue-router 的 cleanPath，把 `//` 压成 `/`；密文是 base64，本身会出现 `//`。页面自己跳转时写进地址栏的是 `fullPath`。
+✅ 防：取 `route.fullPath`，再用页面的 `router.options.parseQuery` 解一遍，解回同一个 id 才给 URL（`adapters/byd._RESOLVE_DETAIL_URLS_JS`，
+单测在 node 里真跑这段脚本）；列表里有一个岗没拿到可用 URL 就不算抓全。存量核验用同一招：页面里一次 `evaluate` 核完 7,481 条，不必逐条渲染。
+那 96 行已于 2026-10-12 标 removed（全量核过：96 条都解不回原 id、其余 7,417 条都解得回）。
+
 **唯一性下沉到 DB（migration 144）**：`jobs.canonical_jd_url`（归一 tracking 参数 + 尾斜杠；`#` SPA hash 路由原样不碰）+ active partial unique index 保证「同一岗位链接在 active 里唯一」。
 - ⚠️ **`canonicalize_jd_url` 归一逻辑活在三处，改一处必须三处同改、字节级一致**：`lib/canonical-url.js`（前端/JS 写入端）、`crawler/normalizer.py`（爬虫端）、`jobs-db/schema.sql` 的 SQL 函数（香港库的回填/触发器/审计；📌 纠错 2026-09-24：此处原写 `supabase/migrations/144`，那是 Phase 1 前的 Supabase 版，与上文 Phase 1 段的说法矛盾）。任一处 drift 会导致同岗算出不同 canonical → 去重失效或误并。
 - 改规则后必须同步两套纯函数测试：`tests/canonical-url.test.js` + `crawler/test_canonical.py`。
@@ -716,6 +724,7 @@ adapter 里 `normalizer.location_in_source_regions(location, self.regions)` 一�
 - 🚫 **国家 / 范围必须按「别名折叠之前」的原文判（2026-09-23 立）**：❌ workday 在招岗 6,526 行 `country_code` 为空却判 domestic，其中 4,383 行存的是「远程」，路径原文是 `United-States---Remote` / `Remote-Mexico` / `UK-Remote`；greenhouse / smartrecruiters / ashby 同病（live 重抓 77 源 2,899 个）。✅ 根因：`normalize()` 先 `clean_location` 再判国家，而 `normalize_city` 是**子串**折叠——串里有 remote 就整串换成「远程」，国家当场丢光（smartrecruiters 出口特意展开的 `Remote Germany` 也被它抹掉）。✅ 防：`normalizer.geo_basis`，别名后判不出国家就用原文判；CITY_ALIASES 的目标值里只有「远程」判不出国家，所以只动被折叠的行，`test_only_remote_alias_target_lacks_country` 钉着这个前提。workday 另在 `_loc_from_path` 展开 ISO3 国别码（白名单；PHL=费城、NOR=站点编号是实测撞车码）、还原 `United-Kingdom` 这类多词国名的连字符。
   📌 **续（同日）：地点压根没写国家的（'Durham' / 'Remote' / 'One Island East'）改问对方 ATS，不按 regions 猜**：❌ 上面修完仍剩 1,715 行按 regions 兜底判 domestic。✅ 防：`RawJob.country_code` = ATS 结构化字段**自报**的国家，`normalize` 只在 `scope_depends_on_regions`（CN 源与纯海外源答案不同）时采信，地点能说清一律以地点为准；workday 取 detail 的 `jobRequisitionLocation.country.alpha2Code`（`jobPostingInfo.country` 会错：赛默飞 Remote, Georgia 写成格鲁吉亚），任一地点沾大中华即判大中华。⚠️ **防来回跳**：国家查询不受 `CRAWL_DETAIL_CAP` 管（快档 / 重档同答案）；detail 4xx 是确定答复、照走兜底；超时 / 5xx 重试仍失败 → 该岗本轮不写库、`fetch_complete=False`。回归钉在 `crawler/test_declared_country.py`。live：新代码爬过的 45,692 行与预测逐行一致，国内→境外 708（+ 回填爬虫够不着的 60）、反向 0；DBS 快档 46s→307s（~300 次查询）。剩下 603 行里 540 行 detail 已 403/422（不对外），是探活问题不是 geo 问题。
 - 🚫 **location 为空 ≠ 城市未知：标题里的城市在写库时物化进 location（2026-09-23 立）**：❌ 康龙化成「有机合成研究员-西安」、万物云「福州-项目管理岗（实习生）」location 为空，/today 城市门认「location 为空」放行、stage-2 判「城市未知」只降级 → 外地岗推给所有城市的用户（真实用户目标上海/杭州，7 张卡全在外地）。✅ 防：`geo.title_city_location` / `titleCityLocation`（两端共读 `tests/fixtures/title-city-cases.json`），经 `normalizer.location_or_title_city`（run.py + discovery 两条链）与 `lib/jobs-store/write.ts` 写库；**只在 adapter 给空时填、绝不覆盖**；带全国 / 海外段、公司名括号注册地不填；带省的要**省市对得上**才填（「江苏南京」「河北-张家口」✓，「江苏济南」「（浙江/江苏/上海）」✗，映射共用 `lib/cn-province-prefectures.json`）。有地点的 34,990 行对照 98.0% 一致；存量已回填 3,372 + 158 行。⚠️ `normalize()` 里标题兜底必须排在 `geo_basis` **之前**（合并时栽过：排反了 location='西安' 而 country_code=NULL，`test_empty_location_falls_back_to_title_city` 钉着）。
+- 🚫 **多地并列的地点不许只留一个城市——清洗不许折、adapter 不许只交第一个（2026-10-12 立）**：❌ 「北京市 广东·深圳市 上海市」入库只剩「北京」，上海 / 深圳的用户在今日推荐里看不到（读侧地点对不上是硬拒）。✅ 根因两层：`normalize_city` 是子串折叠，整串换成别名表里**排最前**的那个城市；另有 15 个 adapter 自己只取城市列表的第一个（字节 / 飞书系 / 阿里 / 小红书 / 网易 / 快手校招 + 9 个校招门户）。live 重抓 169 条 httpx 源 + 4 条浏览器源 + Moka 397 门户共 19.0 万行：清洗折掉城市 5,168 行、Moka 因此不敢写地点 702 行、adapter 只交首城 7,283 行。✅ 防：`normalizer.clean_location` 逐个城市折、用「/」连接（与标题兜底同一种写法）；手里是城市列表的 adapter 一律走 `normalizer.join_places`。读侧七处逐个钉在 `tests/multi-city-location-read.test.js`：今日推荐城市门 / 召回城市词 / 岗位库城市筛选 / 全文候选门 / location ilike 本来就按子串逐个城市匹配；**打分的城市 +20**（原先比的是 `normalizeChinaCity(location)`，只认别名表最靠前的城市）和**校招必投看板的城市分面**（一个岗一个城市下标、按相等比——多地岗会变成「北京/上海」这个独立选项，选「北京」反而筛不到）是按整串比的，同次改掉（`lib/scoring.ts` / `lib/campus-facets.campusCityMembers`）；洞察的城市分布（`bu_signals`）按写在最前面的城市计。新加按城市判断的读路径，先问「location 是「A/B/C」时每个城市都中吗」。四条不变量（`crawler/test_clean_location_multi_place.py` / `test_multi_city_adapters.py`）：① 串里没有别名表城市、或只写了一个地方（含「省,市,区」上下级）→ 与改前逐字相同；② 改前写库的那个城市改后一定还在；③ 别名表外的地名保留原文写法（「保定市」「阿里地区」），否则目标填「保定市」的用户对不上；④ 清洗自己的输出，结果不变（库里的值会被再清洗）。认地名偏严：只在段首或「省 / 自治区 / 国」后面认，市 / 区后面出现的地级名几乎都是门牌地址（「上海市徐汇区中山园路」）；`join_places` 遇到清洗认不出的城市或并起来国家会变的列表，退回只交第一个（实测 5,967 行多城市列表里 52 行）。对拍：旧城市丢失 0、地点变空 0、标题变化 0；13,306 行 × 821 个目标写法 × 读侧 6 个判定，「原来匹配、现在不匹配」0。⚠️ 没治的：县级市并列（「上海、昆山市」的昆山照丢）；Moka「等N个地点」的截断行仍不写；**折错城市**的存量（「牡丹江市·西安区」→ 西安、「Beijing East Road, Shanghai」→ 北京）刻意没动，等创始人定；国聘 / 农行 / 快手社招本轮没抓到原文。⚠️ 国家码的副作用：内地 + 香港并列的行 `country_code` CN→HK（范围不变）；「雄安新区、新加坡」这类由 SG / 境外变 CN / 国内（一岗多地中国优先）。⚠️ 存量没法从库里回填（库里只有折后的值），靠列表重抓自愈。
 - 📌 验收方法：拉全库 `distinct location`（约 2 万个写法）**逐条对拍改前 / 改后**，「大中华 → 境外」这个方向**必须为 0**。⚠️ 库里的 `location` 是**别名折叠之后**的文本，拿它、或拿 adapter `parse` 的出口量，都会和真实写库结果差一层——量地点类改动要把原始地点**完整过一遍 `normalize()`**（workday 能从 jd_url 路径复原原文，其它源只能 live 重抓）。逐条选词理由与实测数字 → `docs/module-deep-notes.md`。
 
 ## 🚫「接口返 0 / 403」不能证明「对方没开」（2026-09-04 立，一晚栽三次）
@@ -762,6 +771,13 @@ adapter 里 `normalizer.location_in_source_regions(location, self.regions)` 一�
    真网关写在 bundle 的 webpack 模块里（`PROD.HostName`），根本不在主域上。
    配套手法：network 面板抓不到 XHR 时去读 `js/app.*.js` 的路由表与接口名；
    **API 域名可能不在主域上**。中通由此从「无逐岗页」翻成 101 个岗（社招 79 + 校招 22）。
+⑨ 🔁 **反方向同样成立：换个参数「有返回」，也不能证明那就是对方的校招渠道（2026-10-12 立，比亚迪）**。
+   ❌ 把社招列表接口的渠道码从 `00251` 换成 `00252`：回 code 0、自报 15,582 条、行里还写着 `planYear=2027`，
+   差点当成校招渠道整批接进来。
+   ✅ 根因：那是对方后台的需求池，官网没有任何页面这样调它（主包 + 65 个懒加载分块全扫过）；其中 11,972 条是
+   2024 届、2024-06 一次性建的。校招页调的是另一套接口（按投递入口取岗），页面自报「在招职位 (384)」，线上首抓 386（含实习 2）。
+   ✅ 防：先读校招页那个懒加载分块里调的接口名，再谈参数；**接口自报的总数要和页面自己显示的在招数对得上**，
+   对不上先别接。接口与字段细节在 `docs/crawler-adapter-notes.md` 的 byd 条目。
 
 ## ⚠️ 飞书招聘的校招岗藏在 `website-path` 请求头后面（2026-09-04 立）
 

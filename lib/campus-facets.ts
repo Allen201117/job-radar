@@ -21,7 +21,11 @@ import { segments, CN_PROVINCE_PREFECTURES, CN_MUNICIPALITIES } from "@/lib/cn-l
 export type CampusFacet = [number, number, number, number | null, number];
 
 export type CampusFilterOptions = {
+  /** 下拉里给用户选的城市：一项一个城市。 */
   cityOptions: string[];
+  /** 分面城市下标（f[0]）指向的表：岗位地点归一后的取值，多地并列的岗是「北京/上海」这样一整项。
+   *  缺省（2026-10-12 前缓存的旧快照）时就是 cityOptions。读它一律走 campusCityKeys。 */
+  cityKeys?: string[];
   educationOptions: string[];
   functionOptions: string[];
   gradClassOptions: number[];
@@ -37,6 +41,8 @@ export type CampusFilterValues = {
 /** 筛选值翻成的下标：`-1` = 该维度没筛（匹配全部）；`NO_MATCH` = 筛了个当前选项表里没有的值。 */
 export type CampusFacetSelection = {
   city: number;
+  /** 选中的城市落在哪些分面城市下标上：它自己那一项 + 每个列了它的多地项（「北京/上海」）。 */
+  cityIn?: number[];
   education: number;
   fn: number;
   gc: number | null;
@@ -79,6 +85,7 @@ const PROVINCE_PREFIX_RE = new RegExp(
 );
 const ADMIN_TAIL_RE = /^(?:市|地区|盟|特别行政区|.{0,12}自治州)?$/;
 const MULTI_PLACE_RE = /[、,，;；/／]/;
+const MULTI_PLACE_SPLIT_RE = /[、,，;；/／]+/;
 
 const CJK_RE = /[\u4e00-\u9fff]/;
 
@@ -93,6 +100,31 @@ function prefectureFromChineseLocation(raw: string): string | null {
     }
   }
   return null;
+}
+
+/**
+ * 一个城市取值代表哪几个城市：多地并列的串（「北京/上海」「哈尔滨市、包头市」）拆成每个城市，其余就是它自己。
+ *
+ * 分面是「一个岗一个城市下标、按相等比」。多地并列的岗归一后是一整串（normalizeCampusCity 不替用户挑其中一个），
+ * 所以下拉选项和「选中北京算不算它」都得按成员来：否则选「北京」筛不到「北京/上海」的岗，下拉里还多出一堆组合项。
+ * 2026-10-12 前这类串很少（爬虫入库时把多地折成了一个城市），折叠去掉之后必投公司里字节 / 阿里 / 腾讯 /
+ * 美团的校招岗有两到四成是多地。
+ */
+export function campusCityMembers(value: unknown): string[] {
+  const normalized = normalizeCampusCity(value);
+  if (!normalized) return [];
+  if (!(CJK_RE.test(normalized) && MULTI_PLACE_RE.test(normalized))) return [normalized];
+  const members: string[] = [];
+  for (const part of normalized.split(MULTI_PLACE_SPLIT_RE)) {
+    const city = normalizeCampusCity(part);
+    if (city && !members.includes(city)) members.push(city);
+  }
+  return members.length ? members : [normalized];
+}
+
+/** 分面城市下标指向的表（旧快照没有 cityKeys 时就是 cityOptions）。 */
+export function campusCityKeys(options: CampusFilterOptions): string[] {
+  return options.cityKeys ?? options.cityOptions;
 }
 
 /** 哨兵：筛选值在当前模式的选项表里不存在（切校招/实习后可能出现）→ 匹配不到任何分面、计数为 0。
@@ -188,13 +220,15 @@ function buildFacetsFromKeys(lists: Array<{ pattern: string; keys: WeightedFacet
     }
   }
 
+  const cityKeys = Array.from(cities).filter(Boolean).sort();
   const options: CampusFilterOptions = {
-    cityOptions: Array.from(cities).filter(Boolean).sort(),
+    cityOptions: Array.from(new Set(cityKeys.flatMap((key) => campusCityMembers(key)))).sort(),
+    cityKeys,
     educationOptions: Array.from(edus).filter(Boolean).sort(),
     functionOptions: Array.from(fns).filter(Boolean).sort(),
     gradClassOptions: Array.from(gradClasses).sort((a, b) => b - a),
   };
-  const cityIdx = new Map(options.cityOptions.map((v, i) => [v, i]));
+  const cityIdx = new Map(cityKeys.map((v, i) => [v, i]));
   const eduIdx = new Map(options.educationOptions.map((v, i) => [v, i]));
   const fnIdx = new Map(options.functionOptions.map((v, i) => [v, i]));
 
@@ -230,8 +264,17 @@ export function selectFacetIndexes(
     const i = list.indexOf(normalized);
     return i >= 0 ? i : NO_MATCH;
   };
+  // 城市按成员比：选「北京」命中「北京」那一项，也命中每个列了北京的多地项（见 campusCityMembers）。
+  const selectedCity = normalizeCampusCity(filters.city);
+  const cityIn: number[] = [];
+  if (selectedCity) {
+    campusCityKeys(options).forEach((key, i) => {
+      if (campusCityMembers(key).includes(selectedCity)) cityIn.push(i);
+    });
+  }
   return {
-    city: pick(filters.city, options.cityOptions),
+    city: !selectedCity ? -1 : cityIn.length ? cityIn[0] : NO_MATCH,
+    cityIn,
     education: pick(filters.education, options.educationOptions),
     fn: pick(filters.jobFunction, options.functionOptions),
     gc: filters.gradClass,
@@ -264,7 +307,7 @@ export function facetMatches(f: CampusFacet, sel: CampusFacetSelection): boolean
   // ⚠️ 必须先判这个：否则「未标注放行」会把无城市的岗在筛「火星」时也放进来，
   // 等于失效筛选悄悄退化成「只看没写城市的岗」。
   if (selectionIsUnsatisfiable(sel)) return false;
-  if (sel.city !== -1 && f[0] !== -1 && f[0] !== sel.city) return false;
+  if (sel.city !== -1 && f[0] !== -1 && !(sel.cityIn ?? [sel.city]).includes(f[0])) return false;
   if (sel.education !== -1 && f[1] !== -1 && f[1] !== sel.education) return false;
   if (sel.fn !== -1 && f[2] !== sel.fn) return false;
   if (sel.gc !== null && f[3] !== null && f[3] !== sel.gc) return false;
@@ -310,9 +353,9 @@ export function countUnlabeledInMatch(facets: CampusFacet[], sel: CampusFacetSel
 export function campusRowMatches(row: any, filters: CampusFilterValues): boolean {
   // ⚠️ 与 facetMatches 逐条同义：未标注的维度放行（见上方长注释）。
   // 两者一旦漂了，卡面写「N 个」而展开列出另一批 —— 不报错、只骗人，等价性由测试钉死。
-  const city = normalizeCampusCity(row?.city);
+  const cities = campusCityMembers(row?.city);
   const selectedCity = normalizeCampusCity(filters.city);
-  if (selectedCity && city && city !== selectedCity) return false;
+  if (selectedCity && cities.length && !cities.includes(selectedCity)) return false;
   const education = String(row?.education ?? "").trim();
   if (filters.education && education && education !== filters.education) return false;
   if (filters.jobFunction && row?.fn !== filters.jobFunction) return false;
@@ -346,7 +389,7 @@ export type CampusFitSelection = {
   fns: number[];
   /** 用户填了目标城市吗。 */
   cityRequested: boolean;
-  /** 目标城市在 cityOptions 里的下标。 */
+  /** 目标城市落在哪些分面城市下标上（campusCityKeys 那张表）。 */
   cities: number[];
 };
 
@@ -403,7 +446,7 @@ export function selectFitIndexes(
   const cityRequested = cityFilterHasTargets(cityTargets);
   const cities: number[] = [];
   if (cityRequested) {
-    options.cityOptions.forEach((opt, i) => {
+    campusCityKeys(options).forEach((opt, i) => {
       if (locationMatchesCityFilter(normalizeCampusCity(opt), cityTargets)) cities.push(i);
     });
   }

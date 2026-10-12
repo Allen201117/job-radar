@@ -79,7 +79,7 @@ class MideaCampusParseTest(unittest.TestCase):
         job = jobs[0]
         self.assertEqual(job.company, "美的集团")
         self.assertEqual(job.title, "研究员-焊接工艺")
-        self.assertEqual(job.location, "上海市")
+        self.assertEqual(job.location, "上海市、佛山市")   # 每个城市都交出去（入库是「上海/佛山」）
         self.assertEqual(job.job_type, "校园招聘")
         self.assertEqual(
             job.jd_url,

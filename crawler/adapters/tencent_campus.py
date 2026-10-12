@@ -26,6 +26,7 @@ from typing import List, Optional
 
 import httpx
 
+import normalizer
 from .base import BaseAdapter, RawJob, exc_brief, resolve_detail_cap
 
 logger = logging.getLogger(__name__)
@@ -140,10 +141,10 @@ class TencentCampusAdapter(BaseAdapter):
             title = str(row.get("positionTitle") or "").strip()
             if pid is None or pos is None or not title:
                 continue
-            # workCities 是空格分隔的多地点串（"深圳总部 北京 上海 …"）；取首个作主地点，
-            # 全串留在 summary 里，避免丢掉「该岗多地可投」这个对校招用户重要的信息。
+            # workCities 是空格分隔的多地点串（"深圳总部 北京 上海 …"）：每个城市都交出去
+            # （2026-10-11 前只取首个，入库是「深圳/北京/上海」），全串仍留在 summary 里。
             cities = str(row.get("workCities") or "").strip()
-            location = cities.split(" ")[0].strip() if cities else ""
+            location = normalizer.join_places(cities.split(" "))
             bits = []
             if cities:
                 bits.append(f"工作地点：{cities}")
