@@ -664,6 +664,14 @@ tests/                   # node --test 单测（*.test.js）；crawler 侧 unitt
 
 `jd_url` 准确性高于一切。**禁止写入 active jobs**：招聘首页 / 搜索页 / 导航页 / 帮助页·FAQ / 登录页 / 语言切换页 / 专题入口页 / 空链接或猜测链接。拿不到稳定岗位详情链接的 source 只能记 `partial_success`，不得标记完整成功。质量门：`company/title/jd_url` 非空 + HTTP 200 + 页面含标题或核心片段。
 
+🚫 **借官网前端路由生成的 jd_url，要用它自己的解码器解回同一个岗才写库（2026-10-12 立）**：
+❌ 比亚迪详情链接的查询串是前端加密的，adapter 让页面的 Vue Router `resolve` 批量生成，取的是 `.href` → 约 1.5% 的链接打开是空白详情页
+（HTTP 200、没有任何下线文案）：库里社招在招 7,481 条里 96 条，最早的 2026-06-20 入库，其中 57 条被巡检看过仍是 active；校招首轮 386 条里 6 条。
+✅ 根因：`href` 会过 vue-router 的 cleanPath，把 `//` 压成 `/`；密文是 base64，本身会出现 `//`。页面自己跳转时写进地址栏的是 `fullPath`。
+✅ 防：取 `route.fullPath`，再用页面的 `router.options.parseQuery` 解一遍，解回同一个 id 才给 URL（`adapters/byd._RESOLVE_DETAIL_URLS_JS`，
+单测在 node 里真跑这段脚本）；列表里有一个岗没拿到可用 URL 就不算抓全。存量核验用同一招：页面里一次 `evaluate` 核完 7,481 条，不必逐条渲染。
+那 96 行已于 2026-10-12 标 removed（全量核过：96 条都解不回原 id、其余 7,417 条都解得回）。
+
 **唯一性下沉到 DB（migration 144）**：`jobs.canonical_jd_url`（归一 tracking 参数 + 尾斜杠；`#` SPA hash 路由原样不碰）+ active partial unique index 保证「同一岗位链接在 active 里唯一」。
 - ⚠️ **`canonicalize_jd_url` 归一逻辑活在三处，改一处必须三处同改、字节级一致**：`lib/canonical-url.js`（前端/JS 写入端）、`crawler/normalizer.py`（爬虫端）、`jobs-db/schema.sql` 的 SQL 函数（香港库的回填/触发器/审计；📌 纠错 2026-09-24：此处原写 `supabase/migrations/144`，那是 Phase 1 前的 Supabase 版，与上文 Phase 1 段的说法矛盾）。任一处 drift 会导致同岗算出不同 canonical → 去重失效或误并。
 - 改规则后必须同步两套纯函数测试：`tests/canonical-url.test.js` + `crawler/test_canonical.py`。
@@ -769,6 +777,13 @@ adapter 里 `normalizer.location_in_source_regions(location, self.regions)` 一�
    真网关写在 bundle 的 webpack 模块里（`PROD.HostName`），根本不在主域上。
    配套手法：network 面板抓不到 XHR 时去读 `js/app.*.js` 的路由表与接口名；
    **API 域名可能不在主域上**。中通由此从「无逐岗页」翻成 101 个岗（社招 79 + 校招 22）。
+⑨ 🔁 **反方向同样成立：换个参数「有返回」，也不能证明那就是对方的校招渠道（2026-10-12 立，比亚迪）**。
+   ❌ 把社招列表接口的渠道码从 `00251` 换成 `00252`：回 code 0、自报 15,582 条、行里还写着 `planYear=2027`，
+   差点当成校招渠道整批接进来。
+   ✅ 根因：那是对方后台的需求池，官网没有任何页面这样调它（主包 + 65 个懒加载分块全扫过）；其中 11,972 条是
+   2024 届、2024-06 一次性建的。校招页调的是另一套接口（按投递入口取岗），页面自报「在招职位 (384)」，线上首抓 386（含实习 2）。
+   ✅ 防：先读校招页那个懒加载分块里调的接口名，再谈参数；**接口自报的总数要和页面自己显示的在招数对得上**，
+   对不上先别接。接口与字段细节在 `docs/crawler-adapter-notes.md` 的 byd 条目。
 
 ## ⚠️ 飞书招聘的校招岗藏在 `website-path` 请求头后面（2026-09-04 立）
 
