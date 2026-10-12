@@ -176,7 +176,8 @@ class RawJob:
     deadline_absent: bool = False
     # 对方 ATS 在结构化字段里**自报**的国家（ISO-3166 alpha-2），不是从地点文本猜的。
     # 只在地点文本判不出国家、job_scope 只能按 source.regions 猜的时候才生效（normalizer.normalize），
-    # 地点能判出国家时一律以地点为准。没有就留 None。目前只有 workday 填（detail 的 alpha2Code）。
+    # 地点能判出国家时一律以地点为准。没有就留 None。目前 workday（detail 的 alpha2Code）、
+    # radancy（详情页 ld+json）、apple（列表行 locations[].countryID）在填。
     country_code: Optional[str] = None
 
 

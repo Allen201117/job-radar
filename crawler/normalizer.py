@@ -15,6 +15,7 @@ from geo import (
     OVERSEAS_LOCATION_TOKENS,
     REMOTE_MARKERS,
     _GREATER_CHINA,
+    _LATIN_ROAD_DIRECTION,
     _REJECTED_COUNTRY_CODES,
     _is_overseas_pinned,
     cn_name_is_part_of_another_place,
@@ -25,6 +26,8 @@ from geo import (
     is_rejected_location,
     is_remote_location,
     keep_for_china_radar,
+    latin_cn_bare_province,
+    latin_cn_places,
     location_cn_places,
     location_in_scope,
     title_city_location,
@@ -101,8 +104,10 @@ CITY_ALIASES = {
     "西安市": "西安",
     "xi'an": "西安",
     "xian": "西安",
-    # 与 lib/china-keyword-expansion.js 的 CITY_ALIASES 逐条同表（两端漂了会让同一个岗位
-    # 在爬虫落库与前端筛选下判成两个城市）。拼音只收唯一的：泰州/台州、福州/抚州 同音，不收。
+    # 这里每一条在 lib/china-keyword-expansion.js 的 CITY_ALIASES 里都有、值相同（漂了会让同一个岗位在爬虫落库
+    # 与前端筛选下判成两个城市）。反过来不成立：前端那份另有 11 个大陆城市（太原 / 济南 / 长沙 / 重庆 / 厦门…）
+    # 和 9 个海外城市的别名（2026-10-12 实测 90 条对 143 条）。拼音只收唯一的：泰州/台州、福州/抚州 同音，不收；
+    # 别名表外的拼音地级市由 geo.latin_cn_places 认（lib/cn-prefecture-pinyin.json），不要往这里补。
     "无锡": "无锡",
     "无锡市": "无锡",
     "wuxi": "无锡",
@@ -352,8 +357,13 @@ _LATIN_CITY_ALIASES = {
 # 拼音按整词认（"xian" 不认 "Xiangyang"），后面跟着 Road / Rd / Street / Lu / Dadao… 的是路名不是城市
 # （workday live：上海的门牌地址「…, West, Nanjing, Road, …」；拼音写法「Nanjing Xi Lu」）。
 # 多认一个城市是把岗位推给不在那里的人，所以比 normalize_city 的子串严。
+# 「Xian Yang Shi」「Xian Ning Shi」这种音节拆开写的咸阳 / 咸宁 / 仙桃 / 仙居 / 仙游不是西安（外企 ATS 的
+# 「He Fei Shi, An Hui Sheng」同一种写法）；拼音表（geo.latin_cn_places）会把咸阳、咸宁、仙桃认成它们自己。
+_XIAN_THEN_ANOTHER_SYLLABLE = r"\s(?:yang|ning|tao|ju|you)(?![a-z])"
 _LATIN_CITY_RE = re.compile(
-    r"(?<![a-z])(?:" + "|".join(re.escape(a) for a in sorted(_LATIN_CITY_ALIASES, key=len, reverse=True)) + r")(?![a-z])"
+    r"(?<![a-z])(?:" + "|".join(
+        re.escape(a) + (r"(?!" + _XIAN_THEN_ANOTHER_SYLLABLE + r")" if a == "xian" else "")
+        for a in sorted(_LATIN_CITY_ALIASES, key=len, reverse=True)) + r")(?![a-z])"
     r"(?!(?:[\s,]+(?:east|west|north|south|middle|central|e|w|n|s|dong|xi|nan|bei|zhong))?"
     r"[\s,]+(?:road|rd|street|st|avenue|ave|boulevard|blvd|lu|dadao|jie|dajie)(?![a-z]))"
 )
@@ -363,6 +373,19 @@ _OFF_GAZETTEER_CITIES = tuple(sorted({
     if alias == city and not alias.isascii() and city not in _NON_PLACE_ALIAS_TARGETS
     and cn_place_province(city) is None
 }))
+
+
+def _latin_cn_cities(text: str, assume_cn: bool = False) -> list:
+    """纯拉丁写法里认出的国内地级市 → [(位置, 键, 写出去的名字, 所在省)]（认法见 geo.latin_cn_places）。
+
+    写出去的名字与中文写法同一个口径：别名表里的城市用规范名（「Shang Hai Shi」→ 上海），别名表外的带行政后缀
+    （「常州市」「恩施土家族苗族自治州」）——目标填「常州」「常州市」的用户都匹配得上。
+    """
+    out = []
+    for pos, name, written, province in latin_cn_places(text, assume_cn)[0]:
+        city = CITY_ALIASES.get(name)
+        out.append((pos, city or name, city or written, province))
+    return out
 
 
 def _scan_places(location: Optional[str]) -> list:
@@ -385,6 +408,12 @@ def _scan_places(location: Optional[str]) -> list:
         pos = text.find(city)
         if pos >= 0:
             hits.append((pos, city, city, None, False))
+    # 别名表认过的位置听别名表的：「Suzhou, Anhui」拼音表凭省份会认成宿州，别名表认成苏州——两个都写进去
+    # 就成了「苏州/宿州市」，比维持原来的苏州更糟（实测没有这种写法，宿州只见过拆开写的「Su Zhou Shi」）。
+    alias_at = {hit[0]: hit[1] for hit in hits}
+    for pos, key, shown, province in _latin_cn_cities(text):
+        if alias_at.get(pos, key) == key:
+            hits.append((pos, key, shown, province, False))
     hits.sort(key=lambda hit: hit[0])
     city_provinces = {province for _, _, _, province, is_province in hits if province and not is_province}
     places, seen = [], set()
@@ -401,7 +430,8 @@ def location_places(location: Optional[str]) -> list:
     """地点串里并列写着哪几个地方（没写到城市的省保留省名），按出现顺序去重。
 
     同一个地点的上下级只算一个：「广东省,深圳市,南山区」→ [深圳]（省被本省城市盖住，区县不在词表里）。
-    中文地名的认法见 geo.location_cn_places；拼音 / 英文只认 CITY_ALIASES 里的城市；写法见 _scan_places。
+    中文地名的认法见 geo.location_cn_places；拼音 / 英文认 CITY_ALIASES 里的城市，纯拉丁写法的国内地点另认
+    全国地级市（geo.latin_cn_places）；写法见 _scan_places。
     """
     return [shown for _, shown in _scan_places(location)]
 
@@ -421,10 +451,10 @@ def location_place_keys(location: Optional[str]) -> set:
 #   · 后面是路名的不认：Road / Street / Avenue / Dadao 这类整词，或「方位词 + St / Lu / Jie」（「Nanjing Xi Lu」）。
 #     光秃秃的 St / Lu / Jie 不算证据（「Shanghai, St. Regis」）。
 # 要喂原文：大小写是判断边界的依据。
-_ROAD_DIRECTION = r"(?:east|west|north|south|middle|central|e|w|n|s|dong|xi|nan|bei|zhong)"
+_ROAD_DIRECTION = _LATIN_ROAD_DIRECTION   # 与 geo.latin_cn_places 判路名用的是同一份方位词
 _LATIN_FOLD_RE = re.compile(
     r"(?:(?<![A-Za-z])|(?<=[a-z])(?=[A-Z]))(?i:"
-    + "|".join(re.escape(a) + (r"(?!g|yang|ning|tao|ju|you)" if a == "xian" else "")
+    + "|".join(re.escape(a) + (r"(?!g|yang|ning|tao|ju|you|" + _XIAN_THEN_ANOTHER_SYLLABLE + r")" if a == "xian" else "")
                for a in sorted(_LATIN_CITY_ALIASES, key=len, reverse=True))
     + r")(?![a-z])"
     r"(?!(?i:(?:[\s,]+" + _ROAD_DIRECTION + r")?[\s,]+(?:road|rd|street|avenue|ave|boulevard|blvd|dadao|dajie)"
@@ -469,6 +499,13 @@ def clean_location(location: Optional[str]) -> Optional[str]:
          紧跟在另一个城市后面的「X湾」）→ 用严格识别的结果（牡丹江市 / 宁波）；
        · 其余照旧。严格识别只在段首和省名后面认地名，它没认出来不等于折错：「华东区上海」「四川天府新区成都片区」
          「可在北京 天津 青岛」「广州深圳等地」里的上海 / 成都 / 北京 / 深圳都是真的。
+
+    🚫 拼音写的国内城市原样入库 = 这个岗对填了城市的用户不存在（2026-10-12）：
+    ❌ 外企招聘系统给的是「Changzhou, Jiangsu, China」「Tianjin, TJ, CN, 300457」，别名表只有约 28 个城市的拼音，
+       其余原样进库；读侧城市判断只做中文匹配，「地点非空且对不上」是硬拒，真正在常州的用户也看不到。
+    ✅ 纯拉丁、自己判得出是中国的串，按全国地级市拼音表认（geo.latin_cn_places，判法与取舍在那里）：
+       认出城市 → 写成中文（「常州市」，多地照样用「/」连）；只写了省（「Jiangsu, China」）→ 写成省名；
+       认不出的（县级市 Taicang、只写 China、撞名又没写省的 Fuzhou）原样返回。中文写法的行不经过这一步。
     """
     if not location:
         return None
@@ -490,10 +527,12 @@ def clean_location(location: Optional[str]) -> Optional[str]:
 
 
 def _fold_cities(loc: str) -> str:
-    """别名折叠（单个地点 / 多地并列 / 折错纠正），规则见 clean_location 的说明。"""
+    """别名折叠（单个地点 / 多地并列 / 折错纠正 / 拼音地级市），规则见 clean_location 的说明。"""
     folded = _fold_city(loc)
     if folded == loc:
-        return folded
+        if latin_cn_places(loc)[0]:
+            return MULTI_PLACE_SEP.join(location_places(loc))
+        return latin_cn_bare_province(loc) or folded
     places = location_places(loc)
     if folded in places:
         return MULTI_PLACE_SEP.join(places)       # 只写了一个地方时就是 folded 本身
@@ -696,6 +735,12 @@ def normalize(raw: RawJob, *, source_id: str, company: str, regions=None) -> dic
     # 必须排在标题兜底之后：country_code / job_scope 要按最终写进库的地点算（标题城市 → CN）。
     geo_location = geo_basis(raw.location, location)
     country_code, job_scope = _country_and_scope(raw, geo_location, regions)
+    # 地点自己没说国家（「Urumqi」「Daqing」），清洗时不敢认；对方 ATS 自报是 CN 的，这里补认拼音地级市。
+    # 国家码只可能来自地点文本或对方自报（按 source.regions 兜底时它是 None），所以不会把猜出来的国内岗写成中文城市。
+    if country_code == "CN" and location:
+        cities = _latin_cn_cities(location, assume_cn=True)
+        if cities:
+            location = MULTI_PLACE_SEP.join(dict.fromkeys(shown for _, _, shown, _ in cities))
     experience = raw.experience or extract_experience(raw.summary)
     education = raw.education or extract_education(raw.summary)
     deadline = raw.deadline or extract_deadline(raw.summary)
