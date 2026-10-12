@@ -29,6 +29,18 @@ on:
         description: "并发线程数（默认 6，配合 max-parallel:4 → 峰值 ~28 HK 连接，无人值守定时也安全；有人盯可手动调高）"
         required: false
         default: "6"
+      adapters:
+        description: "只跑这些 adapter（逗号分隔、不带空格，如 netease,ctrip；留空 = 全部）"
+        required: false
+        default: ""
+      dry_run:
+        description: "true = 只探不写库（接新 adapter / 清存量之前先看判死数对不对）"
+        required: false
+        default: "false"
+      expire_guard_override:
+        description: "单轮改写撤岗熔断阈值，如 ctrip=0.95,netease=0.9；只对已登记熔断的 adapter 生效。清存量那一次用，平时留空"
+        required: false
+        default: ""
 
 jobs:
   sweep:
@@ -58,6 +70,9 @@ jobs:
         # 全集对拍 + 北森前端代码 + 真浏览器三方印证，见 crawler/enrich._detail_beisen。
         # 它量大（每轮上限 5 万岗），另有「本轮判死 ≥50% 即熔断」兜底（enrich_backlog.EXPIRE_RATIO_GUARD）。
         # 2026-10-07 radancy（欧莱雅迁 TalentBrew 后的 adapter）：404 判死，见 crawler/enrich._detail_radancy。
+        # 2026-10-12 六家自建站（netease/ctrip/baidu/bilibili/xiaohongshu/oppo，共 12,182 岗）：此前只有浏览器巡检，
+        # 判不出也轮不到，攒了 4,600 多个已撤岗。信号全集对拍，见 crawler/enrich.py「六家自建站」那段注释。
+        # 都登记了「本轮判死 ≥50% 即熔断」；清存量那一次要手动带 expire_guard_override 跑（先 dry_run=true 对数）。
         # 「注册表 ⊆ 本 matrix」的契约断言在 crawler/test_state_bank_liveness.py。
         adapter: [wt, hotjob, workday, oracle, eightfold, smartrecruiters, greenhouse, lever,
                   amazon, apple, meituan, microsoft, sf_express, tencent, vivo, siemens, avature, radancy, successfactors, google,
@@ -66,7 +81,8 @@ jobs:
                   spdb, icbc, ccb, bankcomm, cmcc,
                   sf_express_campus, midea_campus,
                   duoyi, duoyi_campus,
-                  beisen]
+                  beisen,
+                  netease, ctrip, baidu, bilibili, xiaohongshu, oppo]
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -74,21 +90,31 @@ jobs:
       JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
       JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
       JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
+    # 手动触发时填了 adapters 就只跑点名的那几片（其余分片每一步都跳过，几秒收工）；定时任务不带输入 = 全部。
     steps:
       - uses: actions/checkout@v4
+        if: ${{ !github.event.inputs.adapters || contains(format(',{0},', github.event.inputs.adapters), format(',{0},', matrix.adapter)) }}
       - uses: actions/setup-python@v5
+        if: ${{ !github.event.inputs.adapters || contains(format(',{0},', github.event.inputs.adapters), format(',{0},', matrix.adapter)) }}
         with:
           python-version: "3.11"
           cache: "pip"
           cache-dependency-path: crawler/requirements.txt
       - name: Install crawler dependencies
+        if: ${{ !github.event.inputs.adapters || contains(format(',{0},', github.event.inputs.adapters), format(',{0},', matrix.adapter)) }}
         run: pip install -r crawler/requirements.txt
       - name: Liveness sweep (${{ matrix.adapter }})
+        if: ${{ !github.event.inputs.adapters || contains(format(',{0},', github.event.inputs.adapters), format(',{0},', matrix.adapter)) }}
+        env:
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          LIVENESS_EXPIRE_GUARD_OVERRIDE: ${{ github.event.inputs.expire_guard_override || '' }}
         run: |
+          EXTRA=""
+          if [ "$DRY_RUN" = "true" ]; then EXTRA="--dry-run"; fi
           python crawler/enrich_backlog.py --sweep \
             --adapter "${{ matrix.adapter }}" \
             --limit "${{ github.event.inputs.limit || '50000' }}" \
-            --workers "${{ github.event.inputs.workers || '6' }}"
+            --workers "${{ github.event.inputs.workers || '6' }}" $EXTRA
 
   # 见 enrich-backlog.yml 同名 job：分片「够不着库」软失败换取不误报，
   # 这一步换台干净 runner 亲自连一次库，兜住「库真挂了却全绿」。

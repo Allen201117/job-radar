@@ -254,13 +254,41 @@ def should_trip_adapter(checked, miss, min_sample=ADAPTIVE_MIN_SAMPLE, miss_rati
 # workday（2026-09-23 随 403+S22 判死加）：上线时有 7 万死岗存量，按真实队列顺序重放全量 dry-run，
 # 清存量那几轮累计判死占比最高 59.6% → 阈值取 0.8（0.5 会让存量永远清不掉）；稳态「30h 内见过」的岗
 # S22 只有 3%，S22 语义一旦被挪作他用（接近全判死）200 个样本内就停。
-EXPIRE_RATIO_GUARD = {"beisen": 0.5, "workday": 0.8}
+# 六家自建站（2026-10-12 随 enrich「六家自建站」那批探活器加）：其中三家的信号是「查不到 = 已撤」，
+# OPPO 的状态位含义是按全集推的——对方一改接口就可能整源判死，所以都登记。接入时各有 18%~61% 的
+# 已撤存量（携程最高），0.5 会让存量永远清不掉 → 清存量那一次由人用 LIVENESS_EXPIRE_GUARD_OVERRIDE
+# 显式放宽（见 _expire_guard_ratio），定时任务不带这个变量、一直是 0.5。
+EXPIRE_RATIO_GUARD = {"beisen": 0.5, "workday": 0.8,
+                      "netease": 0.5, "ctrip": 0.5, "baidu": 0.5, "bilibili": 0.5, "xiaohongshu": 0.5, "oppo": 0.5}
 EXPIRE_GUARD_MIN_SAMPLE = 200
+EXPIRE_GUARD_OVERRIDE_ENV = "LIVENESS_EXPIRE_GUARD_OVERRIDE"
+
+
+def _expire_guard_ratio(adapter):
+    """这个 adapter 本轮的熔断阈值；没登记返回 None。
+
+    env LIVENESS_EXPIRE_GUARD_OVERRIDE="ctrip=0.95,netease=0.9" 可以把**已登记**的 adapter 在这一轮改成别的值
+    （>1 = 这一轮不熔断）。只给「清存量那一次」用：先 dry-run 把判死数对上，再带着它跑一轮。
+    没登记的 adapter 不能靠它新开一道熔断；写坏的值忽略、按登记的来——不许因为手滑把熔断关掉。"""
+    ratio = EXPIRE_RATIO_GUARD.get(adapter)
+    if ratio is None:
+        return None
+    for part in os.environ.get(EXPIRE_GUARD_OVERRIDE_ENV, "").split(","):
+        name, sep, value = part.partition("=")
+        if not sep or name.strip() != adapter:
+            continue
+        try:
+            override = float(value)
+        except ValueError:
+            continue
+        if override > 0:
+            return override
+    return ratio
 
 
 def should_trip_expire_guard(adapter, checked, expired, min_sample=EXPIRE_GUARD_MIN_SAMPLE):
     """纯函数：登记过的 adapter 本轮判死占比 ≥ 阈值（且样本够）→ 熔断。没登记的永远不熔断。"""
-    ratio = EXPIRE_RATIO_GUARD.get(adapter)
+    ratio = _expire_guard_ratio(adapter)
     if ratio is None or checked < min_sample or checked <= 0:
         return False
     return (expired / checked) >= ratio
@@ -349,7 +377,7 @@ def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, pe
             if adp not in tripped and should_trip_expire_guard(adp, a["checked"], a["expired"]):
                 tripped.add(adp)
                 print(f"::warning::[撤岗熔断] adapter={adp} 本轮判死 {a['expired']}/{a['checked']} "
-                      f"≥ {EXPIRE_RATIO_GUARD[adp]:.0%}，远高于该源常态 → 疑似判死信号语义变了，"
+                      f"≥ {_expire_guard_ratio(adp):.0%}，远高于该源常态 → 疑似判死信号语义变了，"
                       f"跳过本轮剩余 {adp} 岗（已判的留着，下轮重试）。先人工核对再放开。")
             done = stat["filled"] + stat["alive"] + stat["miss"] + stat["expired"] + stat["err"] + stat["skipped"]
             if done % 200 == 0:

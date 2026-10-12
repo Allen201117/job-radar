@@ -13,6 +13,8 @@ fetcher 签名：f(row: dict, src: dict) -> str（空串 = 无正文/已撤岗/4
 import html as html_lib
 import json
 import re
+import threading
+import time
 from datetime import date
 from urllib.parse import urlparse, parse_qs
 
@@ -1390,6 +1392,379 @@ def _detail_beisen(row, src):
     return (duty + ("\n【任职要求】\n" + require if require else "")).strip()
 
 
+# ───────────────────────────────────────────────────────────────────────────────────────────────
+# 六家自建站（2026-10-12）：网易 / 携程 / 百度 / B 站 / 小红书 / OPPO
+#
+# 此前它们只有浏览器巡检（audit_dead_links）一条撤岗路径，而那条路对它们两头都走不通：
+#   · 判不出：撤岗页四种长相里巡检只认得一种——携程有文案「您查看的职位已下架」但词表没收；
+#     网易是「--」占位的空骨架（侧栏「相关职位」还会让标题检查命中，判成在招）；百度是 5.8KB 空壳，
+#     无头浏览器里连在招页都落到 about:blank；B 站 / 小红书 / OPPO 已关的岗照样渲染岗位名和正文。
+#   · 轮不到：轮转按源摊名额，这种一个源几千岗的站每天只看到十来行，网易转一圈要 300 天。
+# 全集对拍（2026-10-12，库里这六家全部 12,182 个在招岗逐个问下面这些接口，同时对各站当天的列表）：
+#              在列→在招      不在列→已撤   不在列却在招
+#   网易     2,688 / 2,689   1,632 / 1,632        0
+#   携程       520 /   521     813 /   815        2
+#   百度     2,300 / 2,300     638 /   638        0
+#   B 站       462 /   462     402 /   404        2
+#   小红书   1,322 / 1,322   1,083 / 1,109       26
+#   OPPO       237 /   237      53 /    53        0
+# 「不在列却在招」那 30 行就是不能按列表缺席下架的原因（CLAUDE.md「列表里没有 ≠ 已撤岗」）。
+#
+# 两类信号，处置不同：
+#   · 对方把这条岗位记录本身交了出来、上面带状态位（B 站 / 小红书 / OPPO）：要求回带的 id 与所问一致、
+#     岗位名非空，再看状态位。这是正证，不需要对照。
+#   · 「查不到 = 已撤」（网易的 402、携程的空结果、百度的空壳）：我们把参数传错、对方改了接口，
+#     长得和撤岗一模一样。所以判死前必须有阳性对照——本进程里用**同一个请求形状**读到过在招岗
+#     （_canary_ok）。对照做不出来 = unknown，一行都不判。
+# 其余一律 DetailUnknownError：不盖戳、不改状态，下轮重试。宁可漏判不可错杀。
+# ───────────────────────────────────────────────────────────────────────────────────────────────
+
+# 这六家的接口都是拿这个 UA 对拍的；别换成上面那个不带 Chrome 版本号的 UA 再假设结论不变。
+_SITE_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/124.0 Safari/537.36"),
+    "Accept": "application/json, text/plain, */*",
+}
+
+_CANARY = {}                     # site -> True（本进程读到过在招）| 上次对照失败的时刻
+_CANARY_LOCK = threading.Lock()
+_CANARY_RETRY_SECONDS = 300      # 对照失败后这么久内不再重做（别在对方出问题时加压）
+
+
+def _canary_mark(site):
+    with _CANARY_LOCK:
+        _CANARY[site] = True
+
+
+def _canary_ok(site, probe_live):
+    """阳性对照：这个站、同一个请求形状，本进程读到过「在招」吗？没读到过就现做一次（问列表第一页的岗）。"""
+    with _CANARY_LOCK:
+        state = _CANARY.get(site)
+        if state is True:
+            return True
+        if state is not None and time.time() - state < _CANARY_RETRY_SECONDS:
+            return False
+    try:
+        ok = bool(probe_live())
+    except Exception:
+        ok = False
+    with _CANARY_LOCK:
+        if ok:
+            _CANARY[site] = True
+        elif _CANARY.get(site) is not True:
+            _CANARY[site] = time.time()
+        return _CANARY[site] is True
+
+
+def _settle(site, job_id, read, canary=None):
+    """read(job_id) → ('live', 正文) | ('gone', '') | ('unknown', 原因)，在这里翻成探活器的三种出口。"""
+    state, payload = read(job_id)
+    if state == "live":
+        _canary_mark(site)
+        return payload or ""
+    if state == "gone":
+        if canary is not None and not _canary_ok(site, canary):
+            raise DetailUnknownError(f"{site} id={job_id} reads gone but the live control failed")
+        raise JobClosedError(f"{site} id={job_id} closed")
+    raise DetailUnknownError(f"{site} id={job_id} unknown: {payload}")
+
+
+def _joined(*parts):
+    return "\n".join(str(p).strip() for p in parts if isinstance(p, str) and p.strip())
+
+
+# ---------- 网易 hr.163.com ----------
+_NETEASE_DETAIL_API = "https://hr.163.com/api/hr163/position/query"
+_NETEASE_LIST_API = "https://hr.163.com/api/hr163/position/queryPage"
+_NETEASE_HEADERS = {**_SITE_HEADERS, "Referer": "https://hr.163.com/job-list.html", "Origin": "https://hr.163.com"}
+_NETEASE_OK_CODE = 200
+_NETEASE_GONE_CODE = 402
+_NETEASE_GONE_MSG = "失效或者不存在"
+
+
+def _netease_read(job_id):
+    r = httpx.get(_NETEASE_DETAIL_API, params={"id": job_id}, headers=_NETEASE_HEADERS, timeout=TIMEOUT)
+    if r.status_code != 200:
+        return "unknown", f"HTTP {r.status_code}"
+    payload = _loads_object(r)
+    if payload is None:
+        return "unknown", "non-JSON response"
+    code = _int_or_none(payload.get("code"))
+    data = payload.get("data")
+    if code == _NETEASE_OK_CODE and isinstance(data, dict):
+        if str(data.get("id") or "") == job_id and str(data.get("name") or "").strip():
+            return "live", _joined(data.get("description"), data.get("requirement"))
+        return "unknown", "data without matching id / name"
+    if code == _NETEASE_GONE_CODE and data is None and _NETEASE_GONE_MSG in str(payload.get("msg") or ""):
+        return "gone", ""
+    return "unknown", f"code={payload.get('code')!r}"
+
+
+def _netease_canary():
+    r = httpx.post(_NETEASE_LIST_API, json={"currentPage": 1, "pageSize": 10},
+                   headers=_NETEASE_HEADERS, timeout=TIMEOUT)
+    rows = ((_loads_object(r) or {}).get("data") or {}).get("list") or []
+    return any(_netease_read(str(row.get("id")))[0] == "live"
+               for row in rows[:3] if isinstance(row, dict) and row.get("id"))
+
+
+def _detail_netease(row, src):
+    """网易：GET position/query?id=。在招 code=200 且回带的 id 相同；已撤 code=402 +「职位失效或者不存在」
+    + data=null（三样都要对上）。不存在的超大 id 回 code=500，不判。"""
+    job_id = (parse_qs(urlparse(row.get("jd_url") or "").query).get("id") or [""])[0].strip()
+    if not job_id.isdigit():
+        raise DetailUnknownError("netease jd_url without numeric id")
+    return _settle("netease", job_id, _netease_read, _netease_canary)
+
+
+# ---------- 携程 careers.ctrip.com ----------
+_CTRIP_API = "https://careers.ctrip.com/api/hrrecruit/getJobAd"
+_CTRIP_HEADERS = {**_SITE_HEADERS, "Referer": "https://careers.ctrip.com/", "Origin": "https://careers.ctrip.com"}
+_CTRIP_OK_CODE = "201"
+_CTRIP_FROM_ID = re.compile(r"/job-detail/([A-Za-z0-9_-]+)")
+
+
+def _ctrip_query(condition):
+    return httpx.post(_CTRIP_API, headers=_CTRIP_HEADERS, timeout=TIMEOUT,
+                      json={"condition": condition, "pager": {"index": "1", "size": "10"},
+                            "head": {"language": "zh_CN", "version": "1"}})
+
+
+def _ctrip_rows(response):
+    """→ (岗位行列表, 自报总数, 是否是一次成功的应答)。结构对不上一律 (None, None, False)。"""
+    if response.status_code != 200:
+        return None, None, False
+    payload = _loads_object(response)
+    if payload is None or str(payload.get("retCode")) != _CTRIP_OK_CODE:
+        return None, None, False
+    value = payload.get("retValue")
+    rows = value.get("recruitJobAdList") if isinstance(value, dict) else None
+    if not isinstance(rows, list):
+        return None, None, False
+    status = payload.get("ResponseStatus")
+    acked = isinstance(status, dict) and status.get("Ack") == "Success"
+    return rows, _int_or_none(value.get("total")), acked
+
+
+def _ctrip_read(from_id):
+    rows, total, acked = _ctrip_rows(_ctrip_query({"fromId": [from_id]}))
+    if rows is None:
+        return "unknown", "unexpected response"
+    for item in rows:
+        if isinstance(item, dict) and str(item.get("fromId") or "") == from_id:
+            return "live", _joined(item.get("duty"), item.get("requirements"))
+    if acked and total == 0 and not rows:
+        return "gone", ""
+    # 有结果却没有这一条 = 对方没按 fromId 过滤（接口变了），不是撤岗。
+    return "unknown", f"total={total!r} without this fromId"
+
+
+def _ctrip_canary():
+    rows, _total, _acked = _ctrip_rows(_ctrip_query({
+        "fromId": [], "keyword": "", "kind": [], "country": [], "city": [], "bucode": [],
+        "jobFamilyCode": [], "jobFamilyGroupCode": [], "category": "1"}))
+    return any(_ctrip_read(str(item.get("fromId")))[0] == "live"
+               for item in (rows or [])[:3] if isinstance(item, dict) and item.get("fromId"))
+
+
+def _detail_ctrip(row, src):
+    """携程：详情页自己就是拿 fromId 去查列表接口。在招 = 结果里有这一条；已撤 = retCode 201 + Ack Success
+    + total 0 + 空列表。⚠️ 不存在的 id 也是这个空结果，所以必须有阳性对照（_ctrip_canary）。"""
+    match = _CTRIP_FROM_ID.search(row.get("jd_url") or "")
+    if not match:
+        raise DetailUnknownError("ctrip jd_url without fromId")
+    return _settle("ctrip", match.group(1), _ctrip_read, _ctrip_canary)
+
+
+# ---------- 百度 talent.baidu.com ----------
+_BAIDU_DETAIL_PREFIX = "https://talent.baidu.com/jobs/detail/"
+_BAIDU_LIST_API = "https://talent.baidu.com/httservice/getPostListNew"
+_BAIDU_DETAIL_KEY = re.compile(
+    r"^https://talent\.baidu\.com/jobs/detail/([A-Z]+/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})/?$")
+_BAIDU_LIVE_MARKER = "window.__INITIAL_DATA__"
+_BAIDU_SHELL_MARKER = "百度校园招聘"
+_BAIDU_SHELL_MAX_CHARS = 9000    # 空壳实测 5,733 / 5,881 字符；在招页 23,000 起
+
+
+def _baidu_read(detail_key):
+    r = httpx.get(_BAIDU_DETAIL_PREFIX + detail_key, timeout=TIMEOUT, follow_redirects=True,
+                  headers={"User-Agent": _SITE_HEADERS["User-Agent"], "Accept": "text/html,*/*"})
+    if r.status_code != 200:
+        return "unknown", f"HTTP {r.status_code}"
+    if not str(r.url).startswith(_BAIDU_DETAIL_PREFIX):
+        return "unknown", "redirected away from the detail page"
+    page = r.text or ""
+    if _BAIDU_LIVE_MARKER in page:
+        post_id = detail_key.split("/", 1)[1]
+        return ("live", "") if post_id in page else ("unknown", "initial data without this postId")
+    if (len(page) <= _BAIDU_SHELL_MAX_CHARS and _BAIDU_SHELL_MARKER in page
+            and "</html>" in page.lower()):
+        return "gone", ""
+    return "unknown", f"neither job page nor shell ({len(page)} chars)"
+
+
+def _baidu_canary():
+    r = httpx.post(_BAIDU_LIST_API, data={"recruitType": "SOCIAL", "pageSize": 10, "curPage": 1},
+                   headers={**_SITE_HEADERS, "Referer": "https://talent.baidu.com/jobs/social-list"}, timeout=TIMEOUT)
+    rows = ((_loads_object(r) or {}).get("data") or {}).get("list") or []
+    return any(_baidu_read(f"SOCIAL/{row.get('postId')}")[0] == "live"
+               for row in rows[:3] if isinstance(row, dict) and row.get("postId"))
+
+
+def _detail_baidu(row, src):
+    """百度：详情页是服务端直出的。在招 = 带 __INITIAL_DATA__ 且里面有这个 postId；已撤 = 同一个地址回
+    5.8KB 的空壳（有站名、没有任何岗位数据，也没有任何「已下线」文案）。
+    ⚠️ 招聘类型写错（拿社招的 postId 访问 /GRADUATE/）回的也是这个空壳——所以只按库里的 jd_url 原样去问，
+    并且必须有阳性对照。只判活不补正文。"""
+    match = _BAIDU_DETAIL_KEY.match(row.get("jd_url") or "")
+    if not match:
+        raise DetailUnknownError("baidu jd_url is not a detail page")
+    return _settle("baidu", match.group(1), _baidu_read, _baidu_canary)
+
+
+# ---------- 哔哩哔哩 jobs.bilibili.com ----------
+_BILIBILI_BASE = "https://jobs.bilibili.com"
+_BILIBILI_HEADERS = {**_SITE_HEADERS, "X-AppKey": "ops.ehr-api.auth", "X-UserType": "2", "X-Channel": "social",
+                     "Referer": "https://jobs.bilibili.com/social/positions"}
+_BILIBILI_SESSION_TTL = 900
+_BILIBILI_SESSION = {"client": None, "at": 0.0}
+_BILIBILI_LOCK = threading.Lock()
+_BILIBILI_JOB_ID = re.compile(r"/positions/(\d+)")
+_BILIBILI_OPEN_STATUS = 1
+_BILIBILI_CLOSED_STATUS = 0
+
+
+def _bilibili_client():
+    """匿名会话：先取 CSRF token，之后的请求带 X-CSRF（与列表 adapter 同一套）。十五分钟换一次。"""
+    with _BILIBILI_LOCK:
+        client = _BILIBILI_SESSION["client"]
+        if client is not None and time.time() - _BILIBILI_SESSION["at"] < _BILIBILI_SESSION_TTL:
+            return client
+        fresh = httpx.Client(timeout=TIMEOUT, follow_redirects=True, headers=_BILIBILI_HEADERS)
+        try:
+            r = fresh.get(f"{_BILIBILI_BASE}/api/auth/v1/csrf/token")
+            token = str((_loads_object(r) or {}).get("data") or "").strip() if r.status_code == 200 else ""
+        except Exception:
+            fresh.close()
+            raise
+        if not token:
+            fresh.close()
+            raise DetailUnknownError("bilibili anonymous CSRF token unavailable")
+        fresh.headers["X-CSRF"] = token
+        # 旧会话不主动关：别的线程可能正拿着它发请求，留给垃圾回收。
+        _BILIBILI_SESSION.update(client=fresh, at=time.time())
+        return fresh
+
+
+def _bilibili_read(job_id):
+    r = _bilibili_client().get(f"{_BILIBILI_BASE}/api/srs/position/detail/{job_id}")
+    if r.status_code != 200:
+        return "unknown", f"HTTP {r.status_code}"
+    payload = _loads_object(r)
+    if payload is None:
+        return "unknown", "non-JSON response"
+    data = payload.get("data")
+    if _int_or_none(payload.get("code")) != 0 or not isinstance(data, dict):
+        with _BILIBILI_LOCK:
+            _BILIBILI_SESSION["at"] = 0.0     # 可能是会话过期：下一次调用重新取 token
+        return "unknown", f"code={payload.get('code')!r}"
+    if str(data.get("id") or "") != job_id or not str(data.get("positionName") or "").strip():
+        return "unknown", "data without matching id / positionName"
+    status = _int_or_none(data.get("positionStatus"))
+    if status == _BILIBILI_OPEN_STATUS:
+        return "live", str(data.get("positionDescription") or "")
+    if status == _BILIBILI_CLOSED_STATUS:
+        return "gone", ""
+    return "unknown", f"positionStatus={data.get('positionStatus')!r}"
+
+
+def _detail_bilibili(row, src):
+    """B 站：GET /api/srs/position/detail/{id}。`positionStatus` 1 = 在招，0 = 已下架——已下架的岗接口照样回
+    完整记录，页面也照样渲染岗位名和正文，只把投递按钮换成「职位已下架」（50 个已下架样本逐个真渲染都是这样）。
+    不存在的 id 回 code=60015，库里的岗没出现过这种情况，不判。"""
+    match = _BILIBILI_JOB_ID.search(row.get("jd_url") or "")
+    if not match:
+        raise DetailUnknownError("bilibili jd_url without position id")
+    return _settle("bilibili", match.group(1), _bilibili_read)
+
+
+# ---------- 小红书 job.xiaohongshu.com ----------
+_XHS_DETAIL_API = "https://job.xiaohongshu.com/websiterecruit/position/queryPositionDetail"
+_XHS_HEADERS = {**_SITE_HEADERS, "Referer": "https://job.xiaohongshu.com/"}
+_XHS_JOB_ID = re.compile(r"/position/(\d+)")
+_XHS_OPEN_STATUS = "in_recruitment"
+_XHS_CLOSED_STATUS = "recruit_close"
+
+
+def _xiaohongshu_read(position_id):
+    r = httpx.get(_XHS_DETAIL_API, params={"positionId": position_id}, headers=_XHS_HEADERS, timeout=TIMEOUT)
+    if r.status_code != 200:
+        return "unknown", f"HTTP {r.status_code}"
+    payload = _loads_object(r)
+    if payload is None:
+        return "unknown", "non-JSON response"
+    data = payload.get("data")
+    if _int_or_none(payload.get("statusCode")) != 200 or not isinstance(data, dict):
+        return "unknown", f"statusCode={payload.get('statusCode')!r}"
+    if str(data.get("positionId") or "") != position_id or not str(data.get("positionName") or "").strip():
+        return "unknown", "data without matching positionId / positionName"
+    status = str(data.get("recruitStatus") or "")
+    if status == _XHS_OPEN_STATUS:
+        return "live", _joined(data.get("duty"), data.get("qualification"))
+    if status == _XHS_CLOSED_STATUS:
+        return "gone", ""
+    return "unknown", f"recruitStatus={data.get('recruitStatus')!r}"
+
+
+def _detail_xiaohongshu(row, src):
+    """小红书：GET queryPositionDetail?positionId=。`recruitStatus` in_recruitment = 在招，recruit_close = 已关。
+    已关的岗页面和在招页一模一样（仍有「投递简历」按钮），只有这个字段说得清。
+    无效 id 回 statusCode=999「获取职位详情异常」，不判。"""
+    match = _XHS_JOB_ID.search(row.get("jd_url") or "")
+    if not match:
+        raise DetailUnknownError("xiaohongshu jd_url without position id")
+    return _settle("xiaohongshu", match.group(1), _xiaohongshu_read)
+
+
+# ---------- OPPO careers.oppo.com ----------
+_OPPO_DETAIL_API = "https://careers.oppo.com/openapi/position/detail"
+_OPPO_HEADERS = {**_SITE_HEADERS, "Referer": "https://careers.oppo.com/university/oppo/campus/post"}
+_OPPO_JOB_ID = re.compile(r"/post/(\d+)")
+_OPPO_OPEN_STATUS = 0
+_OPPO_CLOSED_STATUS = 1
+
+
+def _oppo_read(position_id):
+    r = httpx.get(_OPPO_DETAIL_API, params={"id": position_id}, headers=_OPPO_HEADERS, timeout=TIMEOUT)
+    if r.status_code != 200:
+        return "unknown", f"HTTP {r.status_code}"
+    payload = _loads_object(r)
+    if payload is None:
+        return "unknown", "non-JSON response"
+    data = payload.get("data")
+    if _int_or_none(payload.get("code")) != 0 or not isinstance(data, dict):
+        return "unknown", f"code={payload.get('code')!r}"
+    if str(data.get("idRecruitPosition") or "") != position_id or not str(data.get("positionName") or "").strip():
+        return "unknown", "data without matching idRecruitPosition / positionName"
+    status = _int_or_none(data.get("positionStatus"))
+    if status == _OPPO_OPEN_STATUS:
+        return "live", _joined(data.get("positionDesc"), data.get("positionRequire"))
+    if status == _OPPO_CLOSED_STATUS and not data.get("workCityVOList"):
+        return "gone", ""
+    return "unknown", f"positionStatus={data.get('positionStatus')!r} (work cities present or unknown value)"
+
+
+def _detail_oppo(row, src):
+    """OPPO：GET /openapi/position/detail?id=。`positionStatus` **0 = 在招、1 = 已关**（和 B 站的极性相反）。
+    🚩 这个含义是按全集推出来的，不是读对方前端代码读出来的：当天在列的 237 个岗全是 0；不在列的 53 个
+    全是 1，且工作城市列表全空；随手问的往届项目（2022 届 / 2023 届）也全是 1。已关的岗页面照样渲染。
+    所以判死要两个条件同时成立：状态位是 1 **且**工作城市为空；只有状态位是 1 的不判。"""
+    match = _OPPO_JOB_ID.search(row.get("jd_url") or "")
+    if not match:
+        raise DetailUnknownError("oppo jd_url without position id")
+    return _settle("oppo", match.group(1), _oppo_read)
+
+
 ENRICH_REGISTRY = {
     "huawei": _detail_huawei,
     "workday": _detail_workday,
@@ -1451,6 +1826,13 @@ ENRICH_REGISTRY = {
     # 只有浏览器巡检一条撤岗路径，list-absence 还在 observe 模式 → 实测 16,366 个已停止招聘的岗挂着。
     # 老版 CMS 门户（/zpdetail/{数字}）的岗这里判不了，仍靠 audit_dead_links 浏览器巡检（beisen 留在那边）。
     "beisen": _detail_beisen,
+    # 六家自建站（2026-10-12，全集对拍，见上面「六家自建站」那一大段注释）：此前只有浏览器巡检，判不出也轮不到。
+    "netease": _detail_netease,
+    "ctrip": _detail_ctrip,
+    "baidu": _detail_baidu,
+    "bilibili": _detail_bilibili,
+    "xiaohongshu": _detail_xiaohongshu,
+    "oppo": _detail_oppo,
 }
 
 # 需渲染、低并发：SPA 壳详情页无 httpx 关闭信号，走 audit_dead_links 浏览器审计兜底。
