@@ -184,7 +184,10 @@ def compute_metrics(jobs: list[dict], *, kind: str, subject_name: str,
             sample=len(ages))
 
     # 城市分布
-    cities = [normalizer.normalize_city(str(jb.get("location") or "")) for jb in jobs]
+    # 多地并列的岗（location「上海/北京」，见 normalizer.clean_location）按写在最前面的城市计、一个岗一份：
+    # 整串拿去 normalize_city 会全算给别名表里排最前的那个城市。
+    cities = [normalizer.normalize_city(str(jb.get("location") or "").split(normalizer.MULTI_PLACE_SEP)[0])
+              for jb in jobs]
     city_dist = distribution(cities)
     city_n = sum(item["count"] for item in city_dist)
     if city_dist and city_n >= MIN_DIST:

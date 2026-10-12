@@ -513,10 +513,10 @@ class BytedanceAdapter(PlaywrightAdapter):
         if not pid or not title:
             return None
 
-        city = ""
+        # city_list 里的城市全部交出去（2026-10-11 前只取第一个：live 12,118 岗里 1,105 个列了不止一个城市，
+        # 「北京 | 上海」的岗上海的用户看不到）。
         cl = post.get("city_list")
-        if isinstance(cl, list) and cl and isinstance(cl[0], dict):
-            city = cl[0].get("name") or ""
+        city = normalizer.join_places(c.get("name") for c in cl if isinstance(c, dict)) if isinstance(cl, list) else None
         if not city:
             ci = post.get("city_info")
             if isinstance(ci, dict):

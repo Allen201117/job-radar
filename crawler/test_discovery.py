@@ -151,6 +151,15 @@ class FilterRawJobsTest(unittest.TestCase):
         self.assertTrue(discovery.job_matches_city(_job(location="上海"), ""))  # 空 city 全命中
         self.assertFalse(discovery.job_matches_city(_job(location=None), "北京"))  # 无地点不命中具体城市
 
+    def test_city_match_on_multi_city_location(self):
+        # 多地并列：每个城市都算命中，筛选词写成别名（Shenzhen / 深圳市）也一样。
+        # 2026-10-11 前拿整串折出来的那一个城市比，「北京市、上海市、深圳市」筛 Shenzhen 命不中。
+        multi = _job(location="北京市、上海市、深圳市")
+        for city in ("北京", "上海", "深圳", "Shenzhen", "深圳市"):
+            self.assertTrue(discovery.job_matches_city(multi, city), city)
+        self.assertFalse(discovery.job_matches_city(multi, "杭州"))
+        self.assertFalse(discovery.job_matches_city(multi, "Hangzhou"))
+
     def test_filter_combines_query_and_city(self):
         jobs = [
             _job(title="算法工程师", location="北京", summary="推荐方向"),

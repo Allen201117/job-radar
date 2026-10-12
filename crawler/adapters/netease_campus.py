@@ -44,6 +44,7 @@ from typing import List, Optional
 
 import httpx
 
+import normalizer
 from .base import BaseAdapter, RawJob
 from .china_location import is_china_company_location
 
@@ -210,12 +211,13 @@ class NeteaseCampusAdapter(BaseAdapter):
             title = str(row.get("positionName") or "").strip()
             if not job_id or not title:
                 continue
-            # workPlaceName 是逗号分隔的多地点串（"杭州,上海,广州"）；取首个作主地点，
-            # 全串留在正文里，别丢掉「多地可投」这个对校招用户重要的信息。
+            # workPlaceName 是逗号分隔的多地点串（"杭州,上海,广州"）：每个城市都交出去
+            # （2026-10-11 前只取首个），全串仍留在正文里。地区过滤照旧只看第一个城市。
             places = str(row.get("workPlaceName") or "").strip()
-            location = places.split(",")[0].strip() if places else ""
-            if location and not is_china_company_location(location):
+            first = places.split(",")[0].strip() if places else ""
+            if first and not is_china_company_location(first):
                 continue
+            location = normalizer.join_places(places.split(",")) or ""
             project = str(row.get("_project") or "").strip()
             bits = []
             if project:

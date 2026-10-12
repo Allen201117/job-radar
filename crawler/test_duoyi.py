@@ -47,7 +47,7 @@ class ParseTest(unittest.TestCase):
         j = jobs[0]
         self.assertEqual(j.company, "多益网络")
         self.assertEqual(j.title, "游戏服务端开发工程师")
-        self.assertEqual(j.location, "广州")
+        self.assertEqual(j.location, "广州、武汉、杭州")   # 每个城市都交出去（入库是「广州/武汉/杭州」）
         self.assertEqual(j.job_type, "校园招聘")
         self.assertEqual(j.jd_url, "https://xz.duoyi.com/v40/#/position-detail/1674681784744284160")
         self.assertEqual(j.posted_at, "2026-09-10")

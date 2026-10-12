@@ -11,6 +11,8 @@
 ④ 门户被关停（整页「当前网页已关停」）单独报 portal closed，不混进「没渲染出来」。
 """
 import json
+import shutil
+import subprocess
 import sys
 import types
 import unittest
@@ -76,7 +78,7 @@ class _FakePage:
         # 真实浏览器里由 _READY_JS 判断；替身按编排直接给结论，但要求判据文案确实被传进去了
         markers, closed = arg
         assert "暂无匹配职位" in markers and "尚无任何相关职位" in markers
-        assert closed == "当前网页已关停"
+        assert "当前网页已关停" in closed and "This website has been shut down" in closed
         return _Handle(b[0])
 
     def wait_for_timeout(self, _ms):
@@ -180,6 +182,8 @@ class MokaRenderWaitTest(unittest.TestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 adapter.fetch(BASE)
         self.assertIn("portal closed", str(ctx.exception), "关停 ≠ 没渲染出来，报错原因要能让人直接去停用源")
+        self.assertIn("当前网页已关停", str(ctx.exception))
+        self.assertIn("This website has been shut down", str(ctx.exception))
         self.assertEqual(len(page.gotos), 1, "整个门户关停，换 hash 路由是同一页，不必再白等 3 个路由")
         self.assertIsNone(adapter.reported_total)
 
@@ -234,9 +238,46 @@ class MokaRenderWaitTest(unittest.TestCase):
         self.assertIn("'empty'", js)
         self.assertIn("'cards'", js)
         self.assertIn("'closed'", js)
+        # 关停文案中英两句都认，且同时看 <title>（服务端写死，不依赖前端渲染）——
+        # 2026-10-11：Meshy 的英文关停页不被认，连续 10 轮记成「job list not found」、每轮白等 80 秒。
+        self.assertEqual(MokaAdapter._CLOSED_MARKERS,
+                         ("当前网页已关停", "This website has been shut down"))
+        self.assertIn("closed.some(", js)
+        self.assertIn("document.title", js)
         # 岗位卡优先于任何文案判定：有卡就是有岗，页面别处出现「暂无最新职位」之类不能把它判空
         self.assertLess(js.index("'cards'"), js.index("'closed'"))
         self.assertLess(js.index("'cards'"), js.index("'empty'"))
+
+    @unittest.skipUnless(shutil.which("node"), "没有 node 就跑不了页面里那段 JS")
+    def test_ready_js_really_runs(self):
+        # 上面几条只看字符串、替身页面也不执行 JS：这段脚本语法错一个字符，全部 Moka 源每个路由都会等满超时。
+        # 这里用 node 配一个假 document 真跑一遍，把五种页面各判一次。
+        cases = [
+            ("有岗位卡", {"cards": 2, "body": "算法工程师\n北京市", "title": "某公司 - 社会招聘"}, "cards"),
+            ("有卡时别的文案不算数", {"cards": 1, "body": "暂无匹配职位 当前网页已关停", "title": ""}, "cards"),
+            ("中文关停页", {"cards": 0, "body": "当前网页已关停", "title": "当前网页已关停"}, "closed"),
+            ("英文关停页", {"cards": 0, "body": "This website has been shut down", "title": ""}, "closed"),
+            ("正文还没渲染出来，只有标题", {"cards": 0, "body": "", "title": "This website has been shut down"}, "closed"),
+            ("正文被 CSS 转成大写", {"cards": 0, "body": "THIS WEBSITE HAS BEEN SHUT DOWN", "title": ""}, "closed"),
+            ("空门户", {"cards": 0, "body": "暂无匹配职位", "title": "某公司 - 校园招聘"}, "empty"),
+            ("还没渲染出来", {"cards": 0, "body": "", "title": "某公司 - 社会招聘"}, False),
+        ]
+        script = (
+            "const fn = " + MokaAdapter._READY_JS + ";\n"
+            "const args = " + json.dumps([list(MokaAdapter._EMPTY_MARKERS), list(MokaAdapter._CLOSED_MARKERS)],
+                                         ensure_ascii=False) + ";\n"
+            "const cases = " + json.dumps([c[1] for c in cases], ensure_ascii=False) + ";\n"
+            "const out = cases.map(c => { globalThis.document = { title: c.title, body: { innerText: c.body },"
+            " querySelectorAll: () => ({ length: c.cards }) }; return fn(args); });\n"
+            "process.stdout.write(JSON.stringify(out));\n"
+        )
+        proc = subprocess.run([shutil.which("node"), "-e", script], capture_output=True, text=True,
+                              encoding="utf-8", timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr[-400:])
+        got = json.loads(proc.stdout)
+        for (name, _doc, want), actual in zip(cases, got):
+            with self.subTest(case=name):
+                self.assertEqual(actual, want)
 
 
 if __name__ == "__main__":

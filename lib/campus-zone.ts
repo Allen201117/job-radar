@@ -231,7 +231,7 @@ export function compareCompanyCardsByFit(a: any, b: any): number {
 //   ① trim / 分类 一律在 **JS 侧**做（SQL 的 btrim 只认 ASCII 空白，JS 的 .trim() 还吃全角空格 U+3000），
 //      所以 SQL 原样返回 location/education，这里 trim 后再合并同键组 —— 与逐行口径逐字相同。
 //   ② 归属（哪个 pattern 得这家公司）/ 届别门 / 准入门 三处判据与 getCampusCompanyJobs、
-//      getCampusFreshStats 逐字一致：list 里**第一个** pattern 命中者得。
+//      getCampusFreshStats 逐字一致：对全量清单判、最长的模式独占（lib/must-apply-owner.ts）。
 // ────────────────────────────────────────────────────────────────────────────
 
 /** SQL 聚合行：一行 = 一个 (公司,城市,学历,职能,届别,招聘类型,截止日) 组。 */
@@ -278,7 +278,8 @@ function groupId(g: Omit<CampusGroup, "count">): string {
 /**
  * 把「SQL 聚合行 + 少量逐行兜底行」折叠成每家公司的看板输入。
  *
- * @param list         必投清单（顺序即归属优先级：第一个 pattern 命中者得）
+ * @param list         必投清单（归属对全量清单判、最长的模式独占（lib/must-apply-owner.ts），与 list 的顺序无关）
+ * @param pickOwner    库里的公司名 → list 里的哪一条；线上传 `mustApplyOwnerPicker(list)`
  * @param aggregate    `CAMPUS_ZONE_AGGREGATE_SQL` 的结果（列判得出桶与职能的那批）
  * @param rowLevel     `CAMPUS_ZONE_ROW_LEVEL_SQL` 的结果（列为 NULL/脏值，需要正文现算的那批完整行）
  * @param now          届别门的「当季」基准（测试可注入）
@@ -287,6 +288,7 @@ export function foldCampusZone(
   list: Array<{ name: string; pattern: string }>,
   aggregate: CampusZoneAggregateRow[],
   rowLevel: any[],
+  pickOwner: (company: unknown) => { name: string } | null,
   now: Date = new Date(),
 ): CampusCompanyRow[] {
   const byName = new Map<string, Acc>();
@@ -298,12 +300,14 @@ export function foldCampusZone(
       _campus: new Map(), _intern: new Map(),
     });
   }
-  const needles = list.map((c) => c.pattern.replace(/%/g, "").toLowerCase());
+  // 归属对**全量清单**判、最长的模式独占（lib/must-apply-owner.ts，与缺口台账同一份规则）。
+  // 改前是「list 里第一个子串命中的得」：用户只选互联网时清单里没有京东方，`%京东%` 就把京东方的校招岗
+  // 归到了京东卡（2026-10-11 库里 682 个校招岗），腾讯音乐 / 网易云音乐同理归到母品牌卡。
+  // ⚠️ `pickOwner` 由服务端调用方注入（mustApplyOwnerPicker(list)），不许在本文件 import must-apply-owner：
+  //    本文件被客户端组件引用（campus-client / campus-all-jobs），那样会把两份清单 JSON 和行业分类器打进 /campus 首屏包。
   const ownerOf = (company: unknown): Acc | null => {
-    const lower = String(company ?? "").toLowerCase();
-    if (!lower) return null;
-    const i = needles.findIndex((n) => lower.includes(n));
-    return i < 0 ? null : byName.get(list[i].name) ?? null;
+    const owner = pickOwner(company);
+    return owner ? byName.get(owner.name) ?? null : null;
   };
 
   /** 一组（或一行，count=1）计入某家公司。与旧逐行实现同序：先记 hasAny/lastSeen，再判桶、再判届别。 */

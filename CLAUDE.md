@@ -559,6 +559,13 @@ tests/                   # node --test 单测（*.test.js）；crawler 侧 unitt
   公司装饰词/地名（腾讯科技（北京）✓、中国银行深圳分行 ✓；京东方 ✗、腾讯音乐 ✗、京东物流 ✗）。子公司归集团画像靠
   `company_profiles.aliases` 显式登记，不靠子串猜——归属准确性高于一切。撤回/下架接口现会 `revalidateTag("insight-library")`，
   管理员端同步清本会话抽屉缓存（I5 残差）。
+  📌 **2026-10-11 收紧**（全集回放 1,725 个在招公司名 × 1,318 个画像，`docs/reviews/2026-10-11-attribution-gate-and-must-apply-patterns.md`）：
+  ❌ 校招专区「京东科技」卡上挂的是京东的 2 条校招时间线；门把 96 对「两个画像都在」的公司算成同一家，其中大华集团 / 大华股份、
+  沃尔沃汽车 / 沃尔沃集团、东鹏 / 东鹏饮料是不同的公司——哪天其中一个画像没了，它名下的岗会整批落到另一家头上。
+  ✅ 根因：`companyMatches` 是一对一的判断，不知道别的画像存在；`findCompanyProfile` 有「全等优先」兜着，直接拿它逐个比的两处（校招时间线、洞察徽章的在招数）没有。
+  ✅ 防：问「这个名字归不归这个画像」用 `companyOwnsName`，精确索引要拿**全部**画像建（挡住京东的正是那个没有观测的京东科技画像）；
+  短名带英文时多出的英文不算装饰；「饮料」移出装饰词；名字分不开的两家登记进 `lib/insight-distinct-companies.json`（现只有大华：两边去掉装饰词都只剩「大华」）。
+  ⚠️ 「科技 / 国际 / 投资」刻意没移出装饰词：能拆开京东科技、中国电信国际这类母子，但「腾讯科技（北京）= 腾讯」这类写法会认不到；子公司有自己的画像时靠精确优先各归各。
 - **🚫 建公司画像只有一个入口：先认别名，没有才建（2026-10-11 立，迁移 317）**：
   ❌ 136 家公司各有 2~5 个画像（知乎 / 知乎 Zhihu、云尖信息 / 云尖信息 校招、腾讯音乐 / 腾讯音乐 TME）：说法挂在没有岗位的画像上、岗位挂在没有说法的画像上，
   17 家在洞察库里一张带说法的卡都出不来；3,793 个在招岗点开抽屉打开的不是有内容的那个画像。
@@ -724,6 +731,7 @@ adapter 里 `normalizer.location_in_source_regions(location, self.regions)` 一�
 - 🚫 **国家 / 范围必须按「别名折叠之前」的原文判（2026-09-23 立）**：❌ workday 在招岗 6,526 行 `country_code` 为空却判 domestic，其中 4,383 行存的是「远程」，路径原文是 `United-States---Remote` / `Remote-Mexico` / `UK-Remote`；greenhouse / smartrecruiters / ashby 同病（live 重抓 77 源 2,899 个）。✅ 根因：`normalize()` 先 `clean_location` 再判国家，而 `normalize_city` 是**子串**折叠——串里有 remote 就整串换成「远程」，国家当场丢光（smartrecruiters 出口特意展开的 `Remote Germany` 也被它抹掉）。✅ 防：`normalizer.geo_basis`，别名后判不出国家就用原文判；CITY_ALIASES 的目标值里只有「远程」判不出国家，所以只动被折叠的行，`test_only_remote_alias_target_lacks_country` 钉着这个前提。workday 另在 `_loc_from_path` 展开 ISO3 国别码（白名单；PHL=费城、NOR=站点编号是实测撞车码）、还原 `United-Kingdom` 这类多词国名的连字符。
   📌 **续（同日）：地点压根没写国家的（'Durham' / 'Remote' / 'One Island East'）改问对方 ATS，不按 regions 猜**：❌ 上面修完仍剩 1,715 行按 regions 兜底判 domestic。✅ 防：`RawJob.country_code` = ATS 结构化字段**自报**的国家，`normalize` 只在 `scope_depends_on_regions`（CN 源与纯海外源答案不同）时采信，地点能说清一律以地点为准；workday 取 detail 的 `jobRequisitionLocation.country.alpha2Code`（`jobPostingInfo.country` 会错：赛默飞 Remote, Georgia 写成格鲁吉亚），任一地点沾大中华即判大中华。⚠️ **防来回跳**：国家查询不受 `CRAWL_DETAIL_CAP` 管（快档 / 重档同答案）；detail 4xx 是确定答复、照走兜底；超时 / 5xx 重试仍失败 → 该岗本轮不写库、`fetch_complete=False`。回归钉在 `crawler/test_declared_country.py`。live：新代码爬过的 45,692 行与预测逐行一致，国内→境外 708（+ 回填爬虫够不着的 60）、反向 0；DBS 快档 46s→307s（~300 次查询）。剩下 603 行里 540 行 detail 已 403/422（不对外），是探活问题不是 geo 问题。
 - 🚫 **location 为空 ≠ 城市未知：标题里的城市在写库时物化进 location（2026-09-23 立）**：❌ 康龙化成「有机合成研究员-西安」、万物云「福州-项目管理岗（实习生）」location 为空，/today 城市门认「location 为空」放行、stage-2 判「城市未知」只降级 → 外地岗推给所有城市的用户（真实用户目标上海/杭州，7 张卡全在外地）。✅ 防：`geo.title_city_location` / `titleCityLocation`（两端共读 `tests/fixtures/title-city-cases.json`），经 `normalizer.location_or_title_city`（run.py + discovery 两条链）与 `lib/jobs-store/write.ts` 写库；**只在 adapter 给空时填、绝不覆盖**；带全国 / 海外段、公司名括号注册地不填；带省的要**省市对得上**才填（「江苏南京」「河北-张家口」✓，「江苏济南」「（浙江/江苏/上海）」✗，映射共用 `lib/cn-province-prefectures.json`）。有地点的 34,990 行对照 98.0% 一致；存量已回填 3,372 + 158 行。⚠️ `normalize()` 里标题兜底必须排在 `geo_basis` **之前**（合并时栽过：排反了 location='西安' 而 country_code=NULL，`test_empty_location_falls_back_to_title_city` 钉着）。
+- 🚫 **多地并列的地点不许只留一个城市——清洗不许折、adapter 不许只交第一个（2026-10-12 立）**：❌ 「北京市 广东·深圳市 上海市」入库只剩「北京」，上海 / 深圳的用户在今日推荐里看不到（读侧地点对不上是硬拒）。✅ 根因两层：`normalize_city` 是子串折叠，整串换成别名表里**排最前**的那个城市；另有 15 个 adapter 自己只取城市列表的第一个（字节 / 飞书系 / 阿里 / 小红书 / 网易 / 快手校招 + 9 个校招门户）。live 重抓 169 条 httpx 源 + 4 条浏览器源 + Moka 397 门户共 19.0 万行：清洗折掉城市 5,168 行、Moka 因此不敢写地点 702 行、adapter 只交首城 7,283 行。✅ 防：`normalizer.clean_location` 逐个城市折、用「/」连接（与标题兜底同一种写法）；手里是城市列表的 adapter 一律走 `normalizer.join_places`。读侧七处逐个钉在 `tests/multi-city-location-read.test.js`：今日推荐城市门 / 召回城市词 / 岗位库城市筛选 / 全文候选门 / location ilike 本来就按子串逐个城市匹配；**打分的城市 +20**（原先比的是 `normalizeChinaCity(location)`，只认别名表最靠前的城市）和**校招必投看板的城市分面**（一个岗一个城市下标、按相等比——多地岗会变成「北京/上海」这个独立选项，选「北京」反而筛不到）是按整串比的，同次改掉（`lib/scoring.ts` / `lib/campus-facets.campusCityMembers`）；洞察的城市分布（`bu_signals`）按写在最前面的城市计。新加按城市判断的读路径，先问「location 是「A/B/C」时每个城市都中吗」。四条不变量（`crawler/test_clean_location_multi_place.py` / `test_multi_city_adapters.py`）：① 串里没有别名表城市、或只写了一个地方（含「省,市,区」上下级）→ 与改前逐字相同；② 改前写库的那个城市改后一定还在；③ 别名表外的地名保留原文写法（「保定市」「阿里地区」），否则目标填「保定市」的用户对不上；④ 清洗自己的输出，结果不变（库里的值会被再清洗）。认地名偏严：只在段首或「省 / 自治区 / 国」后面认，市 / 区后面出现的地级名几乎都是门牌地址（「上海市徐汇区中山园路」）；`join_places` 遇到清洗认不出的城市或并起来国家会变的列表，退回只交第一个（实测 5,967 行多城市列表里 52 行）。对拍：旧城市丢失 0、地点变空 0、标题变化 0；13,306 行 × 821 个目标写法 × 读侧 6 个判定，「原来匹配、现在不匹配」0。⚠️ 没治的：县级市并列（「上海、昆山市」的昆山照丢）；Moka「等N个地点」的截断行仍不写；**折错城市**的存量（「牡丹江市·西安区」→ 西安、「Beijing East Road, Shanghai」→ 北京）刻意没动，等创始人定；国聘 / 农行 / 快手社招本轮没抓到原文。⚠️ 国家码的副作用：内地 + 香港并列的行 `country_code` CN→HK（范围不变）；「雄安新区、新加坡」这类由 SG / 境外变 CN / 国内（一岗多地中国优先）。⚠️ 存量没法从库里回填（库里只有折后的值），靠列表重抓自愈。
 - 📌 验收方法：拉全库 `distinct location`（约 2 万个写法）**逐条对拍改前 / 改后**，「大中华 → 境外」这个方向**必须为 0**。⚠️ 库里的 `location` 是**别名折叠之后**的文本，拿它、或拿 adapter `parse` 的出口量，都会和真实写库结果差一层——量地点类改动要把原始地点**完整过一遍 `normalize()`**（workday 能从 jd_url 路径复原原文，其它源只能 live 重抓）。逐条选词理由与实测数字 → `docs/module-deep-notes.md`。
 
 ## 🚫「接口返 0 / 403」不能证明「对方没开」（2026-09-04 立，一晚栽三次）
@@ -941,6 +949,15 @@ huawei / huawei_campus / xiaohongshu 现在都是这个写法，新增多渠道 
 - ⚠️ **加别名 = 改北极星口径**，必须逐条有据（库里真有这行公司名）；`tests/must-apply-list.test.js` 把当前别名清单钉死 + 张冠李戴门（别名不得命中同清单另一家）。
 - ⚠️ **别拿改名当修法**：把清单里的「大陆集团」改成 `Continental` 会把 352 个海外岗算成国内供给。别名只改「怎么匹配」，不改「这家归哪份清单」。
 - ⚠️ `owner_index()` 不传 scope = 国内+海外并集，此时**规范名恒压过别名**；要跨语言归属就明确传 `scope`。
+- 🚫 **清单归属只有一套口径：最长的模式独占 + 英文按整词 + `excludes`（2026-10-11 立）**：
+  ❌ 同一份清单曾有三套匹配：看板裸子串、一个名字命中两条清单就各算一遍（海外 ABB 显示 6,600 个健康岗，实际 4 个，其余是 AbbVie、雅培；
+  国内京东里混着京东方 1,032 个）；校招专区按清单顺序先到先得；只有缺口台账是独占。吉利德归到吉利、宁德新能源归到宁德时代，三处都串。
+  ✅ 防：网站侧 `lib/must-apply-owner.ts` 与爬虫侧 `gap_census.build_owner_index / resolve_owner` 是同一份规则，共用夹具 `tests/fixtures/must-apply-owner-cases.json`；
+  新写「这个公司名是不是清单里这家」的代码一律走它，别再用 `ilikeMatcher` / 裸子串。品牌名短到收不窄的（吉利 / 泰康 / 中建 / 中铁 / 新东方）
+  用条目上的 `excludes` 逐条点名——加一条就是改北极星口径，`tests/must-apply-owner.test.js` 逐条钉死、依据写在旁边。
+  🚫 别用「名字末尾括号写了别的集团就按括号归」：蒙牛全称括号写中粮集团，实体就是蒙牛本身。
+  ⚠️ 没改的：抓全率那条库内统计（`must_apply_coverage`）、探活与选源优先级、自动扩源去重、热门推荐的行业归属仍是裸子串；
+  同一家占两个名额的（好未来 / 学而思、Maersk / A.P. Moller）独占后有一条恒为 0，并不并等创始人定。
 - ✅ **必投覆盖率只数「本 scope 自己的岗」**（2026-09-05 创始人拍板）：此前两份清单共吃一个合计 → 海外清单的星巴克显示 1,920 个健康岗（实际全是中国门店岗）。缺口普查 `_JOB_AGGREGATE_SQL` 的 `job_scope` 必须**参数绑定、不拼字符串**；品牌 rollup 列同样过滤，否则海外岗会从父公司门户后门漏进国内覆盖。
 - ⚠️ **「本范围 0」必须解释**，否则会被读成「供给没了」：台账记 `other_scope_healthy_jobs`，看板标「另有 N 个岗在海外/国内」（`otherScopeNote`）——前者要补源，后者什么都不用做。
 - ⚠️ `job_scope` 只有 `domestic`/`overseas` 两个取值、无 NULL。真冒出第三种取值时**宁可不计入任一 scope**，也不要偷偷算进国内（`mergeScopeRows` 有断言钉死）。
@@ -1031,7 +1048,9 @@ huawei / huawei_campus / xiaohongshu 现在都是这个写法，新增多渠道 
 3. **聚合 SQL 不用 `company ilike any()`**：带前导 % 用不了任何索引 → 39 万 active 行并行全表扫（live EXPLAIN 2567ms / 127,726 buffers）。改成先取全部 active 公司名走索引、JS 解析出确切名字、再 `company = any()`（957ms / 46,413 buffers，结果集逐行相同）。
 4. **展开某家公司走 `/api/campus-zone/jobs`（按 公司+模式），不按 id**：按 id 取要先把 16,494 个 uuid 下发到浏览器（光 uuid 就 0.59 MB）。⚠️ 旧的 by-ids 调法有个真 bug——把 campus 与 intern 的 id 拼一起再截前 200，**大厂的实习桶被校招桶挤没、实习模式展开必然空白**。
    📌 **2026-09-15 起改为服务端按筛选分页 + 回精确 total（Phase B，去掉「前 200」硬顶）**：`getCampusCompanyJobs(list, pattern, bucket, {filters, offset, limit})`——归属+届别门+桶+分面筛选+排序全用轻字段（职能读物化列 `job_function`、桶读 `recruitment_category` 列），数清全部候选得精确 `total`，只给「这一页」取正文；前端抽屉按 `pattern|mode|filterKey` 累计分页 + 「加载更多」。**筛选必须服务端下推**（客户端只翻页不二次过滤），否则「看全部符合筛选的岗位」又会被单页截断。归属/届别门/桶口径与 getCampusZone 逐字一致（见第 5 条）。
-5. **归属规则三处必须一致**（getCampusZone / getCampusCompanyJobs / 分面计数）：list 里**第一个 pattern 命中者得**（`腾讯音乐 TME` 归 `%腾讯音乐%` 不归 `%腾讯%`）。任一处漂移 → 卡面计数与展开列表对不上；live 交叉验证法：卡面计数与接口返回条数在未截断的公司上必须逐个相等。
+5. **归属规则几处必须一致**（getCampusZone / getCampusCompanyJobs / 分面计数 / 新鲜度 / 源覆盖 / 开闸徽章）：都走 `lib/must-apply-owner.mustApplyOwnerPicker`——对**全量国内清单**判、最长的模式独占（`腾讯音乐 TME` 归 `%腾讯音乐%` 不归 `%腾讯%`，与用户选没选传媒行业无关）。任一处漂移 → 卡面计数与展开列表对不上；live 交叉验证法：卡面计数与接口返回条数在未截断的公司上必须逐个相等。
+   📌 纠错（2026-10-11 创始人授权）：此处原写「list 里第一个 pattern 命中者得」，括号里那个例子只在用户把传媒排在互联网前面时成立——从这条写下起就是这样。只选互联网（默认）时京东方的校招岗归到「京东」卡（库里 682 个校招岗，没过届别门）、腾讯音乐归到腾讯卡。
+   ⚠️ `lib/campus-zone.ts` 被客户端组件引用，归属函数由服务端注入 `foldCampusZone`，**别在它里面 import 清单或归属模块**（会把两份清单打进 /campus 首屏包，`tests/must-apply-owner.test.js` 钉着）。
 6. **🚫 `unstable_cache` 的重算被杀 = 永远服务旧快照且不报错（2026-09-09 线上实锤，卡了 6 天）**：
    ❌ 现象：/campus 卡面 京东 0 / 小米 6 / 百度 2 / vivo 0、全部「数据待更新」，而库里是 127 / 852 / 158 / 166、
    `last_seen_at` 当天；不走缓存的 `/api/campus-zone/jobs` 返回的就是库里的数。卡面数字正好等于 09-03 打通前的快照。
