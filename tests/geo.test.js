@@ -331,6 +331,21 @@ test("geo 词表与 crawler/geo.py 逐条一致", () => {
   }
 });
 
+// 境外中文地名表（整段精确匹配那张）此前不在上面的对拍里，只靠共享夹具间接盯着：夹具没覆盖到的词，
+// 一边加了另一边忘了不会红。国家的先后也要一致——多国混写串按表里国家的顺序判（见夹具「多国混写串」那组）。
+test("境外中文地名表与 crawler/geo.py 逐国逐条一致", () => {
+  const py = fs.readFileSync(path.join(__dirname, "..", "crawler", "geo.py"), "utf8");
+  const m = py.match(/^_STRICT_CJK_PLACES = \{([\s\S]*?)^\}/m);
+  assert.ok(m, "crawler/geo.py 里找不到 _STRICT_CJK_PLACES");
+  const parts = m[1].replace(/#.*$/gm, "").split(/"([A-Z]{2})":/);
+  const expected = [];
+  for (let i = 1; i < parts.length; i += 2) {
+    expected.push([parts[i], parts[i + 1].match(/"([^"]+)"/g).map((s) => s.slice(1, -1))]);
+  }
+  assert.ok(expected.length > 80, "没解析出 crawler/geo.py 的国家表");
+  assert.deepEqual(Object.entries(geo.STRICT_CJK_PLACES), expected);
+});
+
 // OVERSEAS_LOCATION_TOKENS / _PHRASES 是 derive_job_scope「钉在境外」那一步的词表。lib/geo.js 的注释
 // 早就写着「会 deepEqual 对拍」，但上面那条测试并不包含它们——这里补上，按集合比（两端书写顺序不同）。
 test("境外钉词表与 crawler/geo.py 逐条一致", () => {
