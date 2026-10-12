@@ -486,5 +486,110 @@ class FetchDecisionTest(unittest.TestCase):
         self.assertFalse(a.fetch_complete)
 
 
+class SharedTenantPortalTest(unittest.TestCase):
+    """共享租户：同一个岗挂在两家公司的门户上，只归一家（2026-10-12，英科）。
+
+    碑文（global-intco 三个门户翻全 + 逐岗带头读状态，全集）：
+      · 租户名只写「英科」。index = 英科再生社会招聘官网 87 岗；757263 = 英科医疗社会招聘官网 326 岗；
+        840753 = 英科医疗校园招聘官网 119 岗。后两个地址是英科医疗官网招聘页自己链过去的。
+      · index ∩ 757263 = 17 个岗，两个门户上都在线、浏览器里都能打开：14 个淮北「-凯泽」（安徽凯泽新材料，
+        英科医疗持股 65%）、九江安环主管、国毅、公益基金会运营各 1 → 归英科医疗。
+      · 不让出 = 同一个岗两张卡、两个公司名；让出的那条源库里已有的行下架成 removed（run.py 认 retire_jd_urls）。
+    """
+
+    HOST = "global-intco.jobs.feishu.cn"
+
+    def _a(self, path):
+        url = f"https://{self.HOST}/{path}/position"
+        a = feishu.FeishuGenericAdapter()
+        a._bind_host(url)
+        a._bind_website_path(url)
+        a._PAGE_SIZE = 50
+        return a, url
+
+    @staticmethod
+    def _factory(pages_by_portal, calls=None):
+        def factory(**kw):
+            portal = (kw.get("headers") or {}).get("website-path")
+            if calls is not None:
+                calls.append(portal)
+            return _FakeClient(list(pages_by_portal.get(portal, [_page([], 0)])))
+        return factory
+
+    def test_yielding_portal_drops_rows_also_on_owner_portal(self):
+        a, url = self._a("index")
+        pages = {"index": [_page([1, 2, 3, 4], 4)], "757263": [_page([3, 4, 9], 3)]}
+        with mock.patch.object(feishu.httpx, "Client", self._factory(pages)), \
+                mock.patch.object(a, "_discover_detail_prefix", return_value="index"):
+            rows, total, reached = a._httpx_fetch(self.HOST)
+            a._prefetched = (rows, total, reached)
+            jobs = a.parse(a.fetch(url))
+        self.assertEqual(([r["id"] for r in rows], total, reached), (["1", "2"], 2, True))
+        self.assertEqual(a.retire_jd_urls, (f"https://{self.HOST}/index/position/3/detail",
+                                            f"https://{self.HOST}/index/position/4/detail"))
+        self.assertTrue(a.fetch_complete)            # 让出的不算漏抓：缺席撤岗照常能跑
+        self.assertEqual(a.reported_total, 2)
+        self.assertEqual(sorted(j.jd_url for j in jobs),
+                         [f"https://{self.HOST}/index/position/{i}/detail" for i in (1, 2)])
+
+    def test_owner_portal_source_keeps_everything_and_asks_nothing_extra(self):
+        for path in ("757263", "840753"):
+            a, _url = self._a(path)
+            calls = []
+            pages = {"index": [_page([1, 2, 3, 4], 4)], path: [_page([3, 4, 9], 3)]}
+            with mock.patch.object(feishu.httpx, "Client", self._factory(pages, calls)):
+                rows, total, reached = a._httpx_fetch(self.HOST)
+            self.assertEqual(([r["id"] for r in rows], total, reached), (["3", "4", "9"], 3, True), path)
+            self.assertEqual(calls, [path], path)
+            self.assertEqual(a.retire_jd_urls, (), path)
+
+    def test_incomplete_owner_list_fails_the_run_instead_of_keeping_everything(self):
+        """归属门户没取全时两条退路都是错的：全收 = 一岗两行；按半截剔 = 漏掉的那些照样一岗两行。"""
+        for owner_pages in ([_page([3], 5)],                      # 自报 5 个只翻到 1 个
+                            [{"code": 500, "data": None}]):       # 接口没打通
+            a, _url = self._a("index")
+            pages = {"index": [_page([1, 2, 3, 4], 4)], "757263": owner_pages}
+            with mock.patch.object(feishu.httpx, "Client", self._factory(pages)), \
+                    mock.patch.object(a, "_discover_detail_prefix", return_value="index"):
+                with self.assertRaises(RuntimeError):
+                    a._httpx_fetch(self.HOST)
+            self.assertEqual(a.retire_jd_urls, ())
+
+    def test_retire_list_is_recomputed_every_fetch(self):
+        a, _url = self._a("index")
+        first = {"index": [_page([1, 3], 2)], "757263": [_page([3], 1)]}
+        second = {"index": [_page([1, 3], 2)], "757263": [_page([9], 1)]}
+        with mock.patch.object(a, "_discover_detail_prefix", return_value="index"):
+            with mock.patch.object(feishu.httpx, "Client", self._factory(first)):
+                a._httpx_fetch(self.HOST)
+            self.assertEqual(len(a.retire_jd_urls), 1)
+            with mock.patch.object(feishu.httpx, "Client", self._factory(second)):
+                rows, total, _reached = a._httpx_fetch(self.HOST)
+        self.assertEqual((a.retire_jd_urls, len(rows), total), ((), 2, 2))
+
+    def test_yielding_portal_never_falls_back_to_browser(self):
+        """浏览器链不做让出这一步：回退过去会把让出的岗又写回来。归属门户那条源不受影响。"""
+        a, url = self._a("index")
+        with mock.patch.object(a, "_httpx_fetch", return_value=([], None, False)), \
+                mock.patch.object(a, "_browser_fetch", side_effect=AssertionError("不该开浏览器")):
+            with self.assertRaises(RuntimeError):
+                a.fetch(url)
+        b, owner_url = self._a("757263")
+        with mock.patch.object(b, "_httpx_fetch", return_value=([], None, False)), \
+                mock.patch.object(b, "_browser_fetch", return_value="BROWSER"):
+            self.assertEqual(b.fetch(owner_url), "BROWSER")
+
+    def test_registry_has_no_chains_and_other_tenants_are_untouched(self):
+        for host, owners in feishu._SHARED_TENANT_PORTAL_OWNER.items():
+            self.assertFalse(set(owners) & set(owners.values()), host)   # 归属门户自己不再让给别人
+        a = feishu.NioAdapter()
+        a._bind_website_path("https://nio.jobs.feishu.cn/index/position")
+        calls = []
+        with mock.patch.object(feishu.httpx, "Client", self._factory({"index": [_page([1], 1)]}, calls)), \
+                mock.patch.object(a, "_discover_detail_prefix", return_value="index"):
+            rows, total, _reached = a._httpx_fetch("nio.jobs.feishu.cn")
+        self.assertEqual((calls, len(rows), total, a.retire_jd_urls), (["index"], 1, 1, ()))
+
+
 if __name__ == "__main__":
     unittest.main()
