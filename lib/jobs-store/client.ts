@@ -13,6 +13,44 @@ import { buildJobsDatabaseSsl } from "./tls-options.js";
 types.setTypeParser(1184, (v) => v); // timestamptz
 types.setTypeParser(1114, (v) => v); // timestamp (无时区)
 
+// 本池每条连接的预读并发（effective_io_concurrency，2026-10-12 实测后定，创始人拍板「连接池带上、取 64」）。
+// ❌ 库上是默认值 1：「先从索引拿到一批行的位置、再回表逐块读」（位图堆扫描）时一次只等一块盘读。
+//    数据不在缓存里，每读一块 0.15ms（真从盘上读 0.2~0.45ms）—— /today 现跑召回、/jobs 登录搜索取候选冷的时候几秒就是这么来的。
+// ✅ 调大后位图堆扫描会把后面要读的块提前一起发给磁盘。四轮实测（51 个真实用户的召回 SQL + 56 种真实搜索 + 36 城，
+//    每个输入在四种设置下各跑一次，每种设置读块合计 81~83 万；库内 EXPLAIN ANALYZE，冷跑）：
+//      每读一块   1 → 0.149ms · 16 → 0.046 · 64 → 0.033 · 200 → 0.028
+//      /today 现跑召回（51 人） 中位 0.76s → 0.26s，九成内 4.1s → 1.3s，合计 82.6s → 27.1s
+//      /jobs 登录搜索取候选（38~40 种） 中位 0.39s → 0.17s，九成内 3.6s → 0.73s，合计 34.4s → 11.4s
+//    取 64：比 16 现跑召回合计再少 31%，200 比 64 没有更多收益。
+// ⚠️ 它只管位图堆扫描「取堆块」那一段。吃不到的：索引扫描（/today 线上走的读快照、匿名默认态、北京这类大城市按时间索引顺扫、
+//    回补 60 行）、位图**索引**页自己的读（GIN 页 / 主键叶子页）、全表顺扫的计数、纯计算。别指望它治这些。
+// ⚠️ 规划器不看它：171 条真实 SQL 按 1 / 200 / 1 / 200 各 EXPLAIN 一次，计划随设置变的 0 条；数据在缓存里时耗时比值 0.99~1.03。
+// ⚠️ 对别的会话：有预读查询在跑时，别人读一块超过 1ms 的比例 1.3% → 3~6%（最慢 1% 从 1.1ms 到 2.1~2.7ms），中位 / 九成不变，
+//    在等磁盘 / 等写日志的会话数没变多（旁路采样 3.5 万次，含爬虫重度写库 + 三条冷查询同时跑）。
+//    没量：大量用户同时冷查询的叠加；爬虫侧也开预读（改角色 / 库级配置）—— 那是另一件事，要改先量。
+// 只影响本池的连接（应用查询 + 用本文件的脚本，如 /today 召回快照的后台刷新）；爬虫（psycopg2）和自建连接的脚本不受影响。
+// 完整数字与测法：docs/reviews/2026-10-12-effective-io-concurrency.md
+export const JOBS_IO_CONCURRENCY = 64;
+
+/**
+ * 连接启动参数（libpq 的 options）：建连接时就把预读并发设好，不占一次往返，也不会像 `set` 那样只落在某几条连接上。
+ * 环境变量 JOBS_DB_IO_CONCURRENCY：`off` = 我们不带这个参数（退回库的默认值；驱动此时会读进程里的 PGOPTIONS，线上没设）；
+ * 1~1000 的十进制整数 = 改用这个值；其它写法一律按默认值——一个手滑的环境变量不该让所有连接都建不起来（库会拒绝非法取值）。
+ * 返回值只由校验过的数字重新拼出来，环境变量原文不进启动参数。
+ */
+export function jobsSessionOptions(env: Record<string, string | undefined> = process.env): string | undefined {
+  const raw = (env.JOBS_DB_IO_CONCURRENCY ?? "").trim().toLowerCase();
+  if (raw === "off") return undefined;
+  let value = JOBS_IO_CONCURRENCY;
+  if (raw) {
+    // 只认纯数字：Number("1e2") / Number("0x10") 也是整数，但那不是人会有意写的值
+    const parsed = /^\d{1,4}$/.test(raw) ? Number(raw) : NaN;
+    if (parsed >= 1 && parsed <= 1000) value = parsed;
+    else console.warn(`[jobs-pool] JOBS_DB_IO_CONCURRENCY 不是 off 或 1~1000 的整数，按默认值 ${JOBS_IO_CONCURRENCY}`);
+  }
+  return `-c effective_io_concurrency=${value}`;
+}
+
 // 全局复用连接池：Vercel serverless 跨调用复用同一池，避免每次新建连接（连接风暴）。
 const globalForPool = globalThis as unknown as { __jobsPool?: Pool };
 
@@ -31,6 +69,7 @@ function makePool(): Pool {
     password: decodeURIComponent(u.password),
     database: u.pathname.replace(/^\//, "") || "jobradar_jobs",
     ssl: buildJobsDatabaseSsl(process.env, u.hostname),
+    options: jobsSessionOptions(),
     // 保持 5。2026-09-03 一度改成 2（想省连接位），当天又改回来——**但不是因为它有问题，
     // 而是因为改小根本没解决任何现存瓶颈**，详见下面实测。没有新证据前不要再动这个值。
     //
