@@ -49,7 +49,7 @@ class SfCampusParseTest(unittest.TestCase):
         self.assertEqual(job.company, "顺丰")
         self.assertEqual(job.title, "Java开发工程师（顺丰科技）")
         # 多城市取第一个做筛选字段，全部城市写进 summary
-        self.assertEqual(job.location, "成都市")
+        self.assertEqual(job.location, "成都市、武汉市、深圳市")   # 每个城市都交出去（入库是「成都/武汉/深圳」）
         self.assertIn("工作城市：成都市、武汉市、深圳市", job.summary)
         self.assertEqual(job.job_type, "校园招聘")
         self.assertEqual(job.education, "大学本科")

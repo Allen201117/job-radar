@@ -168,7 +168,7 @@ class MokaPlaceLineTest(unittest.TestCase):
 
 
 class MokaMultiPlaceTest(unittest.TestCase):
-    """多地并列：入库清洗会把整行折成其中一个城市，折了就有城市的用户看不到这个岗。"""
+    """多地并列：写进库之后页面上列的每个地点都得还匹配得上，丢一个就有城市的用户看不到这个岗（读侧对不上是硬拒）。"""
 
     def _location(self, place_line):
         return _parse_moka_card(_card("岗位", "发布于 2026-10-01", "全职", "全职", "|", place_line, place_line))[0]
@@ -178,12 +178,42 @@ class MokaMultiPlaceTest(unittest.TestCase):
             with self.subTest(line=line):
                 self.assertEqual(self._location(line), line)
 
-    def test_not_written_when_cleaning_would_keep_only_one_city(self):
-        for line in ("吉林·长春市 辽宁·沈阳市", "上海市 广东·深圳市 北京市", "陕西·西安市 广东·深圳市 江苏·南京市",
-                     "Hong Kong Shenzhen, Guangdong", "Beijing, Shanghai"):
+    def test_written_when_cleaning_keeps_every_listed_city(self):
+        # 2026-10-11 前清洗会把这些行整行折成一个城市，所以当时不写；现在逐个城市都留着。
+        for line, stored in (("吉林·长春市 辽宁·沈阳市", "长春/沈阳市"),
+                             ("上海市 广东·深圳市 北京市", "上海/深圳/北京"),
+                             ("陕西·西安市 广东·深圳市 江苏·南京市", "西安/深圳/南京"),
+                             ("上海市 广东·深圳市", "上海/深圳"),
+                             ("中国香港 新加坡 山东·青岛市", "香港/新加坡/青岛"),
+                             ("Hong Kong Shenzhen, Guangdong", "香港/深圳"),
+                             ("Beijing, Shanghai", "北京/上海")):
             with self.subTest(line=line):
-                self.assertNotEqual(normalizer.clean_location(line), line, "前提：清洗确实会折叠这一行")
-                self.assertIsNone(self._location(line))
+                self.assertEqual(self._location(line), line)
+                self.assertEqual(normalizer.clean_location(line), stored)
+
+    def test_foreign_or_nation_only_place_does_not_block_the_listed_cities(self):
+        # 同日全集 38 张卡是「国内城市 + 中国 / 境外国家」：location 列只给国内城市用（国家只有一个，中国优先），
+        # 境外那一头库里本来就表示不了。行里的国内城市一个不少就写——12 字以内的这类行改前也一直是这么写的。
+        for line, stored in (("广东·深圳市 中国", "深圳"), ("马来西亚 福建·福州市", "福州"), ("印度 英国 上海市", "上海"),
+                             ("海外其他 广东·深圳市", "深圳"), ("陕西·西安市 泰国 广东·深圳市", "西安/深圳"),
+                             ("上海市 广东·深圳市 中国", "上海/深圳")):
+            with self.subTest(line=line):
+                self.assertEqual(self._location(line), line)
+                self.assertEqual(normalizer.clean_location(line), stored)
+
+    def test_province_listed_next_to_its_own_city_does_not_block_the_line(self):
+        # 「广东 广东·深圳市」：清洗把省当成深圳的上级吞掉是对的，不算丢了一个地点（12 字以内的这类行改前也一直在写）。
+        for line, stored in (("广东 广东·深圳市", "深圳"), ("湖北 湖北·武汉市 上海市", "武汉/上海")):
+            with self.subTest(line=line):
+                self.assertEqual(self._location(line), line)
+                self.assertEqual(normalizer.clean_location(line), stored)
+
+    def test_not_written_when_cleaning_would_lose_a_listed_city(self):
+        # 清洗把「牡丹江市·西安区」折成西安（折错的存量问题，见 normalizer.clean_location）：这时沈阳、牡丹江都不在结果里。
+        line = "黑龙江·牡丹江市·西安区 辽宁·沈阳市"
+        self.assertTrue(_moka_places(line), "它是地点字段，只是不能写")
+        self.assertEqual(normalizer.clean_location(line), "西安")
+        self.assertIsNone(self._location(line))
 
     def test_truncated_list_is_never_written(self):
         # 「等N个地点」只列了前 3 个：没列出来的那几个城市的用户会被硬拒，哪怕列出来的 3 个清洗不折叠。
@@ -192,10 +222,6 @@ class MokaMultiPlaceTest(unittest.TestCase):
             with self.subTest(line=line):
                 self.assertTrue(_moka_places(line), "它是地点字段，只是不能写")
                 self.assertIsNone(self._location(line))
-
-    def test_short_lines_keep_their_old_behaviour(self):
-        # 12 字以内的多地行改前一直在写（并被折成一个城市）；这次不动这批岗的可见性，见 _MOKA_LEGACY_MULTI_PLACE_CHARS。
-        self.assertEqual(self._location("上海市 广东·深圳市"), "上海市 广东·深圳市")
 
 
 class MokaTitleTest(unittest.TestCase):
@@ -250,11 +276,13 @@ class MokaLocationEndToEndTest(unittest.TestCase):
         self.assertEqual(_normalized("multi-place-kept-when-cleaning-is-lossless")["location"],
                          "内蒙古·包头市 辽宁·沈阳市")
 
-    def test_multi_place_line_that_cleaning_would_fold_stays_unknown(self):
-        # 清洗会把「吉林·长春市 辽宁·沈阳市」折成「长春」：沈阳的用户就看不到了，不如保持城市未知。
-        self.assertEqual(normalizer.clean_location("吉林·长春市 辽宁·沈阳市"), "长春")
-        self.assertIsNone(_normalized("multi-place-dropped-when-cleaning-folds")["location"])
-        self.assertIsNone(_normalized("english-two-places-dropped")["location"])
+    def test_multi_place_line_keeps_every_city_after_cleaning(self):
+        # 2026-10-11 前清洗把「吉林·长春市 辽宁·沈阳市」折成「长春」（沈阳的用户看不到），当时只能不写、保持城市未知。
+        row = _normalized("multi-place-with-alias-city-kept")
+        self.assertEqual((row["location"], row["country_code"], row["job_scope"]), ("长春/沈阳市", "CN", "domestic"))
+        self.assertEqual(_normalized("multi-place-three-cities-kept")["location"], "上海/深圳/北京")
+        self.assertEqual(_normalized("multi-place-short-line-kept")["location"], "上海/深圳")
+        self.assertEqual(_normalized("english-two-places-kept")["location"], "香港/深圳")
 
     def test_nation_only_stays_unknown(self):
         row = _normalized("nation-only-is-not-a-location")
