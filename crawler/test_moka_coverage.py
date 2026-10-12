@@ -9,13 +9,14 @@
 
 钉死的事：① 两套翻页器都认；② 分母优先用门户自报总数，抓到的数明显少于它就不算抓全，
 不管页面上有没有下一页按钮；③ 读不到门户总数时退回旧口径（翻到末页=抓全，没翻到给上界分母）；
-④ 等「下一页渲染回来」而不是固定睡一会儿，等不到要留停因；⑤ 门店批量岗由重复度刹车收住。
+④ 等「下一页渲染回来」而不是固定睡一会儿，等不到要留停因；⑤ 门店批量岗由重复度刹车收住；
+⑥ source_url 带门户自己的筛选时只开那一个路由、只读列表区，分母不用整站总数（MokaListFilterTest）。
 """
 import json
 import unittest
 
 from adapters.base import RepetitionBrake
-from adapters.china_ats import MokaAdapter, _moka_portal_total
+from adapters.china_ats import MokaAdapter, _moka_list_filter, _moka_portal_total
 
 SOURCE = "https://app.mokahr.com/social-recruitment/t/1"
 
@@ -650,6 +651,175 @@ class MokaStopReasonTest(unittest.TestCase):
                    "paginator_not_found", "short_of_portal_total"}
         self.assertLessEqual(written, set(ops_watchdog.COVERAGE_STOP_LABELS))
         self.assertNotIn("repetition_brake", ops_watchdog.COVERAGE_STOP_LABELS, "刹车是按设计停，规则 G 单列")
+
+
+FILTER_ROUTE = "#/jobs?keyword=%E7%AE%A1%E5%9F%B9"
+FILTERED = SOURCE + FILTER_ROUTE
+SITE_WIDE_DOC = '<input id="init-data" value="{&quot;jobStats&quot;:{&quot;total&quot;:58187}}">'
+
+
+class _FilteredPage(_Page):
+    """带右栏的翻页替身：不限定范围的选择器连右栏「最新职位」一起读到，限定列表区的只读到列表。"""
+
+    def __init__(self, *args, sidebar=(), **kwargs):
+        super().__init__(*args, **kwargs)
+        self.sidebar = list(sidebar)
+        self.waited_js = []   # 每次等翻页时用的页面脚本原文
+
+    def eval_on_selector_all(self, sel, js):
+        cards = super().eval_on_selector_all(sel, js)
+        if sel == MokaAdapter._CARD_SEL:
+            cards = cards + [{"href": h, "text": f"岗{h}"} for h in self.sidebar]
+        return cards
+
+    def wait_for_function(self, js, arg=None, timeout=None, polling=None):
+        self.waited_js.append(js)
+        # 父类按脚本原文认是哪一种等待；限定了范围的脚本换回原样再交给它
+        return super().wait_for_function(
+            js.replace(MokaAdapter._LEGACY_LIST_CARD_SEL, MokaAdapter._CARD_SEL),
+            arg=arg, timeout=timeout, polling=polling)
+
+
+class _Handle:
+    def __init__(self, value):
+        self._value = value
+
+    def json_value(self):
+        return self._value
+
+
+class _RoutePage:
+    """够 _open_route 用的替身：列表区和右栏分开，页面脚本 / 选择器问到哪个范围就按哪个范围答。"""
+
+    def __init__(self, list_hrefs, sidebar_hrefs, body_text=""):
+        self.list_hrefs, self.sidebar_hrefs, self.body_text = list(list_hrefs), list(sidebar_hrefs), body_text
+        self.opened = []
+
+    def _visible(self, scoped):
+        return self.list_hrefs if scoped else self.list_hrefs + self.sidebar_hrefs
+
+    def goto(self, url, wait_until=None, timeout=None):
+        self.opened.append(url)
+        return _Resp(SITE_WIDE_DOC)
+
+    def wait_for_function(self, js, arg=None, timeout=None, polling=None):
+        if self._visible(MokaAdapter._LEGACY_LIST_CARD_SEL in js):
+            return _Handle("cards")
+        markers, _closed = arg
+        if any(m in self.body_text for m in markers):
+            return _Handle("empty")
+        raise _Timeout("wait_for_function timed out")
+
+    def wait_for_timeout(self, ms):
+        pass
+
+    def eval_on_selector_all(self, sel, js):
+        return [{"href": h, "text": f"岗{h}"}
+                for h in self._visible(sel == MokaAdapter._LEGACY_LIST_CARD_SEL)]
+
+
+class MokaListFilterTest(unittest.TestCase):
+    """source_url 的 hash 里带门户自己的筛选时：只开那一个路由、只读列表区、分母不用整站总数。
+
+    起因（2026-10-12）：麦当劳社招门户自报 58,187 岗、98.5% 是门店岗，要的只是「管培」筛出来的 118 条。
+    """
+
+    SIDEBAR = [f"#/job/side_{i}" for i in range(5)]
+
+    def _filtered(self):
+        a = MokaAdapter()
+        a._own_base = SOURCE
+        a._plan_routes(FILTERED)
+        return a
+
+    def test_filter_is_read_from_the_source_url_hash(self):
+        cases = {
+            SOURCE: "",
+            SOURCE + "#/jobs": "",
+            SOURCE + "#/jobs?page=3": "",                      # 只有翻页位置，不是筛选
+            SOURCE + "#/jobs?keyword=": "",                    # 空值
+            SOURCE + "#/job/0b9d-uuid": "",                    # 岗位详情链接
+            SOURCE + "#/campus/jobs?zhineng=1": "",            # 只认验证过的 #/jobs
+            FILTERED: FILTER_ROUTE,
+            SOURCE + "#/jobs?zhineng=15771&page=2": "#/jobs?zhineng=15771",
+            SOURCE + "#/jobs?page=1&zhineng=0": "#/jobs?zhineng=0",   # 「其他」那一档的 id 就是 0
+            SOURCE + "#/jobs?department=%5B65308%2C65314%5D&page=1": "#/jobs?department=%5B65308%2C65314%5D",
+            SOURCE + "#/jobs?zhineng=15771&keyword=%E7%AE%A1%E5%9F%B9": "#/jobs?zhineng=15771&keyword=%E7%AE%A1%E5%9F%B9",
+        }
+        for url, want in cases.items():
+            self.assertEqual(_moka_list_filter(url), want, url)
+        self.assertEqual(_moka_list_filter(None), "")
+
+    def test_filtered_source_opens_only_its_own_route(self):
+        a = MokaAdapter()
+        self.assertEqual(a._plan_routes(FILTERED), (FILTER_ROUTE,))
+        self.assertEqual(a._card_sel, MokaAdapter._LEGACY_LIST_CARD_SEL)
+        # 同一个 adapter 实例接着抓不带筛选的源，要回到原样（不能把上一条源的范围带过去）
+        self.assertEqual(a._plan_routes(SOURCE), MokaAdapter._routes)
+        self.assertEqual(a._card_sel, MokaAdapter._CARD_SEL)
+        self.assertEqual(a._list_filter, "")
+
+    def test_page_scripts_count_cards_in_the_same_scope(self):
+        """等列表 / 等翻页 / 等首屏的三段页面脚本数的岗位卡，要和 Python 这头读的是同一个范围。"""
+        a = self._filtered()
+        plain = MokaAdapter()
+        for js in (MokaAdapter._READY_JS, MokaAdapter._TURNED_JS, MokaAdapter._FIRST_PAGE_JS):
+            self.assertEqual(js.count(MokaAdapter._CARD_SEL), 1, "脚本里数岗位卡的选择器要能被 _scoped 找到")
+            self.assertEqual(a._scoped(js).count(MokaAdapter._LEGACY_LIST_CARD_SEL), 1)
+            self.assertIs(plain._scoped(js), js)
+
+    def test_sidebar_jobs_are_not_collected_on_a_filtered_source(self):
+        pages = _pages(2, rows=15)
+        a = self._filtered()
+        page = _FilteredPage(pages, ["1", "2"], legacy=True, sidebar=self.SIDEBAR)
+        cards = a._collect_all_pages(page)
+        _finish(a, cards)
+        self.assertEqual({c["href"] for c in cards}, {h for row in pages for h in row})
+        self.assertTrue(a.fetch_complete)
+        self.assertEqual(a.reported_total, 30)
+        self.assertEqual(len(page.waited_js), 1)
+        self.assertIn(MokaAdapter._LEGACY_LIST_CARD_SEL, page.waited_js[0])
+        # 对照：同一张页面按不带筛选的源去读，右栏那 5 张是会被收进来的——上面的 30 不是替身本来就不给
+        plain = MokaAdapter()
+        plain_cards = plain._collect_all_pages(_FilteredPage(pages, ["1", "2"], legacy=True, sidebar=self.SIDEBAR))
+        self.assertEqual(len(plain_cards), 35)
+
+    def test_empty_filtered_list_is_zero_jobs_not_the_sidebar(self):
+        """筛出 0 条时列表区只有空态文案，右栏照样挂着 5 个岗（2026-10-12 麦当劳门户搜「工程师」实读）。"""
+        page = _RoutePage([], self.SIDEBAR, body_text="职位筛选 搜索职位 尚无任何相关职位 最新职位")
+        self.assertEqual(self._filtered()._open_route(page, FILTERED), ("empty", []))
+        self.assertEqual(page.opened, [FILTERED])
+        plain = MokaAdapter()
+        plain._own_base = SOURCE
+        state, cards = plain._open_route(page, SOURCE + "#/jobs")
+        self.assertEqual((state, len(cards)), ("cards", 5))
+
+    def test_filtered_list_that_never_renders_is_an_error_not_zero_jobs(self):
+        """列表区既没岗位卡也没空态（门户换了版式 / 没渲染出来）：不能拿右栏那几张顶数，也不能安静记 0 岗。"""
+        page = _RoutePage([], self.SIDEBAR, body_text="最新职位")
+        with self.assertRaises(_Timeout):
+            self._filtered()._open_route(page, FILTERED)
+
+    def test_filtered_list_reads_only_its_own_cards(self):
+        listed = [f"#/job/list_{i}" for i in range(15)]
+        state, cards = self._filtered()._open_route(_RoutePage(listed, self.SIDEBAR), FILTERED)
+        self.assertEqual((state, [c["href"] for c in cards]), ("cards", listed))
+
+    def test_site_wide_total_is_not_the_denominator_of_a_filtered_list(self):
+        pages = _pages(7, rows=15) + [[f"#/job/7_{i}" for i in range(13)]]   # 118 条 = 7 整页 + 末页 13 条
+        numbers = ["1", "2", "3", "4", "5", "8"]
+        a = self._filtered()
+        a._open_route(_RoutePage(pages[0], self.SIDEBAR), FILTERED)          # 主文档里写着整站 58,187
+        self.assertIsNone(a._portal_total)
+        cards = a._collect_all_pages(_FilteredPage(pages, numbers, legacy=True, sidebar=self.SIDEBAR))
+        _finish(a, cards)
+        self.assertEqual((len(cards), a.reported_total, a.fetch_complete, a.coverage_stop_reason),
+                         (118, 118, True, None))
+        # 对照：不带筛选的源读同一份主文档，整站总数照旧是分母
+        plain = MokaAdapter()
+        plain._own_base = SOURCE
+        plain._open_route(_RoutePage(pages[0], self.SIDEBAR), SOURCE + "#/jobs")
+        self.assertEqual(plain._portal_total, 58187)
 
 
 if __name__ == "__main__":
