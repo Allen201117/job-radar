@@ -375,6 +375,42 @@ def _parse_moka_card(text: str):
     return location, title
 
 
+# 卡片上的发布日期 → posted_at。只认「该在的位置上、整行就是发布日期」的那一行，别处出现的日期一律不认：
+#   新版 / 英文门户：标题后面第一行（「发布于 2026-10-09」/「Posted on 2026-10-10」）；
+#   老版：卡片最后一行（「发布时间：2026-05-20」），且标题后面连它在内最多 3 行（标签行 + 地点行 + 发布时间）。
+# 2026-10-12 全量 417 条在用源、49,641 张卡片原文逐张量过：42,971 张有发布行（三种写法 36,222 / 201 / 6,548），
+# 全部落在这两个位置、整行匹配、都是合法日期（2018~2026 年，没有晚于抓取日的），没有一张卡上有两条发布行。
+# 其余 6,670 张卡片上没写发布日期（76 个门户整站不展示：特斯拉社招 889 张、康龙化成校招 566 张…）→ None。
+# 🚫 不去正文里找：正文里的日期是截止日 / 报名时间 / 年龄要求（「截止日期：2024年08月29日」），不是发布日。
+_MOKA_NEW_POSTED_RE = re.compile(
+    "(?:" + "|".join(re.escape(p) for p in _MOKA_NEW_PUBLISHED_PREFIXES) + r")\s*(\d{4})-(\d{2})-(\d{2})")
+_MOKA_OLD_POSTED_RE = re.compile(r"发布时间[:：]\s*(\d{4})-(\d{2})-(\d{2})")
+
+
+def _moka_card_posted_at(text: str, today: Optional[date] = None) -> Optional[str]:
+    """Moka 岗位卡 innerText → 卡片上写的发布日期（YYYY-MM-DD）。卡片上没写、或认不出 → None，不猜。"""
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    if not lines:
+        return None
+    rest = _split_moka_title(lines)[1]
+    if not rest:
+        return None
+    m = _MOKA_NEW_POSTED_RE.fullmatch(rest[0])
+    if not m and len(rest) <= _MOKA_OLD_LAYOUT_MAX_LINES + 1:
+        m = _MOKA_OLD_POSTED_RE.fullmatch(rest[-1])
+    if not m:
+        return None
+    try:
+        posted = date(*(int(g) for g in m.groups()))
+    except ValueError:      # 「2026-02-30」这种不是日期
+        return None
+    # 发布日不可能晚于今天（留一天余量：卡片按浏览器所在时区渲染，可能比抓取机的日期早翻一天）。全量里没有这样的卡；
+    # 真出现了宁可留空：读侧「按发布时间排」会把它一直顶在最前、「最近 N 天发布」永远命中。
+    if posted > (today or date.today()) + timedelta(days=1):
+        return None
+    return posted.isoformat()
+
+
 _MOKA_INIT_DATA_RES = (
     re.compile(r'<input\b[^>]*?\bid="init-data"[^>]*?\bvalue="([^"]*)"'),
     re.compile(r'<input\b[^>]*?\bvalue="([^"]*)"[^>]*?\bid="init-data"'),
@@ -897,7 +933,7 @@ class MokaAdapter(PlaywrightAdapter):
                 summary=None,
                 jd_url=jd_url,
                 apply_url=jd_url,
-                posted_at=None,
+                posted_at=_moka_card_posted_at(c.get("text", "")),
             ))
         return out
 
