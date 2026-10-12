@@ -458,12 +458,18 @@ class MokaAdapter(PlaywrightAdapter):
     _EMPTY_MARKERS = ("暂无匹配职位", "尚无任何相关职位")
     # 租户门户被 Moka 关停时整页只有这一句（人福医药 / 观远数据 / 真格基金等，标题同文）。
     # 它既不是「0 岗」也不是「没渲染出来」，单独报出来，好让人去停用这条源。
-    _CLOSED_MARKER = "当前网页已关停"
+    # 英文那句是同一张页面的英文版：门户默认语言是英文的租户（Meshy 的 apply/taichi/148086）关停后给的是它，
+    # 带中文 Accept-Language 也一样。2026-10-11 之前只认中文 → 四个路由各等满 20 秒，记成
+    # 「job list not found on any route」，原因写错、每轮白等 80 秒。
+    # 关停文案同时看 <title>：它是服务端直接写进 HTML 的（httpx 读过中英两种关停页，标题都与那句话同文），
+    # 不依赖前端把那句话渲染出来；比对不分大小写（innerText 会跟着 CSS 的 text-transform 变）。
+    _CLOSED_MARKERS = ("当前网页已关停", "This website has been shut down")
     _READY_TIMEOUT_MS = 20000
     _READY_JS = ("([markers, closed]) => {"
                  " if (document.querySelectorAll(\"a[href*='#/job/']\").length > 0) return 'cards';"
                  " const t = (document.body && document.body.innerText) || '';"
-                 " if (t.includes(closed)) return 'closed';"
+                 " const low = (t + '\\n' + (document.title || '')).toLowerCase();"
+                 " if (closed.some(c => low.includes(c.toLowerCase()))) return 'closed';"
                  " return markers.some(m => t.includes(m)) ? 'empty' : false; }")
     # Moka 列表每页仅渲染 ~30 个岗位卡，其余在「sd-Pagination」分页组件后面（非 ant，非滚动加载）。
     # 不翻页只能拿首页，岗位多的租户被截断（如李宁 32/176、SHEIN 34/747）。逐页点「下一页」累加全量。
@@ -856,7 +862,7 @@ class MokaAdapter(PlaywrightAdapter):
         """
         self._note_portal_total(page.goto(url, wait_until="domcontentloaded", timeout=35000), url)
         handle = page.wait_for_function(self._READY_JS,
-                                        arg=[list(self._EMPTY_MARKERS), self._CLOSED_MARKER],
+                                        arg=[list(self._EMPTY_MARKERS), list(self._CLOSED_MARKERS)],
                                         timeout=self._READY_TIMEOUT_MS, polling=250)
         if handle.json_value() == "closed":
             return "closed", []
@@ -899,7 +905,8 @@ class MokaAdapter(PlaywrightAdapter):
                     last_route = route
                     if state == "closed":
                         # 整个门户关停，换 hash 路由也是同一页，不必再试
-                        raise RuntimeError(f"moka portal closed: page says「{self._CLOSED_MARKER}」")
+                        raise RuntimeError(
+                            "moka portal closed: page says「" + "」/「".join(self._CLOSED_MARKERS) + "」")
                     if state == "empty":
                         rendered_empty = True
                     if len(first) > best_first:

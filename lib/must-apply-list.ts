@@ -10,6 +10,8 @@ export interface MustApplyCompany {
   pattern: string;
   /** 同一家公司在库里的其它写法（ILIKE 模式，与 pattern 同语义）。见 mustApplyPatterns。 */
   aliases?: string[];
+  /** 名字里有这家的模式、但**不是这家**的写法（ILIKE 模式）。只在归属判定里生效，见 lib/must-apply-owner.ts。 */
+  excludes?: string[];
   parentPattern?: string;
   brandTokens?: string[];
 }

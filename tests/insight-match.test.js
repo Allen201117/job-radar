@@ -121,3 +121,114 @@ test("另一家公司仍不命中：品牌词残尾、末尾括号写着别的�
   assert.equal(M.companyMatches(profile("中国建筑"), "中国建筑科学研究院有限公司"), false);
   assert.equal(M.companyMatches(profile("中国银行"), "中国银行业协会"), false);
 });
+
+// ============================================================
+// 2026-10-11：门把不同公司放行的四处收紧。
+// 全集回放（1,725 个在招公司名 × 1,318 个画像）与逐对判定见
+// docs/reviews/2026-10-11-attribution-gate-and-must-apply-patterns.md。
+// ============================================================
+
+test("短名自己带英文时，多出来的英文是另一个名字，不是拼音尾巴（沃尔沃汽车 ≠ 沃尔沃集团）", () => {
+  // 归一后「沃尔沃 Volvo Group」= 沃尔沃volvo，是「沃尔沃volvocars」的前缀；多出的 cars 曾被当成拼音尾巴放行。
+  assert.equal(M.companyMatches(profile("沃尔沃 Volvo Group"), "沃尔沃 Volvo Cars"), false);
+  assert.equal(M.companyMatches(profile("沃尔沃 Volvo Cars"), "沃尔沃 Volvo Group"), false);
+  assert.equal(M.findCompanyProfile([profile("沃尔沃 Volvo Group")], "沃尔沃 Volvo Cars"), null);
+  // 短名是纯中文时，英文尾巴照旧算装饰；中文的招聘渠道后缀也照旧
+  assert.equal(M.companyMatches(profile("地平线"), "地平线 Horizon Robotics"), true);
+  assert.equal(M.companyMatches(profile("荣耀 Honor"), "荣耀 Honor 实习"), true);
+  assert.equal(M.companyMatches(profile("招商证券 CMS 校招"), "招商证券 CMS"), true);
+});
+
+test("「饮料」不是装饰词：东鹏（瓷砖卫浴）≠ 东鹏饮料", () => {
+  // 9-17 把「饮料」收进装饰词的依据是「东鹏饮料 = 东鹏」，而那条源当时就挂错了名（抓的是东鹏控股）。
+  assert.equal(M.companyMatches(profile("东鹏"), "东鹏饮料"), false);
+  assert.equal(M.companyMatches(profile("东鹏饮料"), "东鹏"), false);
+  // 同一批加进来的其它行业描述词不受影响
+  assert.equal(M.companyMatches(profile("蒙牛"), "蒙牛乳业"), true);
+  assert.equal(M.companyMatches(profile("极兔"), "极兔速递"), true);
+});
+
+test("登记过「不是同一家」的名字，门不放行（上海大华集团 ≠ 浙江大华股份）", () => {
+  const security = profile("大华股份 Dahua", ["浙江大华技术"]);
+  const estate = profile("大华集团");
+  assert.equal(M.companyMatches(security, "大华集团"), false);
+  assert.equal(M.companyMatches(security, "大华集团有限公司"), false);
+  assert.equal(M.companyMatches(estate, "大华股份 Dahua"), false);
+  assert.equal(M.companyMatches(estate, "浙江大华技术股份有限公司"), false);
+  // 其中一个画像没了，它的名字也不会落到另一家头上
+  assert.equal(M.findCompanyProfile([security], "大华集团"), null);
+  assert.equal(M.findCompanyProfile([estate], "大华股份 Dahua"), null);
+  assert.equal(M.findCompanyProfile([estate], "浙江大华技术股份有限公司"), null);
+  // 各自的名字照常认到自己
+  assert.equal(M.findCompanyProfile([security, estate], "大华集团").company, "大华集团");
+  assert.equal(M.findCompanyProfile([estate, security], "大华股份 Dahua").company, "大华股份 Dahua");
+  assert.equal(M.companyMatches(security, "浙江大华技术股份有限公司"), true);
+  assert.equal(M.companyMatches(security, "大华股份"), true);
+  assert.equal(M.companyMatches(estate, "大华集团有限公司"), true);
+  // 名字里有「大华」但不是这两家的，名单不管
+  assert.equal(M.companyMatches(estate, "大华银行（中国）有限公司"), false);
+});
+
+test("「不是同一家」名单逐条钉死：每条都要有依据，两边的标记词不能重叠", () => {
+  const registry = require("../lib/insight-distinct-companies.json");
+  assert.deepEqual(registry.map((entry) => entry.core), ["大华"]);
+  for (const entry of registry) {
+    assert.ok(Array.isArray(entry.sides) && entry.sides.length >= 2, `${entry.core}: 至少两边`);
+    const seen = new Set();
+    for (const side of entry.sides) {
+      assert.ok(typeof side.label === "string" && side.label.trim(), `${entry.core}: 每一边要写清是哪家公司`);
+      assert.ok(Array.isArray(side.markers) && side.markers.length, `${entry.core}: 每一边至少一个标记词`);
+      for (const marker of side.markers) {
+        assert.equal(marker, marker.toLowerCase(), `${entry.core}: 标记词写小写`);
+        assert.ok(!seen.has(marker), `${entry.core}: 标记词「${marker}」出现在两边`);
+        seen.add(marker);
+      }
+    }
+    for (const field of ["evidence", "verified_at"]) {
+      assert.ok(typeof entry[field] === "string" && entry[field].trim(), `${entry.core}.${field} 不能为空`);
+    }
+    assert.match(entry.verified_at, /^\d{4}-\d{2}-\d{2}$/);
+  }
+});
+
+test("精确优先：名字另有精确画像时，别的画像不认领（companyOwnsName）", () => {
+  const profiles = [profile("京东", ["JD", "京东集团"]), profile("京东科技")];
+  const index = M.buildExactProfileIndex(profiles);
+  // 门本身仍放行（「科技」是装饰词，腾讯科技（北京）= 腾讯 这类写法要靠它）
+  assert.equal(M.companyMatches(profiles[0], "京东科技"), true);
+  // 但京东科技有自己的画像 → 只归它
+  assert.equal(M.companyOwnsName(profiles[0], "京东科技", index), false);
+  assert.equal(M.companyOwnsName(profiles[1], "京东科技", index), true);
+  assert.equal(M.companyOwnsName(profiles[0], "京东集团", index), true);
+  // 没有精确画像的名字，仍按门归属
+  assert.equal(M.companyOwnsName(profiles[0], "京东（北京）", index), true);
+  assert.equal(M.companyOwnsName(profiles[1], "腾讯", index), false);
+  // 京东科技的画像没了：门照旧把它放给京东（母子关系是 9-17 定的设计，不在这次收紧范围）
+  assert.equal(M.companyOwnsName(profiles[0], "京东科技", M.buildExactProfileIndex([profiles[0]])), true);
+});
+
+test("ownedJobCount：别的画像精确登记的名字不计入本画像的在招数", () => {
+  const profiles = [profile("中国铁建"), profile("中国铁建国际集团有限公司"), profile("中国铁建投资集团有限公司")];
+  const index = M.buildExactProfileIndex(profiles);
+  const counts = [
+    { company: "中铁十七局集团有限公司（中国铁建）", job_count: 1 },
+    { company: "中国铁建国际集团有限公司", job_count: 33 },
+    { company: "中国铁建投资集团有限公司", job_count: 23 },
+    { company: "腾讯", job_count: 999 },
+  ];
+  // 改前是门放行求和 = 57；两家子公司各有画像，不该算到集团头上
+  assert.equal(M.ownedJobCount(profiles[0], counts, index), 1);
+  assert.equal(M.ownedJobCount(profiles[1], counts, index), 33);
+});
+
+test("精确优先遇上「不是同一家」：名单说是另一家的精确登记者，不能把名字占住", () => {
+  // 「大华股份」归一后只剩「大华」，精确登记它的是大华集团的画像；名单说它属于浙江大华那一边。
+  const security = profile("大华股份 Dahua", ["浙江大华技术"]);
+  const estate = profile("大华集团");
+  const index = M.buildExactProfileIndex([estate, security]);
+  assert.equal(M.companyOwnsName(security, "大华股份", index), true);
+  assert.equal(M.companyOwnsName(estate, "大华股份", index), false);
+  assert.equal(M.companyOwnsName(estate, "大华集团", index), true);
+  assert.equal(M.companyOwnsName(security, "大华集团", index), false);
+  assert.equal(M.ownedJobCount(security, [{ company: "大华股份", job_count: 7 }, { company: "大华集团", job_count: 51 }], index), 7);
+});
