@@ -108,7 +108,8 @@ test("当前排除清单逐条钉死", () => {
     ["中国中铁", ["%中铁物总%"]],                    // 中铁物总供应链科技集团（中国物流集团）5 个
     ["新东方", ["%新东方国际货柜%"]],                // 连云港新东方国际货柜码头（中远海运集团）6 个
   ]);
-  const overseasRows = Object.entries(overseasJson).flatMap(([, v]) => v).filter((entry) => entry.excludes);
+  const overseasRows = Object.entries(overseasJson).filter(([k]) => !k.startsWith("_")).flatMap(([, v]) => v)
+    .filter((entry) => entry.excludes);
   assert.deepEqual(overseasRows, []);
 });
 
@@ -124,6 +125,22 @@ test("排除与模式同形，且不会把这家自己的名字排掉", () => {
       }
     }
   }
+});
+
+// 2026-10-12（创始人同意）：药明康德只数自己。药明生物、药明合联是独立上市、各有招聘门户的公司，
+// 改前 `%药明%` 把它们的 1,299 个健康岗算进药明康德（药明康德自己 637 个）。库里药明康德的岗位名和源名只有下面两种。
+test("药明康德的模式收窄：药明生物、药明合联不再算进来", () => {
+  const owner = O.mustApplyOwnerResolver("domestic");
+  assert.equal(owner("药明康德"), "药明康德");
+  assert.equal(owner("药明康德 WuXi AppTec"), "药明康德");
+  assert.equal(owner("药明生物"), "");
+  assert.equal(owner("药明合联生物技术有限公司"), "");
+});
+
+test("并掉重复名额之后：那批岗归到留下的那一条", () => {
+  assert.equal(O.mustApplyOwnerResolver("domestic")("好未来（学而思）"), "好未来");
+  assert.equal(O.mustApplyOwnerResolver("overseas")("马士基 Maersk"), "Maersk");
+  assert.equal(O.mustApplyOwnerResolver("overseas")("Grab"), "Grab");
 });
 
 test("2026-10-11 收窄的三条模式：真名一个不少，别家不再命中", () => {

@@ -518,3 +518,121 @@ class CleanTitleTailTest(unittest.TestCase):
         job = self._normalize("有机合成研究员 - 西安", None)
         self.assertEqual(job["title"], "有机合成研究员 - 西安")
         self.assertEqual(job["location"], "西安")
+
+
+class StripStreetAddressTest(unittest.TestCase):
+    """地点字段是整段门牌地址时只留城市（2026-10-12）。
+
+    用例全部是 live 原文：workday 取自 2026-10-12 各租户列表接口的 locationsText，
+    Sweetgreen 取自香港库在招岗的 location 列。当时在招的门牌地址行：Target 4,078 / 三星 447 / 富达 73 /
+    Sweetgreen 33，洞察抽屉把它们的「热门城市」写成「1000、7000、900」。
+    """
+
+    ADDRESSES = [
+        # Target：门牌, 城市,州 邮编（州前面没空格）
+        ("1090 73rd Ave NE, Fridley,MN 55432-3407", "Fridley, MN"),
+        ("2250 Chemical Rd, Plymouth Meeting,PA 19462-1716", "Plymouth Meeting, PA"),
+        # Target：套间号 / 信箱号和城市之间没逗号（当时 2,007 个岗里 61 个是这种写法）
+        ("7000 Target Pkwy N, NCD-0375 Brooklyn Park, MN 55445", "Brooklyn Park, MN"),
+        ("6143 U S Highway 98, Ste 80 Hattiesburg, MS 39402-8533", "Hattiesburg, MS"),
+        ("8400 89th Ave N, Ste 410 TCPS-410 Brooklyn Park, MN 55445-1872", "Brooklyn Park, MN"),
+        ("1200 Towne Centre Blvd, SPC A, Provo, UT 84601-5947", "Provo, UT"),
+        # Target：门牌号前面带字母（靠末尾邮编认出是地址）；编号后面跟的是街名，不能当城市
+        ("G3515 Miller Rd, Flint,MI 48507-1273", "Flint, MI"),
+        ("N95 W 17707 Shady Ln, Menomonee Falls,WI 53051-8012", "Menomonee Falls, WI"),
+        # 三星：门牌, 城市, 州, 国家
+        ("12100 Samsung Blvd, Austin, TX, USA", "Austin, TX, USA"),
+        ("3655 N 1st St, San Jose, CA, USA", "San Jose, CA, USA"),
+        # 富达：州前面没逗号；中间夹一段套间号
+        ("245 Summer St, Boston MA", "Boston MA"),
+        ("1225 NEW YORK AVE NW, SUITE 1250B, Washington DC", "Washington DC"),
+        # 门牌号 / 楼层后面跟的词是街名、楼层，不是城市
+        ("12/F-13/F, The Bay Hub, 17 Kai Cheung Road, Kowloon Bay, Hong Kong", "Kowloon Bay, Hong Kong"),
+        ("6100 Center Dr., 6th FL, Los Angeles, CA, USA", "Los Angeles, CA, USA"),
+        ("19 Schooner Park, Crossways Business Park, DA2 6NW, Dartford, Kent", "Dartford, Kent"),
+        # 奥的斯 / 开利：站点编号打头、邮编单独一段或贴着国家
+        ("17 RUE LAMARTINE, TRAPPES - LAMARTINE, 78190, France", "TRAPPES - LAMARTINE, France"),
+        ("CAI19: UTEC-Huntington, 111 East Wayne Street, Fort Wayne, IN, 46802 USA", "Fort Wayne, IN, USA"),
+        ("ARG02 : Chiclana 3345, CABA, BUENOS AIRES", "CABA, BUENOS AIRES"),
+        ("1416 Avenue Carnot, 91300 Massy, France", "Massy, France"),
+        # Sweetgreen（greenhouse）：不带数字的套间号也属于门牌
+        ("1023 3rd Street, Suite C, San Francisco, CA 94158", "San Francisco, CA"),
+        ("3200 N Sepulveda Blvd, Space #E18, Manhattan Beach, CA 90266", "Manhattan Beach, CA"),
+        # 一岗多地：分号隔开的每一处各自处理
+        ("347 Post Rd, Westport, CT 06880; Greenwich, CT; New York, NY",
+         "Westport, CT; Greenwich, CT; New York, NY"),
+    ]
+
+    UNTOUCHED = [
+        "Suzhou Plant 2, Jiangsu, China",          # 城市在前、编号在后：截了丢的是城市
+        "CNSZH19, Shenzhen, 5th floor, Block A, China Merchants Economic and Trade Center",  # 马士基：编号, 城市, 楼层
+        "Tianjin (Konggang E10th Road), China",
+        "Arden Hills, MN, US, 55112",              # 城市后面挂个邮编不算地址（非 workday 源有 7,900 多行这种写法）
+        "Boise, ID, ID1",
+        "China, Shanghai, Shanghai, 200003",       # 首段没数字：不动（邮编留着无害）
+        "USA, North Carolina, Charlotte, 28273",
+        "1 New York Plaza",                        # 整条只有门牌，没有可留的城市
+        "5800 SOUTH CORPORATE PLACE",
+        "10 Marina Blvd, Tower 2",                 # 门牌之后没有不带数字的段
+        "Beijing;Shanghai",                        # 不是地址的多地写法逐字不变（连分号后的空格都不补）
+        "上海市-浦东新区",
+        "闵行,嘉定,宝山,浦东（陆家嘴、花木、三林等）",
+        "2 Locations",
+        "New York, NY",
+    ]
+
+    def test_keeps_only_the_locality(self):
+        for raw, expected in self.ADDRESSES:
+            with self.subTest(raw=raw):
+                self.assertEqual(normalizer.strip_street_address(raw), expected)
+
+    def test_non_address_locations_are_left_byte_for_byte(self):
+        for raw in self.UNTOUCHED:
+            with self.subTest(raw=raw):
+                self.assertEqual(normalizer.strip_street_address(raw), raw)
+
+    def test_clean_location_strips_before_alias_folding(self):
+        # 奥的斯香港办公室：截掉门牌后才折得成「香港」，城市筛选才筛得到
+        self.assertEqual(
+            normalizer.clean_location("12F-13F, The Bay Hub, 17 Kai Cheung Road, Kowloon Bay, Hong Kong"), "香港")
+        # 街名里带别的城市名：按城市段折，不按街名折
+        self.assertEqual(normalizer.clean_location("88 Beijing Road, Shanghai"), "上海")
+
+    def test_address_is_one_place_even_when_a_building_is_named_after_another_city(self):
+        # 奥的斯武汉办公室（2026-10-12 live 原文）：楼名叫 Hong Kong Center。按多地并列折会写成「香港/武汉」、国家判成香港。
+        raw = ("LOC3277: Room 3101-02, T1 Office Tower, Hong Kong Center, Wusheng Road, "
+               "Qiaokou District, Wuhan, Hubei, China")
+        self.assertEqual(normalizer.strip_street_address(raw),
+                         "Hong Kong Center, Wusheng Road, Qiaokou District, Wuhan, Hubei, China")
+        self.assertEqual(normalizer.clean_location(raw), "武汉")
+        job = normalizer.normalize(
+            RawJob(company="Otis", title="Engineer", location=raw, job_type=None, summary=None,
+                   jd_url="https://example.com/jobs/3"),
+            source_id="s", company="Otis", regions={"CN", "US"})
+        self.assertEqual((job["location"], job["country_code"], job["job_scope"]), ("武汉", "CN", "domestic"))
+        # 分号隔开的是几处地址，各算各的
+        self.assertEqual(normalizer.clean_location("100 Century Ave, Shanghai; 8 Finance St, Beijing"), "上海/北京")
+
+    def test_alias_city_found_only_in_the_dropped_part_is_kept(self):
+        # 截短后的「Lujiazui」认不出城市，整段地址认得出：不能因为截短让这个岗从「上海」筛选里消失
+        self.assertEqual(normalizer.clean_location("100 Shanghai Tower Rd, Lujiazui"), "上海")
+        # 两头都认不出城市别名的，照常只留城市段
+        self.assertEqual(normalizer.clean_location("1090 73rd Ave NE, Fridley,MN 55432-3407"), "Fridley, MN")
+
+    def test_country_falls_back_to_the_full_address_when_locality_alone_cannot_tell(self):
+        # 截短后只剩堂区名「Se」，判不出国家；normalize 退回原文（geo_basis），不按 source.regions 猜成境外
+        raw = RawJob(company="Acme", title="Analyst", location="1 Macau Tower Road, Se",
+                     job_type=None, summary=None, jd_url="https://example.com/jobs/1")
+        self.assertEqual(normalizer.strip_street_address(raw.location), "Se")
+        self.assertIsNone(normalizer.derive_country_code("Se"))
+        job = normalizer.normalize(raw, source_id="s", company="Acme", regions={"US"})
+        self.assertEqual(job["location"], "Se")
+        self.assertEqual((job["country_code"], job["job_scope"]), ("MO", "domestic"))
+
+    def test_target_store_address_end_to_end(self):
+        raw = RawJob(company="Target Corporation", title="Style Team Leader",
+                     location="3301 Highway 10 E, Moorhead, MN 56560-2516",
+                     job_type=None, summary=None, jd_url="https://example.com/jobs/2")
+        job = normalizer.normalize(raw, source_id="s", company="Target Corporation", regions={"CN", "US"})
+        self.assertEqual(job["location"], "Moorhead, MN")
+        self.assertEqual((job["country_code"], job["job_scope"]), ("US", "overseas"))

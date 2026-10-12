@@ -148,8 +148,9 @@ class MultiPlaceLocationTest(unittest.TestCase):
 
     def test_the_city_the_old_fold_picked_is_always_still_there(self):
         # 改前折成城市 A 的行，改后 A 必须还在（读侧按子串匹配，A 的用户不能因为这次改动看不到岗）。
+        # 例外只有一类：A 本来就折错了（「牡丹江市·西安区」的西安），见 test_clean_location_wrong_fold。
         for raw in ("北京市 广东·深圳市 上海市", "深圳市,广州市,惠州市,武汉市,苏州市,福州市", "Shanghai / Beijing",
-                    "黑龙江省·牡丹江市·西安区", "宁波杭州湾新区", "全国多地（北京、上海）", "Xiangyang, Hubei / Wuhan"):
+                    "全国多地（北京、上海）", "Xiangyang, Hubei / Wuhan"):
             with self.subTest(raw=raw):
                 old_city = normalizer.normalize_city(raw)
                 self.assertIn(old_city, normalizer.clean_location(raw).split("/"))

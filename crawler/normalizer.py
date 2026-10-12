@@ -17,6 +17,7 @@ from geo import (
     _GREATER_CHINA,
     _REJECTED_COUNTRY_CODES,
     _is_overseas_pinned,
+    cn_name_is_part_of_another_place,
     cn_place_province,
     derive_country_code,
     derive_job_scope,
@@ -266,6 +267,79 @@ def clean_title(title: str, *locations: Optional[str]) -> str:
         t = t[:last.start()]
 
 
+_HAS_DIGIT_RE = re.compile(r"\d")
+# 门牌打头：首段第一个词以数字开头（"1090 73rd Ave NE" / "12F-13F" / "46-056 Kamehameha Hwy"）。
+_HOUSE_NUMBER_LEAD_RE = re.compile(r"^\d")
+# 站点编号 + 冒号打头（奥的斯 / 开利："CAI19: UTEC-Huntington" / "ARG02 : Chiclana 3345"），冒号后面才是地址。
+_SITE_CODE_LEAD_RE = re.compile(r"^[A-Za-z]+\d\w*\s*:")
+# 邮编只认 5 位（美 / 德 / 法 / 西…，可带美式 -4 位）和 6 位（中 / 印 / 新）。
+# 4 位的不认：和门牌号、套间号（"Ste 2401"）分不开。
+_POSTCODE = r"(?:\d{5}(?:-\d{4})?|\d{6})"
+_POSTCODE_HEAD_RE = re.compile(rf"^{_POSTCODE}(?=\s|$)\s*")
+_POSTCODE_TAIL_RE = re.compile(rf"(?:^|(?<=\s)){_POSTCODE}$")
+_UNIT_WORDS = r"(?:suite|ste|unit|apt|spc|space|room|rm|floor|bldg|building)"
+# 不带数字的套间 / 单元号（"Suite C" / "Unit A" / "SPC A"）：同样属于门牌，不是城市。
+_UNIT_SEGMENT_RE = re.compile(rf"^{_UNIT_WORDS}\.?\s+\S+$", re.I)
+# 套间号 / 信箱号后面直接跟着城市、中间没逗号（Target "Ste 80 Hattiesburg" / "NCD-0375 Brooklyn Park"）。
+# 信箱号只认「字母-数字」这一种写法："17 Kai Cheung Road" / "26th Floor" / "T1 Office Tower" 后面那几个词
+# 是街名 / 楼层 / 楼名，不是城市。
+_UNIT_THEN_CITY_RE = re.compile(
+    rf"^(?:(?:{_UNIT_WORDS}\.?\s+#?[\w-]+|[A-Za-z]+-\d+)\s+)+(?P<city>\D+)$", re.I)
+
+
+def _is_street_level(segment: str) -> bool:
+    return bool(_HAS_DIGIT_RE.search(segment) or _UNIT_SEGMENT_RE.match(segment))
+
+
+def _without_postcode(segment: str) -> Optional[str]:
+    """「MN 55432-3407」→「MN」、「46802 USA」→「USA」、「78190」→「」；不是「邮编 ± 地名」返回 None。"""
+    for pattern in (_POSTCODE_TAIL_RE, _POSTCODE_HEAD_RE):
+        rest = pattern.sub("", segment).strip()
+        if rest != segment and not _HAS_DIGIT_RE.search(rest):
+            return rest
+    return None
+
+
+def strip_street_address(location: str) -> str:
+    """地点字段是整段门牌地址时，只留城市及其后面的部分；认不出就原样返回。
+
+    ❌ 现象（2026-10-11 香港库）：Target 4,078 个在招岗的地点是「1000 Nicollet Mall, Minneapolis,MN 55403-2542」
+       这类整段地址——对方在 ATS 里把「地点名」配成了门店地址（三星 / 富达 / 奥的斯 / 开利 / Sweetgreen 同样）。
+       洞察抽屉取第一段当城市，写出「主要在 1000、7000、900」。
+    ✅ 判据只看结构、不猜街道词：按逗号分段，**最后一个带数字的段**（门牌 / 楼层 / 信箱号）之后才是城市。
+       那一段若只是「邮编 ± 地名」（"MN 55432-3407" / "46802 USA" / "35107 Allendorf"），先去掉邮编再判。
+    ⚠️ 只有看得出「门牌在前、城市在后」才动，三种证据任一：首段以门牌号开头 / 首段是「站点编号:」/
+       最后一个带数字的段是邮编、且前面另有带数字的段。马士基「CNSZH19, Shenzhen, 5th floor, Block A, …」
+       「Suzhou Plant 2, Jiangsu, China」这类城市在前的写法一律不碰——截错了丢的是城市，宁可留着长地址。
+    ⚠️ 截完没剩下东西（"1 New York Plaza" 整条只有门牌）也原样返回。
+    国家 / 求职范围不受影响：normalize 用 geo_basis，截短后判不出国家时会退回原文。
+    """
+    if not _HAS_DIGIT_RE.search(location):
+        return location
+    if ";" in location:  # 一岗多地各自是一段地址（"347 Post Rd, Westport, CT 06880; Greenwich, CT"）
+        parts = [part.strip() for part in location.split(";") if part.strip()]
+        stripped = [strip_street_address(part) for part in parts]
+        return "; ".join(stripped) if stripped != parts else location
+    segments = [s.strip() for s in location.split(",")]
+    if len(segments) < 2:
+        return location
+    numbered = [i for i, s in enumerate(segments) if _HAS_DIGIT_RE.search(s)]
+    # 邮编要另有一段带数字的门牌作伴才算地址的证据：「Arden Hills, MN, US, 55112」只是城市后面挂了邮编，不动。
+    bare = _without_postcode(segments[numbered[-1]]) if len(numbered) > 1 else None
+    if bare is not None:
+        segments[numbered[-1]] = bare
+    elif not (_HOUSE_NUMBER_LEAD_RE.match(segments[0]) or _SITE_CODE_LEAD_RE.match(segments[0])):
+        return location
+    # max() 不会取空：去掉邮编的那条路要求另有一段带数字，另一条路首段自己就带数字。
+    last_street = max(i for i, s in enumerate(segments) if _is_street_level(s))
+    tail = [s for s in segments[last_street + 1:] if s]
+    # 只看首段之后的段：首段「G3515 Miller Rd」里编号后面跟的是街名。
+    glued = _UNIT_THEN_CITY_RE.match(segments[last_street]) if last_street > 0 else None
+    if glued:
+        tail.insert(0, glued.group("city").strip())
+    return ", ".join(tail) if tail else location
+
+
 # 多地并列写进库的连接符：与标题城市兜底（geo.title_city_location「连云港/苏州」）同一种写法，
 # 读侧（/today 城市门、/jobs 城市筛选、全文检索的相邻双字）早就按它逐个城市匹配。
 MULTI_PLACE_SEP = "/"
@@ -337,8 +411,42 @@ def location_place_keys(location: Optional[str]) -> set:
     return {key for key, _ in _scan_places(location)}
 
 
+# 折叠时哪些拼音 / 英文别名不算数：只排除「看得出是别的词或路名的一部分」的，其余照认（2026-10-12 live 逐条核过）。
+# 比上面认「并列地点」的 _LATIN_CITY_RE 松——那条是往结果里加城市，要两边都是空格 / 标点；这条是不把原来折对的改丢：
+#   · 前面粘着字母的不认（「C|hangzhou」常州、「Z|hangzhou」漳州、「Tong|xian|g」桐乡），驼峰的大写处除外
+#     （workday 把几段粘着写：「ChinaShandong|Qingdao|266000」）；
+#   · 后面跟着小写字母的不认（「Xian|yue」）；跟着大写字母的是粘写，照认（「Xian|China」「Suzhou|Jiangsu」「SINGAPORE|UNITS」）；
+#   · xian 后面是 g / yang / ning / tao / ju / you 的不认，不分大小写：xiang… 是另一个音节（湘潭 / 襄阳 / 桐乡），
+#     XianYang 咸阳、XianNing 咸宁、XianTao 仙桃、XianJu 仙居、XianYou 仙游；
+#   · 后面是路名的不认：Road / Street / Avenue / Dadao 这类整词，或「方位词 + St / Lu / Jie」（「Nanjing Xi Lu」）。
+#     光秃秃的 St / Lu / Jie 不算证据（「Shanghai, St. Regis」）。
+# 要喂原文：大小写是判断边界的依据。
+_ROAD_DIRECTION = r"(?:east|west|north|south|middle|central|e|w|n|s|dong|xi|nan|bei|zhong)"
+_LATIN_FOLD_RE = re.compile(
+    r"(?:(?<![A-Za-z])|(?<=[a-z])(?=[A-Z]))(?i:"
+    + "|".join(re.escape(a) + (r"(?!g|yang|ning|tao|ju|you)" if a == "xian" else "")
+               for a in sorted(_LATIN_CITY_ALIASES, key=len, reverse=True))
+    + r")(?![a-z])"
+    r"(?!(?i:(?:[\s,]+" + _ROAD_DIRECTION + r")?[\s,]+(?:road|rd|street|avenue|ave|boulevard|blvd|dadao|dajie)"
+    r"|[\s,]+" + _ROAD_DIRECTION + r"[\s,]+(?:st|lu|jie))(?![A-Za-z]))"
+)
+
+
+def _fold_city(loc: str) -> str:
+    """入库清洗用的折叠：与 normalize_city 同一张别名表、同一个顺序，只是拼音 / 英文城市名要过 _LATIN_FOLD_RE
+    （「Changzhou」里的 hangzhou、「Xinxiang」里的 xian 不算，后面跟着 Road 的是路名）。中文别名、「remote」仍按子串。"""
+    key = loc.lower()
+    if key in CITY_ALIASES:
+        return CITY_ALIASES[key]
+    latin = {m.group().lower() for m in _LATIN_FOLD_RE.finditer(loc)}
+    for alias, city in CITY_ALIASES.items():
+        if (alias in latin) if alias in _LATIN_CITY_ALIASES else (alias in key):
+            return city
+    return loc
+
+
 def clean_location(location: Optional[str]) -> Optional[str]:
-    """清洗地点字段：单个地点折成别名表里的城市名；多地并列的逐个折、用「/」连起来。
+    """清洗地点字段：整段门牌地址先截成城市段；单个地点折成别名表里的城市名；多地并列的逐个折、用「/」连起来。
 
     🚫 多地并列不许整串折成一个城市（2026-10-11）：
     ❌ `normalize_city` 是子串折叠——串里只要出现别名表里的城市就整串换成它，换成哪个取决于别名表顺序：
@@ -347,9 +455,20 @@ def clean_location(location: Optional[str]) -> Optional[str]:
        所以一个在北京 / 深圳 / 上海都招的岗只有北京的用户看得到。
     ✅ 只动「会被折叠、且串里并列写着不止一个地方」的行：
        · 串里没有别名表里的城市 → 原样返回（改前就不折，每个城市都匹配得上）；
-       · 只写了一个地方（含上下级写法）→ 与改前逐字相同；
-       · 改前折出来的那个城市不在认出来的地点里（「牡丹江市·西安区」折成西安这类）→ 也与改前相同，
-         保证改前匹配得上的城市改后一定还匹配得上。那一类是折错了城市，另案处理，别在这里顺手改。
+       · 只写了一个地方（含上下级写法）→ 与改前逐字相同。
+
+    🚫 串里有别名城市的那几个字，不等于岗位在那个城市（2026-10-12）：
+    ❌ 「黑龙江省·牡丹江市·西安区」→ 西安、「宁波杭州湾新区」→ 杭州、「Changzhou, Jiangsu, China」→ 杭州
+       （hangzhou 是 changzhou 的子串）、「Beijing East Road, Shanghai」→ 北京：岗位被写成一个它不在的城市，
+       推给了不在那里的人，真正所在城市的人反而被硬拒。
+    ✅ 只在能证明折错的时候纠正，证明不了就维持折叠（不把原来对的城市改丢）：
+       · 拼音 / 英文别名：看得出是别的词或路名的一部分的不认（_LATIN_FOLD_RE）；认不出城市的英文串原样入库，
+         国家照样判得出；
+       · 中文：严格识别（location_places）在串里认出了别的地方、没认出折出来的城市，而且那几个字每一处都只是
+         别的地名 / 路名的一部分（geo.cn_name_is_part_of_another_place：后面是区 / 路 / 街、跨在别的地名上、
+         紧跟在另一个城市后面的「X湾」）→ 用严格识别的结果（牡丹江市 / 宁波）；
+       · 其余照旧。严格识别只在段首和省名后面认地名，它没认出来不等于折错：「华东区上海」「四川天府新区成都片区」
+         「可在北京 天津 青岛」「广州深圳等地」里的上海 / 成都 / 北京 / 深圳都是真的。
     """
     if not location:
         return None
@@ -357,13 +476,43 @@ def clean_location(location: Optional[str]) -> Optional[str]:
     loc = re.sub(r"\s+", " ", loc)
     if loc.lower() in ("unknown", "multiple locations", "various", ""):
         return None
-    folded = normalize_city(loc)
+    locality = strip_street_address(loc)
+    if locality == loc:
+        return _fold_cities(loc)
+    city = _fold_address(locality)
+    if city == locality:
+        # 截掉门牌后认不出城市别名、整段地址却认得出（城市名只写在街名 / 楼名里）：保住原先折出来的城市，
+        # 不让一个本来筛得到「上海」的岗因为截短而筛不到。
+        whole = _fold_address(loc)
+        if whole != loc:
+            return whole
+    return city
+
+
+def _fold_cities(loc: str) -> str:
+    """别名折叠（单个地点 / 多地并列 / 折错纠正），规则见 clean_location 的说明。"""
+    folded = _fold_city(loc)
     if folded == loc:
         return folded
     places = location_places(loc)
-    if len(places) > 1 and folded in places:
+    if folded in places:
+        return MULTI_PLACE_SEP.join(places)       # 只写了一个地方时就是 folded 本身
+    if places and folded not in _NON_PLACE_ALIAS_TARGETS and cn_name_is_part_of_another_place(loc, folded):
         return MULTI_PLACE_SEP.join(places)
     return folded
+
+
+def _fold_address(text: str) -> str:
+    """一段门牌地址的别名折叠：地址只是一个地点，写到的城市不止一个时以最后那个为准。
+
+    地址从小写到大（楼 → 路 → 区 → 城市），前面出现的城市名是楼名 / 路名：奥的斯武汉办公室在
+    「Hong Kong Center, Wusheng Road, Qiaokou District, Wuhan, Hubei, China」，按多地并列折会写成「香港/武汉」、
+    国家判成香港。分号隔开的是几处地址（一岗多地），照常按多地折。
+    """
+    if ";" in text:
+        return _fold_cities(text)
+    places = location_places(text)
+    return places[-1] if places else _fold_city(text)
 
 
 def keeps_every_place(location: str, places) -> bool:
