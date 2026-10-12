@@ -434,6 +434,10 @@ class WorkdayAdapter(BaseAdapter):
             posts = [p for p in raw if isinstance(p, dict)]
             fresh = {k for k in map(_post_key, posts) if k and k not in query_seen}
             if not fresh:
+                if raw and declared is not None and page * _PAGE_SIZE < declared:
+                    # 还没翻到它自报的末尾，这一页却全是见过的岗：对方把同一页回了两次，不是绕回。
+                    # 接着往下翻（旧实现也会接着翻），别在这里收尾把后面的岗丢了。
+                    continue
                 ended = True   # 空页，或翻过末尾被绕回了第一页
                 break
             query_seen |= fresh

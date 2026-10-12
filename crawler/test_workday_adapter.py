@@ -486,7 +486,8 @@ class WorkdayWrapAroundTest(_FakeWorkdayCase):
 
 
     def test_repeated_page_mid_listing_is_not_reported_complete(self):
-        # 对方中途把同一页回了两次（缓存 / 抖动）：「这一页没有新岗」会被当成收尾，但翻到的条数明显少于它自报的 total
+        # 对方中途把同一页回了两次（缓存 / 抖动）：那一页没有新岗，但还没到它自报的末尾——
+        # 不能当成收尾（后面 40 条照拿，旧实现也拿得到），少掉的那一页如实记没抓全
         server = _FakeWorkday([_job(i) for i in range(100)])
         orig_post = server.post
 
@@ -499,7 +500,7 @@ class WorkdayWrapAroundTest(_FakeWorkdayCase):
         server.post = post
         with self.assertLogs("adapters.workday", level="WARNING"):
             adapter, got = self._fetch(server)
-        self.assertEqual(len(got), 40)
+        self.assertEqual(len(got), 80)
         self.assertFalse(adapter.fetch_complete)
 
     def test_non_dict_item_does_not_make_a_full_page_look_like_the_last_one(self):
