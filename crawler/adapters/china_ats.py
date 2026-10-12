@@ -435,6 +435,20 @@ def _moka_portal_total(document_html: str) -> Optional[int]:
     return None
 
 
+def _moka_list_filter(source_url: str) -> str:
+    """source_url 的 hash 里带的列表筛选 → 要打开的路由「#/jobs?<筛选>」；没带筛选返回空串。
+
+    写法就是门户自己选完筛选项后地址栏里的那一段，原样用、不重新编码（2026-10-12 在麦当劳老版门户上逐项点出来的：
+    `zhineng=<职能 id>`、`department=[id,id]`、`keyword=<词>`）。`page=N` 是翻页位置不是筛选，去掉后从第 1 页开始。
+    """
+    path, _, query = (source_url or "").partition("#")[2].partition("?")
+    if path != "/jobs":
+        return ""
+    kept = [part for part in query.split("&")
+            if "=" in part and part.split("=", 1)[0] != "page" and part.split("=", 1)[1]]
+    return "#/jobs?" + "&".join(kept) if kept else ""
+
+
 class MokaAdapter(PlaywrightAdapter):
     """Moka 招聘（{tenant}.mokahr.com / app.mokahr.com）—— 大量消费/互联网/游戏私企在用。
 
@@ -442,6 +456,8 @@ class MokaAdapter(PlaywrightAdapter):
     故改为**渲染后解析 DOM**：页面 JS 解密后岗位卡渲染为 `a[href*='#/job/{uuid}']`，
     per-job 详情链接 = `{base}#/job/{uuid}`（hash 路由，可直达岗位）。
     source_url 填某公司 Moka 公开招聘页（如 https://app.mokahr.com/apply/shein/2933）。
+    只要门户里的一部分岗时，把门户自己的筛选写在 source_url 的 hash 里
+    （…/social-recruitment/mcdchina/4610#/jobs?keyword=…，见 _moka_list_filter 与 _LEGACY_LIST_CARD_SEL）。
     """
 
     name = "moka"
@@ -464,6 +480,17 @@ class MokaAdapter(PlaywrightAdapter):
     # 关停文案同时看 <title>：它是服务端直接写进 HTML 的（httpx 读过中英两种关停页，标题都与那句话同文），
     # 不依赖前端把那句话渲染出来；比对不分大小写（innerText 会跟着 CSS 的 text-transform 变）。
     _CLOSED_MARKERS = ("当前网页已关停", "This website has been shut down")
+    # 岗位卡的选择器。下面几段页面脚本里写的也是这一串（_scoped 按它替换），改这里要一起改。
+    _CARD_SEL = "a[href*='#/job/']"
+    # 带筛选的源（source_url 的 hash 里写了筛选，见 _moka_list_filter）只读列表区：
+    # 老版门户的页面是两栏，列表和翻页器在 .col-xs-9 里，右栏「最新职位」（.col-xs-3，5 张）不受筛选影响。
+    # 2026-10-12 麦当劳门户实测：筛出 0 条时列表区只有一句「尚无任何相关职位」，右栏照样挂着 5 个门店岗——
+    # 不限定列表区，每晚会把这 5 个筛选之外的岗收进来。
+    # ⚠️ 筛选只在老版门户（websiteVersion=1）上验过。新版门户没有这个两栏结构，带筛选的源会等不到列表区的岗位卡、
+    #    记成失败——这是有意的：没验过的门户上宁可报错，也不把整站的岗当成筛选结果收进来。
+    _LEGACY_LIST_CARD_SEL = ".col-xs-9 a[href*='#/job/']"
+    _card_sel = _CARD_SEL     # 这条源读哪里的岗位卡（fetch 开头按有没有筛选定）
+    _list_filter = ""         # 这条源要打开的筛选路由（没有筛选为空串）
     _READY_TIMEOUT_MS = 20000
     _READY_JS = ("([markers, closed]) => {"
                  " if (document.querySelectorAll(\"a[href*='#/job/']\").length > 0) return 'cards';"
@@ -604,6 +631,8 @@ class MokaAdapter(PlaywrightAdapter):
         「别名不同」本身不够：租户常同时开着几个门户，别名也可能指向没配置过的空模板（华虹 74008）。
         所以要在同一个浏览器里把别名门户打开看一眼——那边也是空的，就当本门户只是休眠，照常记 0 岗。
         打不开 / 看不清一律不报（宁可漏报，不把休眠记成失败）。"""
+        if self._list_filter:
+            return  # 带筛选的源：筛出 0 条只说明这一类岗现在没有，不说明门户换了期
         m = self._CAMPUS_PORTAL_RE.match(source_url or "")
         if not m:
             return  # 不是带 id 的校招门户（社招 / 无 id 别名本身就跟着当前期走）
@@ -637,6 +666,10 @@ class MokaAdapter(PlaywrightAdapter):
         except Exception:
             pass
 
+    def _scoped(self, js: str) -> str:
+        """页面脚本里数岗位卡的那个选择器，换成这条源该读的范围（带筛选的源只数列表区，其余原样）。"""
+        return js if self._card_sel == self._CARD_SEL else js.replace(self._CARD_SEL, self._card_sel)
+
     def _active_page_text(self, page) -> str:
         """翻页器上当前页的页码文字；读不到返回空串（_TURNED_JS 此时只看卡片换没换）。"""
         try:
@@ -649,7 +682,8 @@ class MokaAdapter(PlaywrightAdapter):
         """点完「下一页」后等列表渲染回来。返回等到没有；没等到不抛，由调用方按「这一页没翻过去」处理。"""
         try:
             page.wait_for_function(
-                self._TURNED_JS, arg=[self._next_sel, self._active_page_sel, prev_cards, prev_active],
+                self._scoped(self._TURNED_JS),
+                arg=[self._next_sel, self._active_page_sel, prev_cards, prev_active],
                 timeout=self._TURN_TIMEOUT_MS, polling=200)
         except Exception as e:  # noqa: BLE001 —— 超时是这里的正常分支之一
             if "Timeout" not in type(e).__name__:
@@ -666,7 +700,8 @@ class MokaAdapter(PlaywrightAdapter):
         if not total:
             return
         try:
-            page.wait_for_function(self._FIRST_PAGE_JS, arg=[self._next_sel, total - self._PORTAL_SHORT_MIN],
+            page.wait_for_function(self._scoped(self._FIRST_PAGE_JS),
+                                   arg=[self._next_sel, total - self._PORTAL_SHORT_MIN],
                                    timeout=self._FIRST_PAGE_TIMEOUT_MS, polling=250)
         except Exception as e:  # noqa: BLE001
             if "Timeout" not in type(e).__name__:
@@ -699,7 +734,7 @@ class MokaAdapter(PlaywrightAdapter):
         self._dismiss_cookie_banner(page)   # 翻页前先清场，否则首次点击就会被它挡住
         page_cap = self._page_cap or resolve_page_cap(self._rows_per_page, self._MAX_JOBS)
         for attempt in range(page_cap):
-            cards = page.eval_on_selector_all("a[href*='#/job/']", self._cards_js)
+            cards = page.eval_on_selector_all(self._card_sel, self._cards_js)
             before = len(union)
             upgraded = False
             fresh_titles = []   # 这一页新见到的岗的标题，喂给重复度刹车
@@ -843,7 +878,10 @@ class MokaAdapter(PlaywrightAdapter):
         """从本源主文档的响应体里记下门户自报的岗位总数。读不到就保持原值，绝不抛。
 
         只认本源自己的地址：校招换期检查会在同一个浏览器里打开别的门户，那边的总数不是这条源的分母。
-        只换 hash 的跳转是同文档导航，goto 返回 None，沿用第一次读到的值。"""
+        只换 hash 的跳转是同文档导航，goto 返回 None，沿用第一次读到的值。
+        带筛选的源不记：门户自报的是整站总数（麦当劳 58,187），不是筛选后那个列表的；分母退回翻页器的总页数。"""
+        if self._list_filter:
+            return
         if response is None or not self._own_base or url.split("#")[0] != self._own_base:
             return
         try:
@@ -861,14 +899,22 @@ class MokaAdapter(PlaywrightAdapter):
         渲染出来后仍等 wait_ms 再数卡：一是等整页卡片渲染齐，二是防「数据回来前先闪一下空态」。
         """
         self._note_portal_total(page.goto(url, wait_until="domcontentloaded", timeout=35000), url)
-        handle = page.wait_for_function(self._READY_JS,
+        handle = page.wait_for_function(self._scoped(self._READY_JS),
                                         arg=[list(self._EMPTY_MARKERS), list(self._CLOSED_MARKERS)],
                                         timeout=self._READY_TIMEOUT_MS, polling=250)
         if handle.json_value() == "closed":
             return "closed", []
         page.wait_for_timeout(self.wait_ms)
-        cards = page.eval_on_selector_all("a[href*='#/job/']", self._cards_js)
+        cards = page.eval_on_selector_all(self._card_sel, self._cards_js)
         return ("cards" if cards else "empty"), cards
+
+    def _plan_routes(self, source_url: str) -> tuple:
+        """这条源要试哪些列表路由，并定下读哪里的岗位卡。
+
+        带筛选的源只开筛选那一个路由、只读列表区：别的路由是不带筛选的整站列表，在那上面抓到的不是这条源要的岗。"""
+        self._list_filter = _moka_list_filter(source_url)
+        self._card_sel = self._LEGACY_LIST_CARD_SEL if self._list_filter else self._CARD_SEL
+        return (self._list_filter,) if self._list_filter else self._routes
 
     def fetch(self, source_url: str) -> str:
         from playwright.sync_api import sync_playwright
@@ -883,6 +929,7 @@ class MokaAdapter(PlaywrightAdapter):
         self._portal_total = None
         base = source_url.split("#")[0]
         self._own_base = base
+        routes = self._plan_routes(source_url)
         best: List[dict] = []
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
@@ -895,7 +942,7 @@ class MokaAdapter(PlaywrightAdapter):
                 rendered_empty = False
                 route_errors = []
                 last_route = None   # 页面当前停在哪个路由（且已渲染完）
-                for route in self._routes:
+                for route in routes:
                     last_route = None
                     try:
                         state, first = self._open_route(page, base + route)
@@ -918,7 +965,9 @@ class MokaAdapter(PlaywrightAdapter):
                     # ⚠️ 不许安静返回 0 岗：那会记成 success，2026-09-10 起 312 个源天天「0 岗成功」没人发现。
                     raise RuntimeError(
                         "moka job list not found on any route (no job cards, no empty state): "
-                        + ", ".join(route_errors))
+                        + ", ".join(route_errors)
+                        + ("；这条源带筛选，只读老版门户的列表区（.col-xs-9）——门户换了版式就读不到，到页面上核一下"
+                           if self._list_filter else ""))
                 if best_route is None:
                     # 渲染出了空态、一张卡都没有：先排除「我们指着一个已换期的旧门户」再认 0 岗。
                     self._raise_if_campus_portal_superseded(page, source_url)
