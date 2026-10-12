@@ -3,6 +3,8 @@ import unittest
 from unittest import mock
 
 import httpx
+
+import normalizer
 from adapters.workday import WorkdayAdapter
 
 
@@ -240,6 +242,117 @@ class WorkdayLooseUsFetchTest(unittest.TestCase):
         # trusted（在华）只有 3 个 < 25：原来会跑文本兜底，加了宽松通道之后必须照旧跑
         _, _, searched = self._run(cn_count=3)
         self.assertIn("United States", searched)
+
+
+class WorkdayLocationSourceTest(unittest.TestCase):
+    """地点用对方自己写的原文（locationsText），路径 slug 只当兜底（2026-10-12）。
+
+    ❌ 此前一律从 externalPath 的地点段还原：slug 把空白换成连字符、把逗号等标点删掉，还原时只能把每个
+       连字符都换成逗号。2026-10-11 香港库 54,099 个在招 workday 岗：10,657 个地点带空段（"US, , , California"）、
+       4,683 个以门牌号开头（Target "1000, Nicollet, Mall, MinneapolisMN, 55403, 2542"）；
+       「Hong, Kong」「New, York」「San, Jose」对不上城市筛选的 "hong kong" / "new york" / "san jose"，
+       香港 546、纽约 2,198、圣何塞 837、旧金山 677 个岗筛不出来。
+    用例里的 locationsText / externalPath 都是 2026-10-12 各租户列表接口的真实返回。
+    """
+
+    @staticmethod
+    def _post(seg, text):
+        return {"title": "T", "externalPath": f"/job/{seg}/T_1", "locationsText": text}
+
+    def test_own_text_wins_over_the_path_slug(self):
+        loc = WorkdayAdapter._post_location
+        self.assertEqual(loc(self._post("New-York-NY-USA", "New York, NY, USA")), "New York, NY, USA")
+        self.assertEqual(loc(self._post("Hong-Kong", "Hong Kong")), "Hong Kong")
+        self.assertEqual(loc(self._post("Spring-Texas-United-States-of-America",
+                                        "Spring, Texas, United States of America")),
+                         "Spring, Texas, United States of America")
+        # 逗号后面没空格的补上（Target "Fridley,MN"、马士基 "…America,Arizona,Mesa,85212"）
+        self.assertEqual(loc(self._post("1090-73rd-Ave-NE-FridleyMN-55432-3407",
+                                        "1090 73rd Ave NE, Fridley,MN 55432-3407")),
+                         "1090 73rd Ave NE, Fridley, MN 55432-3407")
+
+    def test_spaced_dash_is_a_level_separator(self):
+        loc = WorkdayAdapter._post_location
+        self.assertEqual(loc(self._post("US---Austin-TX", "US - Austin, TX")), "US, Austin, TX")
+        self.assertEqual(loc(self._post("USA---California--Irvine", "USA - California – Irvine")),
+                         "USA, California, Irvine")
+        # 词内的连字符不是分隔
+        self.assertEqual(loc(self._post("Mrfelden-Walldorf-Germany", "Mörfelden-Walldorf, Germany")),
+                         "Mörfelden-Walldorf, Germany")
+
+    def test_leading_country_code_still_resolves_after_dash_normalisation(self):
+        # Visa "JM - Remote - Jamaica"：不把短横换成逗号，geo 的「开头国别码 + 逗号」就认不出，
+        # 这个岗会按 source.regions 兜底判成国内。
+        raw = WorkdayAdapter().parse(json.dumps({
+            "_host": "https://visa.wd5.myworkdayjobs.com", "_site": "Visa",
+            "trusted_posts": [self._post("JM---Remote---Jamaica", "JM - Remote - Jamaica")], "text_posts": [],
+        }))[0]
+        job = normalizer.normalize(raw, source_id="s", company="Visa", regions={"CN", "US", "SG", "Remote"})
+        self.assertEqual((job["country_code"], job["job_scope"]), ("JM", "overseas"))
+
+    def test_country_codes_are_expanded_in_own_text_too(self):
+        loc = WorkdayAdapter._post_location
+        self.assertEqual(loc(self._post("Xiamen-CHN", "Xiamen, CHN")), "Xiamen, China")
+        self.assertEqual(loc(self._post("London-GBR", "London, GBR")), "London, United Kingdom")
+
+    def test_multi_location_post_borrows_text_from_a_sibling_with_the_same_slug(self):
+        posts = [
+            self._post("3655-N-1st-St-San-Jose-CA-USA", "2 Locations"),
+            self._post("3655-N-1st-St-San-Jose-CA-USA", "3655 N 1st St, San Jose, CA, USA"),
+            self._post("Budapest-Hungary", "3 Locations"),       # 这一批里没有别的岗自报过这个地点
+        ]
+        WorkdayAdapter._fill_primary_locations(posts)
+        loc = WorkdayAdapter._post_location
+        self.assertEqual(loc(posts[0]), "3655 N 1st St, San Jose, CA, USA")
+        self.assertEqual(loc(posts[1]), "3655 N 1st St, San Jose, CA, USA")
+        self.assertEqual(loc(posts[2]), "Budapest, Hungary")     # 借不到 → 回到路径还原
+
+    def test_sibling_choice_is_stable_when_spellings_differ(self):
+        def posts(order):
+            return [self._post("Fridley-MN", "2 Locations")] + [self._post("Fridley-MN", t) for t in order]
+        a, b = posts(["Fridley,MN", "Fridley, MN"]), posts(["Fridley, MN", "Fridley,MN"])
+        WorkdayAdapter._fill_primary_locations(a)
+        WorkdayAdapter._fill_primary_locations(b)
+        self.assertEqual(a[0]["_primary_location"], b[0]["_primary_location"])
+
+    def test_count_placeholder_never_becomes_the_location(self):
+        self.assertEqual(WorkdayAdapter._post_location(self._post("China-Beijing", "2 Locations")), "China, Beijing")
+        self.assertEqual(WorkdayAdapter._post_location(self._post("China-Beijing", "1 Location")), "China, Beijing")
+        self.assertEqual(WorkdayAdapter._post_location(self._post("China-Beijing", "")), "China, Beijing")
+
+    def test_store_address_ends_up_as_city_and_state(self):
+        raw = WorkdayAdapter().parse(json.dumps({
+            "_host": "https://target.wd5.myworkdayjobs.com", "_site": "targetcareers",
+            "trusted_posts": [self._post("1000-Nicollet-Mall-MinneapolisMN-55403-2542",
+                                         "1000 Nicollet Mall, Minneapolis,MN 55403-2542")],
+            "text_posts": [],
+        }))[0]
+        job = normalizer.normalize(raw, source_id="s", company="Target Corporation", regions={"CN", "US"})
+        self.assertEqual(job["location"], "Minneapolis, MN")
+        self.assertEqual((job["country_code"], job["job_scope"]), ("US", "overseas"))
+
+    def test_fetch_fills_primary_location_before_parse(self):
+        # fetch 里问国家 / 按地区过滤与 parse 必须看到同一个地点：补主地点要在 fetch 里做完并随 payload 带出去。
+        listing = [
+            self._post("12100-Samsung-Blvd-Austin-TX-USA", "2 Locations"),
+            {"title": "Other", "externalPath": "/job/12100-Samsung-Blvd-Austin-TX-USA/Other_2",
+             "locationsText": "12100 Samsung Blvd, Austin, TX, USA"},
+        ]
+
+        def post_side_effect(url, json=None, headers=None, timeout=None):
+            body = json or {}
+            if body.get("limit") == 1:
+                return _response(200, {"facets": [{"facetParameter": "locations", "values": [
+                    {"id": "us", "descriptor": "United States of America"}]}]})
+            if body.get("offset", 0) > 0 or body.get("searchText"):
+                return _response(200, {"jobPostings": []})
+            return _response(200, {"jobPostings": [dict(p) for p in listing]})
+
+        adapter = WorkdayAdapter()
+        adapter.regions = {"CN", "US"}
+        with mock.patch.dict("os.environ", {"CRAWL_DETAIL_CAP": "0"}),                 mock.patch("adapters.workday.httpx.post", side_effect=post_side_effect),                 mock.patch("adapters.workday.httpx.get", side_effect=AssertionError("地点已说清，不该问 detail")),                 mock.patch("adapters.workday.time.sleep"):
+            html = adapter.fetch("https://sec.wd3.myworkdayjobs.com/wday/cxs/sec/Samsung_Careers/jobs")
+        self.assertEqual({j.location for j in adapter.parse(html)}, {"12100 Samsung Blvd, Austin, TX, USA"})
 
 
 if __name__ == "__main__":

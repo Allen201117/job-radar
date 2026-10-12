@@ -264,6 +264,77 @@ def clean_title(title: str, *locations: Optional[str]) -> str:
         t = t[:last.start()]
 
 
+_HAS_DIGIT_RE = re.compile(r"\d")
+# 门牌打头：首段第一个词以数字开头（"1090 73rd Ave NE" / "12F-13F" / "46-056 Kamehameha Hwy"）。
+_HOUSE_NUMBER_LEAD_RE = re.compile(r"^\d")
+# 站点编号 + 冒号打头（奥的斯 / 开利："CAI19: UTEC-Huntington" / "ARG02 : Chiclana 3345"），冒号后面才是地址。
+_SITE_CODE_LEAD_RE = re.compile(r"^[A-Za-z]+\d\w*\s*:")
+# 邮编只认 5 位（美 / 德 / 法 / 西…，可带美式 -4 位）和 6 位（中 / 印 / 新）。
+# 4 位的不认：和门牌号、套间号（"Ste 2401"）分不开。
+_POSTCODE = r"(?:\d{5}(?:-\d{4})?|\d{6})"
+_POSTCODE_HEAD_RE = re.compile(rf"^{_POSTCODE}(?=\s|$)\s*")
+_POSTCODE_TAIL_RE = re.compile(rf"(?:^|(?<=\s)){_POSTCODE}$")
+_UNIT_WORDS = r"(?:suite|ste|unit|apt|spc|space|room|rm|floor|bldg|building)"
+# 不带数字的套间 / 单元号（"Suite C" / "Unit A" / "SPC A"）：同样属于门牌，不是城市。
+_UNIT_SEGMENT_RE = re.compile(rf"^{_UNIT_WORDS}\.?\s+\S+$", re.I)
+# 套间号 / 信箱号后面直接跟着城市、中间没逗号（Target "Ste 80 Hattiesburg" / "NCD-0375 Brooklyn Park"）。
+# 信箱号要既有字母又有数字、且不是序数词："17 Kai Cheung Road" / "26th Floor" 后面那几个词是街名 / 楼层，不是城市。
+_UNIT_THEN_CITY_RE = re.compile(
+    rf"^(?:(?:{_UNIT_WORDS}\.?\s+#?[\w-]+|(?!\d+(?:st|nd|rd|th)\b)(?=[\w-]*[A-Za-z])(?=[\w-]*\d)[\w-]+)\s+)+"
+    r"(?P<city>\D+)$", re.I)
+
+
+def _is_street_level(segment: str) -> bool:
+    return bool(_HAS_DIGIT_RE.search(segment) or _UNIT_SEGMENT_RE.match(segment))
+
+
+def _without_postcode(segment: str) -> Optional[str]:
+    """「MN 55432-3407」→「MN」、「46802 USA」→「USA」、「78190」→「」；不是「邮编 ± 地名」返回 None。"""
+    for pattern in (_POSTCODE_TAIL_RE, _POSTCODE_HEAD_RE):
+        rest = pattern.sub("", segment).strip()
+        if rest != segment and not _HAS_DIGIT_RE.search(rest):
+            return rest
+    return None
+
+
+def strip_street_address(location: str) -> str:
+    """地点字段是整段门牌地址时，只留城市及其后面的部分；认不出就原样返回。
+
+    ❌ 现象（2026-10-11 香港库）：Target 4,078 个在招岗的地点是「1000 Nicollet Mall, Minneapolis,MN 55403-2542」
+       这类整段地址——对方在 ATS 里把「地点名」配成了门店地址（三星 / 富达 / 奥的斯 / 开利 / Sweetgreen 同样）。
+       洞察抽屉取第一段当城市，写出「主要在 1000、7000、900」。
+    ✅ 判据只看结构、不猜街道词：按逗号分段，**最后一个带数字的段**（门牌 / 楼层 / 信箱号）之后才是城市。
+       那一段若只是「邮编 ± 地名」（"MN 55432-3407" / "46802 USA" / "35107 Allendorf"），先去掉邮编再判。
+    ⚠️ 只有看得出「门牌在前、城市在后」才动，三种证据任一：首段以门牌号开头 / 首段是「站点编号:」/
+       末尾带邮编且前面另有带数字的段。马士基「CNSZH19, Shenzhen, 5th floor, Block A, …」
+       「Suzhou Plant 2, Jiangsu, China」这类城市在前的写法一律不碰——截错了丢的是城市，宁可留着长地址。
+    ⚠️ 截完没剩下东西（"1 New York Plaza" 整条只有门牌）也原样返回。
+    国家 / 求职范围不受影响：normalize 用 geo_basis，截短后判不出国家时会退回原文。
+    """
+    if ";" in location:  # 一岗多地各自是一段地址（"347 Post Rd, Westport, CT 06880; Greenwich, CT"）
+        parts = [part.strip() for part in location.split(";") if part.strip()]
+        stripped = [strip_street_address(part) for part in parts]
+        return "; ".join(stripped) if stripped != parts else location
+    segments = [s.strip() for s in location.split(",")]
+    numbered = [i for i, s in enumerate(segments) if _HAS_DIGIT_RE.search(s)]
+    if len(segments) < 2 or not numbered:
+        return location
+    # 邮编要另有一段带数字的门牌作伴才算地址的证据：「Arden Hills, MN, US, 55112」只是城市后面挂了邮编，不动。
+    bare = _without_postcode(segments[numbered[-1]]) if len(numbered) > 1 else None
+    if bare is not None:
+        segments[numbered[-1]] = bare
+    elif not (_HOUSE_NUMBER_LEAD_RE.match(segments[0]) or _SITE_CODE_LEAD_RE.match(segments[0])):
+        return location
+    # 走到这里至少还有一段带数字：门牌 / 站点编号打头的是首段，靠邮编触发的是邮编之外的那一段。
+    last_street = max(i for i, s in enumerate(segments) if _is_street_level(s))
+    tail = [s for s in segments[last_street + 1:] if s]
+    # 只看首段之后的段：首段「G3515 Miller Rd」里编号后面跟的是街名。
+    glued = _UNIT_THEN_CITY_RE.match(segments[last_street]) if last_street > 0 else None
+    if glued:
+        tail.insert(0, glued.group("city").strip())
+    return ", ".join(tail) if tail else location
+
+
 def clean_location(location: Optional[str]) -> Optional[str]:
     """清洗地点字段。"""
     if not location:
@@ -272,7 +343,15 @@ def clean_location(location: Optional[str]) -> Optional[str]:
     loc = re.sub(r"\s+", " ", loc)
     if loc.lower() in ("unknown", "multiple locations", "various", ""):
         return None
-    return normalize_city(loc)
+    locality = strip_street_address(loc)
+    city = normalize_city(locality)
+    if city == locality != loc:
+        # 截掉门牌后认不出城市别名、整段地址却认得出（城市名只写在街名 / 楼名里）：保住原先折出来的城市，
+        # 不让一个本来筛得到「上海」的岗因为截短而筛不到。
+        whole = normalize_city(loc)
+        if whole != loc:
+            return whole
+    return city
 
 
 def geo_basis(raw_location: Optional[str], cleaned: Optional[str]) -> Optional[str]:

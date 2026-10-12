@@ -336,12 +336,18 @@ function topN(keys: string[], n: number): Array<{ key: string; count: number }> 
     .map(([key, count]) => ({ key, count }));
 }
 
-// 取城市主名：按常见分隔切第一段，去「市/地区」后缀
+// 取城市主名：按常见分隔切第一段，去「市/地区」后缀。
+// 西文地名词间本来就是空格（"New York, NY"），空格不算分隔；中文（「北京 海淀」）词间没有空格，空格就是分隔。
+// 短横两边都照旧切：外企常拿它当层级分隔（"USA-CA-San Jose"），比城市名自带短横的多。
+// ❌ 此前不分中西文一律按空格切："New York" / "San Jose" / "San Diego" 只剩 "New" / "San"，三个城市并成一个。
+// 数字开头的不是城市（门牌号）：地点列里还有抓取端修不到的门牌地址（列表翻不到的存量行、"1 New York Plaza" 这种
+// 对方压根没写城市的），不算进热门城市，免得再写出「主要在 1000、7000」。
 function cityOf(location: string | null): string | null {
   if (!location) return null;
-  const first = location.split(/[·、,，/\s-]+/).filter(Boolean)[0] || "";
+  const head = location.split(/[·、,，/-]+/).map((s) => s.trim()).filter(Boolean)[0] || "";
+  const first = /[A-Za-z]/.test(head) ? head : head.split(/\s+/)[0];
   const city = first.replace(/(市|地区)$/, "").trim();
-  return city || null;
+  return city && !/^\d/.test(city) ? city : null;
 }
 
 // 职能归类：用岗位库的分类器，只喂标题。这里不许再有自己的词表。

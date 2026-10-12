@@ -490,6 +490,18 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #     修法（2026-09-24，迁移 304）：**先**把存量 jd_url / apply_url 只换 host（canonical 由触发器重算），
                          #     **再**改 source_url 并启用——顺序反了，列表重抓会按新 host 另插一批，同一个岗变两行。
                          #     详情探活 `enrich._detail_workday`：404/410 判死，其余非 2xx 判 unknown 不盖戳（429 是 Workday 按 IP 限流）。
+                         #     ⚠️ 地点取列表每行的 `locationsText`（对方原文），**不从 externalPath 的地点段还原**（2026-10-12 改）：
+                         #     地点段是原文的 slug（空白 → 连字符，逗号等标点直接删）：2026-10-12 抓回 101 个租户，39,062 个单地点岗逐条核过；
+                         #     还原时分不出哪个连字符是分隔、哪个是词间空格，旧实现全换成逗号 → 「New, York, NY」「US, , , California」
+                         #     「1000, Nicollet, Mall, MinneapolisMN, 55403, 2542」。一岗多地时 `locationsText` 只是「2 Locations」
+                         #     （当时 19% 的岗），主地点原文从同一批里地点段相同的岗借（`_fill_primary_locations`），
+                         #     借不到（当时 4%）才回到路径还原，仍是旧写法。
+                         #     「 - 」统一成逗号再交给 geo：geo 认「开头两字母国别码 + 逗号」，Visa 的「JM - Remote - Jamaica」不换就判不出国家。
+                         #     有的租户把「地点名」配成整段门牌地址（Target / 三星 / 富达 / 奥的斯 / 开利）：截成城市在
+                         #     `normalizer.strip_street_address`（对所有 adapter 生效，greenhouse 的 Sweetgreen 同样受益）。
+                         #     ⚠️ 列表每个 facet 最多翻到 2000 条：Target 在招 4,071 行里 2,062 行排在上限之外（抽 24 条实开详情都还在招），
+                         #     日常重抓够不着它们，地点 / 标题这类列表字段不会自愈。同一轮抓取日志里辉瑞 / 通用汽车 / 安波福也报了
+                         #     「命中翻页上限 got=2000」，它们漏了多少没核。
 ```
 
 ## 必投清单口径（`lib/must-apply-list.ts` / `.json`）
