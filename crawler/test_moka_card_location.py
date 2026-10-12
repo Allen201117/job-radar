@@ -315,7 +315,14 @@ class _SidebarPage:
         return [_PageNo("1"), _PageNo("2")]
 
     def query_selector(self, sel):
-        return None if "好的" in sel else _SidebarNext(self)
+        if sel == MokaAdapter._next_sel:
+            return _SidebarNext(self)
+        if sel == MokaAdapter._active_page_sel:
+            return _PageNo(str(self.idx + 1))
+        return None   # cookies 抽屉、老版翻页器容器：这个页面上都没有
+
+    def wait_for_function(self, js, arg=None, timeout=None, polling=None):
+        pass
 
     def wait_for_timeout(self, _ms):
         pass

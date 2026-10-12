@@ -393,6 +393,28 @@ def _parse_moka_card(text: str):
     return location, title
 
 
+_MOKA_INIT_DATA_RES = (
+    re.compile(r'<input\b[^>]*?\bid="init-data"[^>]*?\bvalue="([^"]*)"'),
+    re.compile(r'<input\b[^>]*?\bvalue="([^"]*)"[^>]*?\bid="init-data"'),
+)
+
+
+def _moka_portal_total(document_html: str) -> Optional[int]:
+    """Moka 门户页自报的岗位总数（内嵌数据的 jobStats.total）。读不到 / 不是非负整数一律返回 None。"""
+    for pattern in _MOKA_INIT_DATA_RES:
+        m = pattern.search(document_html or "")
+        if not m:
+            continue
+        try:
+            total = (json.loads(_html.unescape(m.group(1))).get("jobStats") or {}).get("total")
+        except (ValueError, TypeError, AttributeError):
+            return None
+        if isinstance(total, int) and not isinstance(total, bool) and total >= 0:
+            return total
+        return None
+    return None
+
+
 class MokaAdapter(PlaywrightAdapter):
     """Moka 招聘（{tenant}.mokahr.com / app.mokahr.com）—— 大量消费/互联网/游戏私企在用。
 
@@ -434,14 +456,63 @@ class MokaAdapter(PlaywrightAdapter):
     # 显式覆写（只翻前 N 页）的口子，供单测与 verify_sources 的廉价探活用；None = 走共享旋钮。
     # 同 wt._PAGE_CAP / sf_express.MAX_PAGES 的既有写法。
     _page_cap = None
-    # Moka 自有分页「下一页」按钮：class 前缀稳定（带 build hash 后缀），末页加 disabled 属性。
-    _next_sel = "button[class*='sd-Pagination-forward']"
-    # 分页器里的页码按钮：末页页码 = 总页数。Moka 列表接口是密文、DOM 里也没有「共 N 个职位」
-    # （那句只在门户落地页上），**唯一能拿到分母的地方就是这个分页组件**。
-    _page_no_sel = "[class*='sd-Pagination'] [class*='sd-Pagination-item']"
+    # 翻页器有两套，选择器都是 2026-10-11 在真浏览器里读的（祖龙 zulong/25157 六页逐页翻到底、特斯拉 tesla/46129）：
+    #   新版门户（页面内嵌数据 websiteVersion=2）：sd-Pagination 组件，「下一页」是 button，class 前缀稳定
+    #     （带 build hash 后缀），末页加 disabled 属性；30 行/页。
+    #   老版门户（websiteVersion=1）：容器 .theme-pagination，按钮全是 span.pagination-item；「下一页」的 class 带
+    #     next-page-<hash>，末页多一个 disabled-<hash> 的 class（没有 disabled 属性）；15 行/页。
+    # 2026-10-11 之前只认新版那一套，老版门户一律被当成「单页租户不渲染分页器」：只拿第 1 页，还记成抓全。
+    # 417 条在用的源里 43 条如此（祖龙自报 86 只入库 15，万科 1,312 / 15，移远 730 / 15）。
+    _next_sel = ("button[class*='sd-Pagination-forward'], "
+                 ".theme-pagination .pagination-item[class*='next-page-']")
+    # 分页器里的页码按钮：末页页码 = 总页数（老版的上一页 / 下一页按钮没有文字，不影响取最大值）。
+    _page_no_sel = ("[class*='sd-Pagination'] [class*='sd-Pagination-item'], "
+                    ".theme-pagination .pagination-item")
+    _active_page_sel = ("[class*='sd-Pagination-is-active'], "
+                        ".theme-pagination .pagination-item[class*='active-']")
+    _legacy_pager_sel = ".theme-pagination"
     _cards_js = ("els => els.map(e => ({href: e.getAttribute('href'),"
                  " text: (e.innerText || '').trim()}))")
-    _PAGE_ROWS = 30       # Moka 默认「30 行/页」，分页器上写着
+    _PAGE_ROWS = 30          # 新版门户「30 行/页」，分页器上写着
+    _PAGE_ROWS_LEGACY = 15   # 老版门户每页 15 行（祖龙 6 页 = 15×5 + 11）
+    _rows_per_page = _PAGE_ROWS   # 当前这条源按哪套翻页器算（_collect_all_pages 开头判定）
+    _pager_seen = False           # 翻页过程中见没见过下一页按钮 / 页码
+    # 点了「下一页」之后，列表和翻页器会先从页面上整个消失，等数据回来再一起渲染（两套门户都是）。
+    # 2026-10-11 本机实测消失的时长：万科 0.8~0.95s、特斯拉 1.1~1.6s、麦当劳 2.6s（runner 在境外，只会更久）。
+    # 旧写法固定等 1.8s 就读：没等到的那一拍读到「没有新卡 + 没有下一页按钮」，被当成单页租户收工、不留停因
+    # （吉利 / 百济神州 / 58同城 / 太古地产的抓不全记录都是「停在半路、停因为空」）。
+    # 所以改成等「翻页器回来了，且卡片换了一批、当前页码也变了」。
+    _TURN_TIMEOUT_MS = 20000
+    _TURN_SETTLE_MS = 400
+    _TURN_FALLBACK_MS = 1800   # 判据本身没跑成（不是超时）时退回旧的固定等待，至少不比改前差
+    _TURNED_JS = ("([nextSel, activeSel, prevCards, prevActive]) => {"
+                  " if (!document.querySelector(nextSel)) return false;"
+                  " const cards = [...document.querySelectorAll(\"a[href*='#/job/']\")]"
+                  ".map(e => e.getAttribute('href')).join('|');"
+                  " if (!cards || cards === prevCards) return false;"
+                  " const a = document.querySelector(activeSel);"
+                  " return !prevActive || !a || (a.innerText || '').trim() !== prevActive; }")
+    # 首屏同理：「出现了岗位卡」不等于「列表渲染完了」——页面上另有一小块推荐岗（老版右栏「最新职位」5 张、
+    # 新版 8 张），它先于列表出现。2026-10-12 对拍实测滴滴（门户自报 637）：开始读的那一刻页面上只有那 8 张、
+    # 翻页器还没出来，读完这 8 张列表才到，接着点了下一页 → 第 1 页列表里另外 22 个岗没读到，还记成抓全。
+    # 所以开读之前先等「下一页按钮出现了，或者页面上的岗已经够门户自报的数」；等不到就按现状读，
+    # 少了的由 _finalize_coverage 拿门户总数照出来。门户总数读不到时不等（没有判据）。
+    _FIRST_PAGE_TIMEOUT_MS = 15000
+    _FIRST_PAGE_JS = ("([nextSel, enough]) => !!document.querySelector(nextSel) ||"
+                      " new Set([...document.querySelectorAll(\"a[href*='#/job/']\")]"
+                      ".map(e => e.getAttribute('href'))).size >= enough")
+    # 门户自报的岗位总数：页面 HTML 里 <input id="init-data" value="…HTML 转义的 JSON…"> 的 jobStats.total。
+    # 页面脚本一执行就把这个 input 删了（渲染后的 DOM 里没有），所以只能从主文档的响应体里读。
+    # 它是「抓全了没有」唯一不依赖翻页器的分母。2026-10-12 拿全部在用的源真跑对过（同一次抓取里先读总数、再翻完）：
+    # 404 条翻到末页的源里 398 条与翻到的条数逐个相等，其余 6 条差 -3 / -1 / +1 / +1 / +5（万科 1,312 对 1,307，
+    # 逐页核过是 87 整页 + 末页 2 张，门户总数本身多 5）和 1 条偶发的整页没渲染。
+    _portal_total = None
+    _own_base = None
+    # 抓到的条数比门户自报少多少才算「没抓全」：差 2 个以内或 1% 以内算时间差 / 门户总数自己的出入（依据见上）。
+    # 老版门户漏掉整个第 2 页最少也少 1 个岗——门户自报 16~17 个、只拿到首屏 15 个的那种，这个容差照不出来；
+    # 翻页器认得出来时本来也不靠它。
+    _PORTAL_SHORT_MIN = 2
+    _PORTAL_SHORT_RATIO = 0.01
     # 部分租户首屏渲染出岗位卡的同时会弹一个「cookies」同意抽屉（sd-Modal-drawer，
     # 按钮文案「好的」），浮在页面最上层拦截点击事件。不清掉它，第一次点「下一页」
     # 就会被它挡住、`nxt.click()` 超时进 except、`_collect_all_pages` 静默停在第 1 页
@@ -521,25 +592,72 @@ class MokaAdapter(PlaywrightAdapter):
         except Exception:
             pass
 
+    def _active_page_text(self, page) -> str:
+        """翻页器上当前页的页码文字；读不到返回空串（_TURNED_JS 此时只看卡片换没换）。"""
+        try:
+            el = page.query_selector(self._active_page_sel)
+            return (el.inner_text() or "").strip() if el is not None else ""
+        except Exception:  # noqa: BLE001 —— 只是「翻过去没有」的辅助判据，读不到不影响翻页
+            return ""
+
+    def _wait_page_turn(self, page, prev_cards: str, prev_active: str) -> bool:
+        """点完「下一页」后等列表渲染回来。返回等到没有；没等到不抛，由调用方按「这一页没翻过去」处理。"""
+        try:
+            page.wait_for_function(
+                self._TURNED_JS, arg=[self._next_sel, self._active_page_sel, prev_cards, prev_active],
+                timeout=self._TURN_TIMEOUT_MS, polling=200)
+        except Exception as e:  # noqa: BLE001 —— 超时是这里的正常分支之一
+            if "Timeout" not in type(e).__name__:
+                # 不是没等到，是判据没跑成（页面被导航走 / 浏览器报错）。按超时处理会立刻回去读，等于没等。
+                _log.warning("moka: 等翻页的判据没跑成，退回固定等待：%s", exc_brief(e))
+                page.wait_for_timeout(self._TURN_FALLBACK_MS)
+            return False
+        page.wait_for_timeout(self._TURN_SETTLE_MS)   # 翻页器与卡片同一拍渲染，再留一点余量等卡片文字齐
+        return True
+
+    def _wait_first_page(self, page) -> None:
+        """开读之前等首屏列表渲染完（判据见 _FIRST_PAGE_JS 上面的注释）。等不到 / 没有判据都不抛。"""
+        total = self._portal_total
+        if not total:
+            return
+        try:
+            page.wait_for_function(self._FIRST_PAGE_JS, arg=[self._next_sel, total - self._PORTAL_SHORT_MIN],
+                                   timeout=self._FIRST_PAGE_TIMEOUT_MS, polling=250)
+        except Exception as e:  # noqa: BLE001
+            if "Timeout" not in type(e).__name__:
+                _log.warning("moka: 等首屏列表的判据没跑成：%s", exc_brief(e))
+
     def _collect_all_pages(self, page) -> List[dict]:
         """从当前已渲染的列表路由翻页累加全量岗位卡，按 href 去重（同一个 href 留文字更全的那张）。
 
-        逐次点「sd-Pagination 下一页」直到：无该按钮（单页租户不渲染分页器）/
-        按钮 disabled（末页）/ 连续无新卡 / 触达页数封顶。
+        逐次点「下一页」直到：页面上没有该按钮 / 按钮 disabled（末页）/ 连续无新卡 / 点击失败 /
+        下一页迟迟渲染不出来 / 重复度刹车 / 触达页数封顶。「页面上没有下一页按钮」不等于抓全，
+        由 _finalize_coverage 拿门户自报总数再核一次。
         """
         union: dict = {}
         no_growth = 0
+        self._wait_first_page(page)
         self._last_page = self._read_last_page(page)   # 分页器自报的总页数（拿不到=None）
+        try:
+            legacy = page.query_selector(self._legacy_pager_sel) is not None
+        except Exception:  # noqa: BLE001
+            legacy = False
+        self._rows_per_page = self._PAGE_ROWS_LEGACY if legacy else self._PAGE_ROWS
+        self._pager_seen = bool(self._last_page)
         pages_done = 0
         # 翻页为什么停（只在没翻到末页时有意义，见 _finalize_coverage）。2026-09-28 之前这里的
         # 三种停法既不打日志也不写 crawl_runs：09-24~28 的抓不全告警里，百济神州（分页器 17 页）每次都是
         # 30 岗 = 停在第 1 页，58同城（16 页）出现时都是 150 岗 = 停在第 5 页，却分不出是点击被挡还是翻页没生效。
         stop_cause, stop_detail = "list_cap", ""
+        brake = RepetitionBrake()
+        turn_timed_out = False   # 上一次点完「下一页」没等到渲染，且当时页面上连翻页器都没有
         self._dismiss_cookie_banner(page)   # 翻页前先清场，否则首次点击就会被它挡住
-        for attempt in range(self._page_cap or resolve_page_cap(self._PAGE_ROWS, self._MAX_JOBS)):
+        page_cap = self._page_cap or resolve_page_cap(self._rows_per_page, self._MAX_JOBS)
+        for attempt in range(page_cap):
             cards = page.eval_on_selector_all("a[href*='#/job/']", self._cards_js)
             before = len(union)
             upgraded = False
+            fresh_titles = []   # 这一页新见到的岗的标题，喂给重复度刹车
             for c in cards:
                 href = c.get("href") or ""
                 if not href:
@@ -547,6 +665,7 @@ class MokaAdapter(PlaywrightAdapter):
                 seen = union.get(href)
                 if seen is None:
                     union[href] = c
+                    fresh_titles.append(_parse_moka_card(c.get("text", ""))[1])
                 elif len(c.get("text") or "") > len(seen.get("text") or ""):
                     # 同一个岗在页面上有两种链接：列表里的完整卡片，和右栏「最新职位」里只有标题的一行（每页都在）。
                     # 右栏的岗不在第 1 页列表里时，先收到的是只有标题的那个；等翻到它所在的页，完整卡片要顶替它，
@@ -565,24 +684,38 @@ class MokaAdapter(PlaywrightAdapter):
                 break
             nxt = page.query_selector(self._next_sel)
             if nxt is None:
-                stop_cause, stop_detail = "", ""
-                break  # 单页租户：Moka 不渲染分页器
+                if turn_timed_out and not progressed:
+                    # 点了「下一页」，等满了时限，列表和翻页器都没渲染回来（上面已经再读过一次，仍然没有新卡）。
+                    stop_cause = "page_render_timeout"
+                    stop_detail = (f"第 {pages_done} 页点了「下一页」，{self._TURN_TIMEOUT_MS // 1000}s 内"
+                                   "列表和翻页器都没渲染回来")
+                else:
+                    stop_cause, stop_detail = "", ""
+                break  # 页面上没有下一页按钮：单页租户不渲染分页器，也可能是我们不认识的翻页器
+            self._pager_seen = True
             cls = (nxt.get_attribute("class") or "").lower()
             if "disabled" in cls or nxt.get_attribute("disabled") is not None:
                 stop_cause, stop_detail = "", ""
-                break  # 末页：下一页按钮 disabled
+                break  # 末页：下一页按钮 disabled（新版是属性，老版是 class）
+            if brake.observe(fresh_titles):
+                # 后面还有页，但连续几百条都没带来新的岗位角色（同一个岗 × N 家门店）→ 按设计停，见 RepetitionBrake。
+                stop_cause = "repetition_brake"
+                stop_detail = f"翻到第 {pages_done} 页，已收 {len(union)} 条"
+                break
+            if attempt == page_cap - 1:
+                break  # 页数预算用完（停因保持 list_cap）：别再点一次没人读的下一页
+            prev_cards = "|".join(c.get("href") or "" for c in cards)
+            prev_active = self._active_page_text(page)
             try:
                 nxt.scroll_into_view_if_needed(timeout=2000)
                 nxt.click(timeout=2500)
-                page.wait_for_timeout(1800)  # 等下一页岗位卡渲染
             except Exception as first_exc:  # noqa: BLE001 —— 下面重试，再失败就把原因留下
                 # 常见诱因：cookies 抽屉在这一拍才弹出来（首屏渲染晚于 _dismiss 那一次调用）。
                 # 补清一次、重试点击一次；再失败才真放弃（保留已收的行，不让整源卡死在这一页）。
                 self._dismiss_cookie_banner(page)
                 try:
-                    nxt.click(timeout=2500)
-                    page.wait_for_timeout(1800)
-                    continue
+                    # 重新取一次按钮：页面在这期间重绘过的话，手里那个句柄已经不在文档里了
+                    (page.query_selector(self._next_sel) or nxt).click(timeout=2500)
                 except Exception as retry_exc:  # noqa: BLE001
                     # Playwright 的点击超时报错会点名挡住按钮的元素（「<div class=…> intercepts
                     # pointer events」）——这正是判断「是哪个弹层在挡」唯一的现场证据，别丢。
@@ -590,34 +723,61 @@ class MokaAdapter(PlaywrightAdapter):
                     stop_detail = (f"第 {pages_done} 页点「下一页」两次都失败："
                                    f"{_first_line(first_exc)} / 重试 {_first_line(retry_exc)}")
                     break
+            # 没等到渲染时不在这里停：回到循环开头再读一次——页面其实翻过去了就照收；
+            # 翻页器在、只是没翻过去，连续两次没有新卡由 page_no_new_rows 收；翻页器也不在，由上面记 page_render_timeout。
+            turn_timed_out = (not self._wait_page_turn(page, prev_cards, prev_active)
+                              and page.query_selector(self._next_sel) is None)
         self._pages_done = pages_done
         self._stop_cause, self._stop_detail = stop_cause, stop_detail
         return list(union.values())
 
     def _finalize_coverage(self, best: List[dict], source_url: str = "") -> None:
-        """抓全率可观测。Moka 没有任何「总数」字段，分页器的总页数是唯一线索：
-          · 翻到了末页 → 算抓全，分母记实际收到的条数（与 base.paginate_all 对「接口不给 total」
-            的「诚实盲区」兜底同口径：分母就是抓到数，不编造精度）。
-          · 没翻到末页（撞 _page_cap / 连续零新增 / 点击失败）→ 不算抓全，分母用
-            `总页数 × 每页行数` 的**上界估计**，好让抓不全告警看得见这个缺口；并把停因写进
-            coverage_stop_reason + 打一条 warning（带 Playwright 报错原文），下一轮就知道该修哪。
-          · 单页租户（无分页器）→ 只有一页，翻完即抓全。
+        """抓全率可观测：写 reported_total / fetch_complete / coverage_stop_reason。
+        分母优先用门户自报的岗位总数（_portal_total），读不到才退回分页器的总页数。
+        2026-10-11 前只有「没有下一页按钮 = 单页抓全」：43 条老版门户的源每晚只入库首屏 15 个岗、
+        记 coverage_complete=true，没有任何告警。没抓全时打一条 warning（带 Playwright 报错原文），下一轮就知道该修哪。
         """
         last_page = getattr(self, "_last_page", None)
         pages_done = getattr(self, "_pages_done", 0)
-        if not best:
-            self.reported_total = None          # 一条都没拿到，别拿 0 当分母
-        elif not last_page or pages_done >= last_page:
-            self.reported_total = len(best)
+        portal_total = self._portal_total
+        got = len(best)
+        if not best and not portal_total:
+            self.reported_total = None          # 一条都没拿到、门户也没说有岗，别拿 0 当分母
+            return
+        # 抓到的数明显少于门户自报（一条都没拿到而门户说有岗，也算）。读不到门户总数时这条不设防。
+        short = portal_total is not None and (
+            not best
+            or portal_total - got > max(self._PORTAL_SHORT_MIN, portal_total * self._PORTAL_SHORT_RATIO))
+        # 翻页是自己走到头的（没有下一页按钮 / 下一页按钮 disabled），还是被打断的（点击失败、刹车、撞上限…）。
+        # 被打断的一律不算抓全、停因照实写——不能因为页码没读到就当它翻完了。
+        stop_cause = getattr(self, "_stop_cause", "") or ""
+        by_pages = not last_page or pages_done >= last_page
+        # 页数对不上、但门户自报的岗已经一个不少：门户总数是比页码更硬的证据（页码会因整页都是见过的岗而少数一页）。
+        got_everything = portal_total is not None and got >= portal_total
+        if not stop_cause and not short and (by_pages or got_everything):
+            self.reported_total = got if portal_total is None else max(got, portal_total)
             self.fetch_complete = True
+            return
+        self.fetch_complete = False
+        if portal_total is not None:
+            self.reported_total = max(got, portal_total)
+        elif last_page:
+            self.reported_total = max(got, last_page * self._rows_per_page)   # 上界估计，好让告警看得见缺口
         else:
-            self.reported_total = max(len(best), last_page * self._PAGE_ROWS)
-            self.fetch_complete = False
-            cause = getattr(self, "_stop_cause", "") or None
-            self.coverage_stop_reason = cause
-            _log.warning("moka: 翻页停在第 %d/%d 页（%d 岗），停因=%s %s url=%s",
-                         pages_done, last_page, len(best), cause or "未知",
-                         getattr(self, "_stop_detail", ""), source_url)
+            self.reported_total = got           # 总数和总页数都读不到：只知道没翻完，分母没法估
+        if stop_cause:
+            cause = stop_cause
+        elif short:
+            # 页面上能翻的都翻完了，数却对不上。有卡片、却从头到尾没见过下一页按钮 = 多半是我们不认识的翻页器；
+            # 其余（翻到了末页仍少 / 一张卡都没渲染出来）= 列表与门户总数对不上，原因要到页面上看。
+            unseen_pager = bool(best) and not self._pager_seen
+            cause = "paginator_not_found" if unseen_pager else "short_of_portal_total"
+        else:
+            cause = None                        # 翻页器中途不见了、总数又读不到：原因判不出
+        self.coverage_stop_reason = cause
+        _log.warning("moka: 没抓全，停在第 %d/%s 页（%d 岗，门户自报 %s），停因=%s %s url=%s",
+                     pages_done, last_page or "?", got, "未知" if portal_total is None else portal_total,
+                     cause or "未知", getattr(self, "_stop_detail", ""), source_url)
 
     def _read_last_page(self, page):
         """从 Moka 分页组件读总页数。拿不到返回 None（单页租户不渲染分页器，也走这条）。"""
@@ -634,13 +794,28 @@ class MokaAdapter(PlaywrightAdapter):
                     continue
         return max(numbers) if numbers else None
 
+    def _note_portal_total(self, response, url: str) -> None:
+        """从本源主文档的响应体里记下门户自报的岗位总数。读不到就保持原值，绝不抛。
+
+        只认本源自己的地址：校招换期检查会在同一个浏览器里打开别的门户，那边的总数不是这条源的分母。
+        只换 hash 的跳转是同文档导航，goto 返回 None，沿用第一次读到的值。"""
+        if response is None or not self._own_base or url.split("#")[0] != self._own_base:
+            return
+        try:
+            total = _moka_portal_total(response.text())
+        except Exception as e:  # noqa: BLE001 —— 分母读不到只是退回旧口径，不能影响抓取
+            _log.warning("moka: 读门户自报总数失败 %s url=%s", exc_brief(e), url)
+            return
+        if total is not None:
+            self._portal_total = total
+
     def _open_route(self, page, url: str):
         """打开一个列表路由并等它渲染完，返回 (状态, 岗位卡列表)，状态 ∈ {"cards", "empty", "closed"}。
 
         既没出岗位卡、也没出空态 / 关停页 → 抛异常（由调用方记成「该路由上没有列表」）。
         渲染出来后仍等 wait_ms 再数卡：一是等整页卡片渲染齐，二是防「数据回来前先闪一下空态」。
         """
-        page.goto(url, wait_until="domcontentloaded", timeout=35000)
+        self._note_portal_total(page.goto(url, wait_until="domcontentloaded", timeout=35000), url)
         handle = page.wait_for_function(self._READY_JS,
                                         arg=[list(self._EMPTY_MARKERS), self._CLOSED_MARKER],
                                         timeout=self._READY_TIMEOUT_MS, polling=250)
@@ -659,7 +834,10 @@ class MokaAdapter(PlaywrightAdapter):
         self._last_page = None
         self._pages_done = 0
         self._stop_cause, self._stop_detail = "", ""
+        self._pager_seen = False
+        self._portal_total = None
         base = source_url.split("#")[0]
+        self._own_base = base
         best: List[dict] = []
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
