@@ -25,6 +25,7 @@ from typing import Dict, List, Optional
 
 import httpx
 
+import normalizer
 from .base import BaseAdapter, RawJob, exc_brief, resolve_list_cap
 
 logger = logging.getLogger(__name__)
@@ -157,7 +158,7 @@ class LenovoAdapter(BaseAdapter):
             city_codes = [c.strip() for c in str(row.get("workPlace") or "").split(",") if c.strip()]
             cities = [CITY_DICT.get(code, code) for code in city_codes]
             cities = list(dict.fromkeys(c for c in cities if c))
-            location = cities[0] if cities else ""
+            location = normalizer.join_places(cities) or ""   # 每个城市都交出去（2026-10-11 前只取第一个）
 
             project_type = _int_or_none(row.get("projectType"))
             job_type = PROJECT_TYPE_DICT.get(project_type) or str(row.get("typeName") or "").strip() or None

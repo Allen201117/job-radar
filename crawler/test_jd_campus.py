@@ -51,8 +51,8 @@ class JdCampusParseTest(unittest.TestCase):
         j = jobs[0]
         self.assertEqual(j.company, "京东")
         self.assertEqual(j.title, "市场营销")
-        # 城市取 requirementVoList 里第一个，且去重后的全集进正文
-        self.assertEqual(j.location, "北京市-北京市")
+        # requirementVoList 里去重后的每个城市都交出去（入库是「北京/上海」），全集也进正文
+        self.assertEqual(j.location, "北京市-北京市、上海市-上海市")
         self.assertIn("上海市-上海市", j.summary)
         self.assertEqual(j.summary.count("北京市-北京市"), 1, "多条需求指向同一城市时要去重")
         self.assertIn("京东健康", j.summary)

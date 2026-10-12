@@ -77,6 +77,51 @@ export async function jobsQuery<T extends QueryResultRow = QueryResultRow>(
   return res.rows;
 }
 
+/**
+ * 带事务级参数跑一条只读 SQL：`set local` 只在这一个事务里生效，连接还回池子后不留痕迹
+ * （直接 `set` 会留在那条连接上，之后轮到它的别的查询跟着变，而且各连接不一致）。
+ * settings 的名和值会拼进 SQL，只许传代码里写死的常量。
+ */
+export async function jobsQueryWithLocalSettings<T extends QueryResultRow = QueryResultRow>(
+  sql: string,
+  params: unknown[],
+  settings: Record<string, number>,
+): Promise<T[]> {
+  for (const [name, value] of Object.entries(settings)) {
+    if (!/^[a-z_]+$/.test(name) || !Number.isInteger(value)) {
+      throw new Error(`jobsQueryWithLocalSettings：参数 ${name} 不合法`);
+    }
+  }
+  const client = await jobsPool().connect();
+  // 借出期间连接断掉（库重启 / 被 kill / 网络断），驱动会在 client 上发 'error' 事件，而池子在借出时已经摘掉了自己的监听；
+  // 没人接的话 Node 把它当未捕获异常，整个函数实例连同别的在途请求一起挂。正在跑的那条查询会另外收到这个错、走下面的 catch。
+  const onClientError = (err: Error) => {
+    console.warn("[jobs-pool] checked-out client error:", err.message);
+  };
+  client.on("error", onClientError);
+  let failed = false;
+  try {
+    await client.query("begin read only");
+    for (const [name, value] of Object.entries(settings)) {
+      await client.query(`set local ${name} = ${value}`);
+    }
+    const res = await client.query<T>(sql, params as any[]);
+    await client.query("commit");
+    return res.rows;
+  } catch (e) {
+    failed = true;
+    await client.query("rollback").catch((rollbackError: Error) => {
+      // 连接多半已经断了；这条连接反正要销毁，记一笔就行，抛出去的仍是原来那个错
+      console.warn("[jobs-pool] rollback 失败（连接将销毁）:", rollbackError.message);
+    });
+    throw e;
+  } finally {
+    client.removeListener("error", onClientError);
+    // 出过错的连接直接销毁，不还回池子（可能还停在事务里）
+    client.release(failed);
+  }
+}
+
 /** 标量查询（count 等），取第一行第一列。 */
 export async function jobsScalar<T = unknown>(sql: string, params: unknown[] = []): Promise<T | null> {
   const rows = await jobsQuery(sql, params);

@@ -168,7 +168,9 @@ def job_matches_city(raw: RawJob, city: str) -> bool:
     if not raw.location:
         return False
     want_norm = normalizer.normalize_city(want)
-    loc_norm = normalizer.normalize_city(raw.location)
+    # clean_location 而不是 normalize_city：多地并列的地点要逐个城市比（「北京市、上海市」→「北京/上海」），
+    # normalize_city 只会挑出别名表里最靠前的那一个。
+    loc_norm = normalizer.clean_location(raw.location) or ""
     return want_norm in loc_norm or want in (raw.location or "")
 
 

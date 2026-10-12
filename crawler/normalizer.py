@@ -17,12 +17,14 @@ from geo import (
     _GREATER_CHINA,
     _REJECTED_COUNTRY_CODES,
     _is_overseas_pinned,
+    cn_place_province,
     derive_country_code,
     derive_job_scope,
     is_china_location,
     is_rejected_location,
     is_remote_location,
     keep_for_china_radar,
+    location_cn_places,
     location_in_scope,
     title_city_location,
 )
@@ -264,15 +266,151 @@ def clean_title(title: str, *locations: Optional[str]) -> str:
         t = t[:last.start()]
 
 
+# 多地并列写进库的连接符：与标题城市兜底（geo.title_city_location「连云港/苏州」）同一种写法，
+# 读侧（/today 城市门、/jobs 城市筛选、全文检索的相邻双字）早就按它逐个城市匹配。
+MULTI_PLACE_SEP = "/"
+# 别名表里这两个目标值不是地点：与城市并存时城市优先（改前按别名表顺序也是城市在前）。
+_NON_PLACE_ALIAS_TARGETS = frozenset({"全国", "远程"})
+_LATIN_CITY_ALIASES = {
+    alias: city for alias, city in CITY_ALIASES.items()
+    if alias.isascii() and city not in _NON_PLACE_ALIAS_TARGETS
+}
+# 拼音按整词认（"xian" 不认 "Xiangyang"），后面跟着 Road / Rd / Street / Lu / Dadao… 的是路名不是城市
+# （workday live：上海的门牌地址「…, West, Nanjing, Road, …」；拼音写法「Nanjing Xi Lu」）。
+# 多认一个城市是把岗位推给不在那里的人，所以比 normalize_city 的子串严。
+_LATIN_CITY_RE = re.compile(
+    r"(?<![a-z])(?:" + "|".join(re.escape(a) for a in sorted(_LATIN_CITY_ALIASES, key=len, reverse=True)) + r")(?![a-z])"
+    r"(?!(?:[\s,]+(?:east|west|north|south|middle|central|e|w|n|s|dong|xi|nan|bei|zhong))?"
+    r"[\s,]+(?:road|rd|street|st|avenue|ave|boulevard|blvd|lu|dadao|jie|dajie)(?![a-z]))"
+)
+# 别名表里、省-地级映射表外的中文城市（新加坡）。
+_OFF_GAZETTEER_CITIES = tuple(sorted({
+    city for alias, city in CITY_ALIASES.items()
+    if alias == city and not alias.isascii() and city not in _NON_PLACE_ALIAS_TARGETS
+    and cn_place_province(city) is None
+}))
+
+
+def _scan_places(location: Optional[str]) -> list:
+    """地点串里并列写着的地方 → [(键, 写出去的名字)]，按出现顺序、同一个地方只留第一次出现的写法。
+
+    键 = 规范短名（「保定」「保定市」同一个键），只用来判「是不是同一个地方」。
+    写出去的名字：别名表里的城市用规范名（「深圳市」→ 深圳）；别名表外的保留原文写法
+    （「保定市」「阿里地区」「阿坝藏族羌族自治州」）——这类地方单独出现时库里一直是原样写法，用户目标填
+    「保定」「保定市」都匹配得上（读侧是子串），并列时也得一样；裸写的「阿里」「兴安」再清洗一遍还认不回来。
+    """
+    text = re.sub(r"\s+", " ", strip_nul(str(location or ""))).strip()
+    hits = []                             # (位置, 键, 写出去的名字, 所在省, 是不是省级)
+    for pos, name, province, is_province, written in location_cn_places(text):
+        city = CITY_ALIASES.get(name)
+        hits.append((pos, city or name, city or written, province, is_province))
+    for m in _LATIN_CITY_RE.finditer(text.lower()):
+        city = _LATIN_CITY_ALIASES[m.group()]
+        hits.append((m.start(), city, city, cn_place_province(city), False))
+    for city in _OFF_GAZETTEER_CITIES:
+        pos = text.find(city)
+        if pos >= 0:
+            hits.append((pos, city, city, None, False))
+    hits.sort(key=lambda hit: hit[0])
+    city_provinces = {province for _, _, _, province, is_province in hits if province and not is_province}
+    places, seen = [], set()
+    for _, key, shown, province, is_province in hits:
+        if is_province and province in city_provinces:
+            continue                      # 省被本省城市盖住 = 同一个地点的上下级
+        if key not in seen:
+            seen.add(key)
+            places.append((key, shown))
+    return places
+
+
+def location_places(location: Optional[str]) -> list:
+    """地点串里并列写着哪几个地方（没写到城市的省保留省名），按出现顺序去重。
+
+    同一个地点的上下级只算一个：「广东省,深圳市,南山区」→ [深圳]（省被本省城市盖住，区县不在词表里）。
+    中文地名的认法见 geo.location_cn_places；拼音 / 英文只认 CITY_ALIASES 里的城市；写法见 _scan_places。
+    """
+    return [shown for _, shown in _scan_places(location)]
+
+
+def location_place_keys(location: Optional[str]) -> set:
+    """同上，但给的是判「是不是同一个地方」用的键（「保定」「保定市」是同一个）。"""
+    return {key for key, _ in _scan_places(location)}
+
+
 def clean_location(location: Optional[str]) -> Optional[str]:
-    """清洗地点字段。"""
+    """清洗地点字段：单个地点折成别名表里的城市名；多地并列的逐个折、用「/」连起来。
+
+    🚫 多地并列不许整串折成一个城市（2026-10-11）：
+    ❌ `normalize_city` 是子串折叠——串里只要出现别名表里的城市就整串换成它，换成哪个取决于别名表顺序：
+       「北京市 广东·深圳市 上海市」→「北京」、「中山市,广州市」→「广州」、「吉林·长春市 辽宁·沈阳市」→「长春」。
+       读侧「地点非空且对不上目标城市」是硬拒（lib/opportunities/eligibility.ts locationState），
+       所以一个在北京 / 深圳 / 上海都招的岗只有北京的用户看得到。
+    ✅ 只动「会被折叠、且串里并列写着不止一个地方」的行：
+       · 串里没有别名表里的城市 → 原样返回（改前就不折，每个城市都匹配得上）；
+       · 只写了一个地方（含上下级写法）→ 与改前逐字相同；
+       · 改前折出来的那个城市不在认出来的地点里（「牡丹江市·西安区」折成西安这类）→ 也与改前相同，
+         保证改前匹配得上的城市改后一定还匹配得上。那一类是折错了城市，另案处理，别在这里顺手改。
+    """
     if not location:
         return None
     loc = strip_nul(location).strip()
     loc = re.sub(r"\s+", " ", loc)
     if loc.lower() in ("unknown", "multiple locations", "various", ""):
         return None
-    return normalize_city(loc)
+    folded = normalize_city(loc)
+    if folded == loc:
+        return folded
+    places = location_places(loc)
+    if len(places) > 1 and folded in places:
+        return MULTI_PLACE_SEP.join(places)
+    return folded
+
+
+def keeps_every_place(location: str, places) -> bool:
+    """location 过完清洗之后，places 里的每个地点是不是都还在（清洗认不出的地点算丢了）。"""
+    cleaned = clean_location(location)
+    if not cleaned:
+        return False
+    if cleaned == re.sub(r"\s+", " ", strip_nul(location)).strip():
+        return True                       # 串里没有别名表里的城市：原样入库，每个地点都匹配得上
+    kept = location_place_keys(cleaned)
+    for place in places:
+        named = location_place_keys(place)
+        if not named or not kept.issuperset(named):
+            return False
+    return True
+
+
+def join_places(names) -> Optional[str]:
+    """adapter 手里是「这个岗在哪几个城市」的列表时，交给 RawJob.location 的写法。
+
+    每个城市清洗后都还在 → 用「、」连起来全部交出去（clean_location 会逐个折成「北京/上海」）。
+    下面两种情况只交第一个，即 2026-10-11 前各 adapter 的做法：
+      · 有清洗认不出的（境外城市、不带城市名的写法）：并进来只会被丢掉，「圣何塞、北京」还会折成北京、
+        把原来写库的第一个城市挤掉；
+      · 并起来国家会变：国家码只有一个、按词表顺序取，「约翰内斯堡、曼谷」会从 ZA 变成 TH，
+        列表里有台北的还会被出口整行拒收。内地与港澳并列不算换国家（都在国内范围）。
+    """
+    seen = []
+    for name in names or ():
+        name = str(name or "").strip()
+        if name and name not in seen:
+            seen.append(name)
+    if not seen:
+        return None
+    if len(seen) == 1:
+        return seen[0]
+    # 每个名字要么清洗认得出，要么至少判得出国家：都不是的（部门名、台湾词表刻意不收的裸「台中」）
+    # 在「列表里没有别名表城市 → 清洗原样保留」的情况下会原样进库。
+    if not all(location_place_keys(name) or derive_country_code(name) for name in seen):
+        return seen[0]
+    joined = "、".join(seen)
+    if not keeps_every_place(joined, seen):
+        return seen[0]
+    before, after = derive_country_code(seen[0]), derive_country_code(joined)
+    if before != after and not (before in _GREATER_CHINA and after in _GREATER_CHINA):
+        return seen[0]
+    return joined
 
 
 def geo_basis(raw_location: Optional[str], cleaned: Optional[str]) -> Optional[str]:
