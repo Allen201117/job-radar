@@ -38,23 +38,29 @@ class WrongFoldLocationTest(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertEqual(normalizer.clean_location(raw), expected)
 
-    def test_pinyin_alias_inside_a_longer_word_is_left_as_written(self):
-        # 拼音 / 英文别名按整词认。认不出是哪个城市就原样入库（国家仍判得出），不硬塞一个城市。
-        for raw in (
-            "Changzhou, Jiangsu, China",                # live：smartrecruiters，改前 → 杭州
-            "Changzhou, China",
-            "China, , , Jiangsu, , , Changzhou",        # live：workday
-            "Xinxiang, Henan Sheng, China",             # live：radancy，改前 → 西安
-            "China, , , Shanxi, , , XianYang",          # live：workday（咸阳）
-            "China, , , Hunan, , , XiangTan",           # live：workday（湘潭）
-            "China, , , Hubei, , , Xiang, Yang",        # live：workday（襄阳）
-            "Xiangyang, Hubei",
-            "Zhangzhou, China",                         # live：workday（漳州），改前 → 杭州
-            "Tongxiang, Zhejiang",                      # live：workday（桐乡），改前 → 西安
-            "XIANYANG", "XianNing, Hubei", "CHANGZHOU", "XIANGTAN, HUNAN", "XianJu, Zhejiang",
+    def test_pinyin_alias_inside_a_longer_word_is_not_that_alias_city(self):
+        # 拼音 / 英文别名按整词认：「Changzhou」里的 hangzhou、「Xinxiang」里的 xian 不算。
+        # 认得出是哪个地级市的写成它自己（全国地级市拼音表，见 test_latin_cn_places）；认不出的原样入库，不硬塞一个城市。
+        for raw, expected in (
+            ("Changzhou, Jiangsu, China", "常州市"),             # live：smartrecruiters，最早 → 杭州
+            ("Changzhou, China", "常州市"),
+            ("China, , , Jiangsu, , , Changzhou", "常州市"),     # live：workday
+            ("Xinxiang, Henan Sheng, China", "新乡市"),          # live：radancy，最早 → 西安
+            ("China, , , Shanxi, , , XianYang", "咸阳市"),       # live：workday（Shanxi 常被拿来写陕西）
+            ("China, , , Hunan, , , XiangTan", "湘潭市"),        # live：workday
+            ("Xiangyang, Hubei", "襄阳市"),
+            ("Zhangzhou, China", "漳州市"),                      # live：workday，最早 → 杭州
+            ("XianNing, Hubei", "咸宁市"),
+            ("CHANGZHOU", "常州市"),
+            ("XIANGTAN, HUNAN", "湘潭市"),
+            # 认不出的：逗号把音节劈开的旧写法、县级市（桐乡 / 仙居）、自己判不出是中国的裸词。
+            ("China, , , Hubei, , , Xiang, Yang", None),         # live：workday 旧写法
+            ("Tongxiang, Zhejiang", None),                       # live：workday，最早 → 西安
+            ("XianJu, Zhejiang", None),
+            ("XIANYANG", None),
         ):
             with self.subTest(raw=raw):
-                self.assertEqual(normalizer.clean_location(raw), raw)
+                self.assertEqual(normalizer.clean_location(raw), expected or raw)
 
     def test_english_street_named_after_a_city_is_not_that_city(self):
         self.assertEqual(normalizer.clean_location("Beijing East Road, Shanghai"), "上海")
@@ -98,12 +104,13 @@ class WrongFoldLocationTest(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertEqual(normalizer.clean_location(raw), expected)
 
-    def test_parallel_places_are_recognised_exactly_as_before(self):
-        # 认「并列地点」的那条正则没动：折叠放宽的写法不会往多地结果里多加城市。
+    def test_parallel_places_never_gain_the_alias_city_hidden_in_a_longer_word(self):
+        # 认「并列地点」的那条正则没动：折叠放宽的写法不会往多地结果里多加城市（XIANGYANG 不会多出一个西安）。
+        # 并列里写着的别的地级市由拼音表认出来，写成它自己。
         for raw, expected in (
-            ("XIANGYANG / WUHAN", "武汉"),
-            ("WUXIANG / WUHAN", "武汉"),
-            ("Changzhou / Suzhou", "苏州"),          # 改前 → 杭州
+            ("XIANGYANG / WUHAN", "襄阳市/武汉"),
+            ("WUXIANG / WUHAN", "武汉"),              # 武乡是县，不在表里
+            ("Changzhou / Suzhou", "常州市/苏州"),    # 最早 → 杭州
             ("Shanghai / Nanjing", "上海/南京"),
         ):
             with self.subTest(raw=raw):
@@ -207,7 +214,7 @@ class WrongFoldNormalizeTest(unittest.TestCase):
         for raw, location in (
             ("黑龙江省·牡丹江市·西安区", "牡丹江市"),
             ("宁波杭州湾新区", "宁波"),
-            ("Changzhou, Jiangsu, China", "Changzhou, Jiangsu, China"),
+            ("Changzhou, Jiangsu, China", "常州市"),
             ("China, , , Hubei, , , Xiang, Yang", "China, , , Hubei, , , Xiang, Yang"),
             ("Beijing East Road, Shanghai", "上海"),
         ):

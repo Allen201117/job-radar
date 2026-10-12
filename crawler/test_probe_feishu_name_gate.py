@@ -52,6 +52,25 @@ class FeishuNameGateTest(unittest.TestCase):
         probe.feishu_name_gate(_cand("美图公司", "meitu"), fetch_home=lambda url: asked.append(url) or MEITU)
         self.assertEqual(asked, ["https://meitu.jobs.feishu.cn/"])
 
+    def test_sub_portal_candidate_is_asked_at_its_own_portal_home(self):
+        # 2026-10-12：英科这个租户挂着两家公司的门户，租户首页是英科再生的，英科医疗的在 /757263、/840753。
+        # 读租户首页会把英科医疗这两条候选拒掉（标题对不上），也会放过「英科再生」挂到英科医疗门户上。
+        homes = {
+            "https://global-intco.jobs.feishu.cn/": _home("英科再生社会招聘官网", "英科", "英科招聘, 加入英科"),
+            "https://global-intco.jobs.feishu.cn/757263/": _home("英科医疗社会招聘官网", "英科", "英科招聘, 加入英科"),
+        }
+        asked = []
+
+        def fetch(url):
+            asked.append(url)
+            return homes.get(url)
+
+        cand = {**_cand("英科医疗", "global-intco"), "url": "https://global-intco.jobs.feishu.cn/757263/position"}
+        self.assertIsNone(probe.feishu_name_gate(cand, fetch_home=fetch))
+        self.assertEqual(asked, ["https://global-intco.jobs.feishu.cn/757263/"])
+        self.assertIsNotNone(probe.feishu_name_gate({**cand, "company": "英科再生"}, fetch_home=fetch))
+        self.assertIsNotNone(probe.feishu_name_gate(_cand("英科医疗", "global-intco"), fetch_home=fetch))
+
     def test_unreadable_home_page_fails_closed(self):
         reason = probe.feishu_name_gate(_cand("美图公司", "meitu"), fetch_home=lambda _url: None)
         self.assertIsNotNone(reason)
