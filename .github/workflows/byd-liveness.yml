@@ -3,9 +3,13 @@ name: byd-liveness
 # 比亚迪撤岗核验（2026-10-11）：官网全量列表 + 逐岗详情接口双条件判死，顺带修「// 被压成 /」的坏链接。
 # 比亚迪撤岗后的详情页是空壳、没有任何「已下线」文案，浏览器巡检判不出来（只能落 suspect），
 # 所以单独一条链。逐岗判据与安全闸见 crawler/byd_liveness.py 的模块注释。
-# 手动触发、默认 dry-run；判死占比超过 max_expire_fraction 时整轮不下架（清存量那一次要显式放宽）。
+# 每日定时真跑（写库）；手动触发默认 dry-run。判死占比超过 max_expire_fraction 时整轮不下架
+# （日常撤岗 ≤7%，默认 0.3；2026-10-12 清存量那一次 72% 是手动放到 0.75 跑的）。
 
 on:
+  schedule:
+    # UTC 00:20 = 北京 08:20。当天下架的行赶得上 purge-expired（UTC 02:30）；重档抓比亚迪在 UTC 21~23 点，错开。
+    - cron: "20 0 * * *"
   workflow_dispatch:
     inputs:
       apply:
@@ -45,7 +49,7 @@ jobs:
           JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
           JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
           JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
-          APPLY: ${{ github.event.inputs.apply }}
+          APPLY: ${{ github.event_name == 'schedule' && 'true' || github.event.inputs.apply }}
           MAX_EXPIRE_FRACTION: ${{ github.event.inputs.max_expire_fraction }}
         run: |
           set -euo pipefail

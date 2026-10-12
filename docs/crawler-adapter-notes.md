@@ -12,6 +12,20 @@
 ```
 crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd,haier,tencent,bytedance,feishu,greenhouse,lever,china_ats,
                          #   meituan,kuaishou,bilibili,pinduoduo,vivo,byd,tencent_music,antgroup,mihoyo}.py
+                         #   bytedance.py = 字节跳动三条源：社招官网 `bytedance` / 校招官网 `bytedance_campus` / 全球站 `bytedance_global`
+                         #   （joinbytedance.com）。同一个招聘租户的三个公开门户，同一个 posts 接口，靠请求头 `website-path` 区分
+                         #   （society / campus / en；另有 jp，以及 robots 明写 Disallow 的 referral——**内推门户不许碰**）。
+                         #   ⚠️ 列表必须带头按门户取（2026-10-12 改）。不带头取到的不是任何一个公开门户的列表：全集对拍，
+                         #     官网在招而我们从没抓到 368 个；我们挂着在招、中文站链接打开是「该职位已下线」2,148 个（其中 1,302 个
+                         #     只挂全球站）。巡检见「已下线」判死 → 清除 → 列表又插回来，墓碑复活 437 行里 346 行是这个循环。
+                         #   ⚠️ 判一个岗在不在招：详情接口带**链接所在门户**的头读 `channel_online_status`（按门户算，不带头读出来的不算数）。
+                         #   ⚠️ 海外岗的官方页面是 `joinbytedance.com/search/{编号}`，不是中文站。全球站地点用接口的英文名
+                         #     （中文名「圣地亚哥」会判成智利，实为 San Diego），并按 sources.regions 逐岗过滤。
+                         #   ⚠️ 社招根列表 count 封顶 10,000 → 按一级职类切；职类清单取 `/api/v1/config/job/filters/2` 的 job_type_list
+                         #     （只靠前 2,000 条采样，漏掉小职类发现不了）。同一返回体的 job_type_count_map 和列表对不上，别当总数。
+                         #   ⚠️ 每轮先带一个不存在的门户名问一次：必须回 site not exist；照样回了岗位（头被无视）或两次都没问到
+                         #     → 整轮抛错不写。叶子实取少于自报 / 封顶却没拿到职类清单 / 采样到清单外的职类 → 照常收，
+                         #     但不标抓全（不触发缺席撤岗）。
                          #   china_ats.py = 本土通用 ATS（moka / beisen / company_spa；host 从 source_url 动态解析，浏览器拦截 SPA）
                          #   ⚠️ moka 岗位卡的地点与标题（`_parse_moka_card`，2026-10-11 重写；判据是拿 397 个在招门户、38,789 张卡片
                          #     innerText 原文量出来的）：列表接口是密文，地点只能从卡片文字里认。卡片字段区是
@@ -84,6 +98,12 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #       （云从 97、知道创宇 60、卡宾 37…），其中 16 条是社招源，连续 7 天零产出后会被假绿体检点名——
                          #       它们该不该停用要人定。必投清单公司里果麦文化（29→0）、微众银行（3→0）、天合光能（3→0）的 moka 源会清空。
                          #       这次不写 posted_at：另有会话在做，写不写等它量完报给创始人定。
+                         #       线上核对（2026-10-12 UTC 01:18 手动触发的浏览器档，run 38191354572）：年限口径这一步在 114 条源上
+                         #       下架 3,705 行、失败 0（CI 日志里逐源的 `[policy] out_of_policy=… removed=…` 合计）；预演点名的 3,737 个
+                         #       链接在库里全部是 removed——差的 32 个属于同一时段被迁移 322 停用的大陆汽车电子（芜湖）那条源，
+                         #       由那边的清理下架。moka 源名下 removed 的行里名单外有 235 行，全在同一时段被停用的关停门户源下
+                         #       （Meshy / 仙工智能 / 人福医药 / 观远数据 / 游卡…），是 remove-jobs-by-url-prefix 下的，不是口径下的。
+                         #       这一轮 407 条源 jobs_found 合计 46,362（预演 46,366）；28 条源报成功、门户自报有岗、收到 0 个。
                          #       逐门户的对拍表、上线后对库的回读、已停止招聘却仍在招的 60 行：docs/reviews/2026-10-11-moka-old-paginator.md
                          #       （📌 纠错：此处原写「另有一份逐门户的报告在未合入的分支」，报告已于 2026-10-12 进 main，只合了文档、没合那一版代码）。
                          #   tencent_music/antgroup/mihoyo = 必投清单大厂自建 SPA 门户（2026-07-06 live 验证：均有公开 JSON 接口，
@@ -421,7 +441,7 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #       300 个伪 id（含真 id 的相邻值）全是空骨架。非数字 / 超 int64 的 id 回 code=4005，不判死。
                          #     社招列表是全集：`pageNum` 是行偏移不是页码；去重后凑不齐自报 total 就抛错。列表里省市皆空的行
                          #       （当天 26 条）在 parse 被地点门挡掉，从不入库。
-                         #     社招撤岗核验 = `crawler/byd_liveness.py`（+ `byd-liveness.yml`，手动触发、默认 dry-run）：库里的链接让官方
+                         #     社招撤岗核验 = `crawler/byd_liveness.py`（+ `byd-liveness.yml`，每日定时真跑、手动触发默认 dry-run）：库里的链接让官方
                          #       路由解回岗位 id（老的坏链接唯一解才修），「不在本轮全量列表」且「详情两轮都回空骨架」才下架；逐岗探之前、
                          #       每探 500 个之后都过阳性 / 阴性对照；另有四道整轮作废的闸（链接解不出 id / 上一轮的岗大面积缺席 /
                          #       不在列表却读到在招的太多 / 判死占比）。社招不开 list-absence：它认的是「这轮没被写库」，列表里有、
