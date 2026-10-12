@@ -133,7 +133,8 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
      补上后全集对拍停用 85/85、在招误判 0；定向巡检 85 条全部下架、误杀 0（首轮 3 条 CI 页面超时落 unsure 不下架，重跑补上）。
      📄 `enrich._detail_beisen` + `enrich_backlog.EXPIRE_RATIO_GUARD`（本轮判死 ≥50% 即熔断，全集模拟峰值 15.7%）+ `crawler/test_beisen_liveness.py`。
    - **🚫「列表里没有」≠「已撤岗」——除非先证明该列表是全集（2026-07-29 立碑，差点误删 460 个在招岗）**：
-     list-absence 撤岗（`supports_absence_liveness` + `jobs_db.sweep_absent_jobs`）的前提是**该源的列表接口返回岗位全集**（feishu/beisen/bytedance 是验证过确实返全量才开的）。
+     list-absence 撤岗（`supports_absence_liveness` + `jobs_db.sweep_absent_jobs`）的前提是**该源的列表接口返回岗位全集**（feishu/beisen 是验证过确实返全量才开的）。
+     📌 纠错（2026-10-12）：此处原把 bytedance 也列在「验证过」里。它当时取的是不带 `website-path` 头的列表，不是任何公开门户的全集，缺席撤岗因此删过官网上仍在招的岗——见「飞书招聘的校招岗藏在 `website-path` 请求头后面」一节字节那条。
      ⚠️ **绝不能从「列表条数 ≪ 库里 active 条数」反推「差额都是死岗」**——这个差额有两种成因、处置**完全相反**：① 死岗堆积（该清）；② 列表接口本身只返子集（一清就是删在招岗）。
      踩坑实录：见华为列表接口只返 13 条而库里 460 个 active，就推断其余是死岗并开了 absence（commit 675e459）→ 逐个核验后**460 个全部在招、0 个撤岗**（`getJob/newHr` 返的是筛选过的子集；例 jobId=30153 列表查不到但详情接口返完整岗位名+正文）。已在 `c9a7e73` 撤回并加断言测试钉死。当时唯一挡住的是 97% 缺席越过 `max_expire_fraction=0.5` 安全闸 → sweep 主动跳过，未实际删数据；**但那道闸是兜底不是设计，别指望它**（存量降到列表规模 2 倍以内它就不拦了，而 expired 当天会被 purge 永久删除）。
      ✅ 正确姿势：拿不准列表是否全集，就走**逐岗** detail 判死（`ENRICH_REGISTRY` + liveness-sweep）。华为即用此法：`…/portalpub/getJobDetail/newHr?jobId={id}&dataSource={ds}`（httpx 零鉴权，既判死又补 `mainBusiness` 正文）；判死要求「jobname 空」**且**「有值字段数 ≤8」双条件（在招 ~32 个字段有值，不存在的 id 返 200+109 字段骨架但只 5 个有值），半截数据一律不判死——**宁可漏判不可错杀**。
@@ -819,6 +820,19 @@ adapter 里 `normalizer.location_in_source_regions(location, self.regions)` 一�
   ⚠️ 小米私有部署偶尔**无视 website-path 头**返回全集（2026-09-23 newretailing 一轮抓回 2,075，正常 110）
      → 幽灵行占比过半、list-absence 安全闸清不掉，只能重跑对账工具。
 - ⚠️ `portal_type` **不是**开关：带 `website-path: campus` 时传 2 或 6 返回同一批。
+- 🚫 **字节官网（`adapters/bytedance.py`）是同一个病，换了个 adapter（2026-10-12 立，创始人同日确认方案）**：
+  ❌ 两条官网源不带头取列表：库里挂着 2,148 个中文站链接打开是「该职位已下线」的岗（其中 1,302 个只挂全球站 joinbytedance.com），
+     官网上在招的 368 个却从没抓到。巡检判死 → 清除 → 列表又插回来，墓碑复活 437 行里 346 行是这个循环；缺席撤岗还删过 15 个官网上仍在招的岗。
+     （四份列表翻全 + 差集 2,516 岗逐岗读状态 + 200 页真渲染，0 条与预期不符。）
+  ✅ 根因：这个租户有 society / campus / en / jp / referral 五个门户，不带头的列表不是其中任何一个的列表。
+     拿它当全集，「在列表里」≠ 在招、「不在列表里」≠ 撤岗，两个方向都错。
+  ✅ 防：三条源各带自己门户的头（社招 society / 校招 campus / 全球站 en，链接 `joinbytedance.com/search/{编号}`）；每轮先带一个不存在的
+     门户名探一次，头被无视或两次没问到就抛错整轮不写。回归钉在 `crawler/test_bytedance.PortalHeaderTest`。
+     上线当天：新进 社招 286 / 校招 83 / 全球站 121；968 行原地换成全球站链接（保住首见时间）；缺席撤岗下架 1,189 行，
+     逐岗读状态全部已下线（其中 1,172 行下架前核、17 行下架后补核），同轮列表里抽 120 行对照全部在线。
+  ⚠️ `jobs.bytedance.com/robots.txt` 明写 `Disallow: /referral`：内推门户不许碰。
+  ⚠️ 判一个字节岗在不在招，详情接口要带**链接所在门户**的头；海外岗的页面在全球站，不在中文站。
+     全球站不在地区白名单内的国家不收（上线当天约 340 个）。个案细节（职类切片、探针、抓全判定的两个洞）→ `docs/crawler-adapter-notes.md`。
 
 ## ⚠️ 列表抓取上限与「短页误判末页」（2026-09-04 立）
 
