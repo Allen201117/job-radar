@@ -248,9 +248,10 @@ def _sample_that_passes(samples, validate_jd, patterns, company, *, adapter, sou
     for sample in samples or []:
         url = sample.get("jd_url")
         title = sample.get("title")
+        # 排除一并认：样本公司名是「吉利德 Gilead」的源，不能因为含「吉利」就当成吉利的源验收通过。
         company_matches = must_apply.match_company_against_patterns(
             sample.get("company"), pats
-        )
+        ) and not must_apply.is_excluded(company, sample.get("company"))
         if company_matches and url and title:
             verdict = _sample_validation(
                 sample, adapter=adapter, source_url=source_url,
