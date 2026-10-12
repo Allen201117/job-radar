@@ -34,11 +34,12 @@ on:
         required: false
         default: ""
       dry_run:
-        description: "true = 只探不写库（接新 adapter / 清存量之前先看判死数对不对）"
+        description: "勾上 = 只探不写库，并把拟下架的行点名打进日志（接新 adapter / 清存量之前先对名单）"
+        type: boolean
         required: false
-        default: "false"
+        default: false
       expire_guard_override:
-        description: "单轮改写撤岗熔断阈值，如 ctrip=0.95,netease=0.9；只对已登记熔断的 adapter 生效。清存量那一次用，平时留空"
+        description: "单轮改写撤岗熔断阈值，如 ctrip=0.95,netease=off（0~1 的小数或 off）；只对已登记熔断的 adapter 生效。清存量那一次用，平时留空"
         required: false
         default: ""
 
@@ -109,8 +110,9 @@ jobs:
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
           LIVENESS_EXPIRE_GUARD_OVERRIDE: ${{ github.event.inputs.expire_guard_override || '' }}
         run: |
-          EXTRA=""
-          if [ "$DRY_RUN" = "true" ]; then EXTRA="--dry-run"; fi
+          # 只有精确的 false 才真写库；其余任何值（true、大小写写错、多了空格）都按 dry-run 走。
+          EXTRA="--dry-run"
+          if [ "$DRY_RUN" = "false" ]; then EXTRA=""; fi
           python crawler/enrich_backlog.py --sweep \
             --adapter "${{ matrix.adapter }}" \
             --limit "${{ github.event.inputs.limit || '50000' }}" \

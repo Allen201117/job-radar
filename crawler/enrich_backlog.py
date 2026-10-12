@@ -267,9 +267,10 @@ EXPIRE_GUARD_OVERRIDE_ENV = "LIVENESS_EXPIRE_GUARD_OVERRIDE"
 def _expire_guard_ratio(adapter):
     """这个 adapter 本轮的熔断阈值；没登记返回 None。
 
-    env LIVENESS_EXPIRE_GUARD_OVERRIDE="ctrip=0.95,netease=0.9" 可以把**已登记**的 adapter 在这一轮改成别的值
-    （>1 = 这一轮不熔断）。只给「清存量那一次」用：先 dry-run 把判死数对上，再带着它跑一轮。
-    没登记的 adapter 不能靠它新开一道熔断；写坏的值忽略、按登记的来——不许因为手滑把熔断关掉。"""
+    env LIVENESS_EXPIRE_GUARD_OVERRIDE="ctrip=0.95,netease=off" 可以把**已登记**的 adapter 在这一轮改成别的值：
+    (0, 1] 之间的小数，或者字面量 off（这一轮不熔断）。只给「清存量那一次」用：先 dry-run 把拟下架的名单对上，
+    再带着它跑一轮。没登记的 adapter 不能靠它新开一道熔断；别的写法（95、1e9、inf、空）一律忽略、按登记的来——
+    不许因为手滑（想写 95% 写成 95）把熔断关掉。"""
     ratio = EXPIRE_RATIO_GUARD.get(adapter)
     if ratio is None:
         return None
@@ -277,13 +278,26 @@ def _expire_guard_ratio(adapter):
         name, sep, value = part.partition("=")
         if not sep or name.strip() != adapter:
             continue
+        value = value.strip().lower()
+        if value == "off":
+            return float("inf")
         try:
             override = float(value)
         except ValueError:
             continue
-        if override > 0:
+        if 0 < override <= 1:
             return override
     return ratio
+
+
+def active_expire_guard_overrides(adapters):
+    """这一轮被改写了熔断阈值的 adapter → 生效的值（给 drain 开头打日志用：放宽了就得让人看得见）。"""
+    out = {}
+    for adapter in adapters:
+        base, now = EXPIRE_RATIO_GUARD.get(adapter), _expire_guard_ratio(adapter)
+        if base is not None and now != base:
+            out[adapter] = now
+    return out
 
 
 def should_trip_expire_guard(adapter, checked, expired, min_sample=EXPIRE_GUARD_MIN_SAMPLE):
@@ -329,6 +343,12 @@ def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, pe
         smap,
         match_company=lambda name: must_apply.match_company_against_patterns(name, pats),
     )
+
+    queued_adapters = {(source or {}).get("adapter_name") for source in smap.values()}
+    for adp, ratio in sorted(active_expire_guard_overrides(queued_adapters).items()):
+        shown = "关闭" if ratio == float("inf") else f"{ratio:.0%}"
+        print(f"::warning::[撤岗熔断] adapter={adp} 本轮阈值被 {EXPIRE_GUARD_OVERRIDE_ENV} 改写为 {shown}"
+              f"（登记值 {EXPIRE_RATIO_GUARD[adp]:.0%}）")
 
     stat = {"filled": 0, "alive": 0, "miss": 0, "expired": 0, "err": 0, "skipped": 0}
     lock = threading.Lock()
@@ -380,8 +400,9 @@ def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, pe
                       f"跳过本轮剩余 {adp} 岗（不盖时间戳，下轮重试）")
             if adp not in tripped and should_trip_expire_guard(adp, a["checked"], a["expired"]):
                 tripped.add(adp)
+                guard_ratio = _expire_guard_ratio(adp)
                 print(f"::warning::[撤岗熔断] adapter={adp} 本轮判死 {a['expired']}/{a['checked']} "
-                      f"≥ {_expire_guard_ratio(adp):.0%}，远高于该源常态 → 疑似判死信号语义变了，"
+                      f"≥ {guard_ratio:.0%}，远高于该源常态 → 疑似判死信号语义变了，"
                       f"跳过本轮剩余 {adp} 岗（已判的留着，下轮重试）。先人工核对再放开。")
             done = stat["filled"] + stat["alive"] + stat["miss"] + stat["expired"] + stat["err"] + stat["skipped"]
             if done % 200 == 0:
