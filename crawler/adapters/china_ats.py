@@ -400,6 +400,9 @@ def _parse_moka_card(text: str):
 # 全部落在这两个位置、整行匹配、都是合法日期（2018~2026 年，没有晚于抓取日的），没有一张卡上有两条发布行。
 # 其余 6,670 张卡片上没写发布日期（76 个门户整站不展示：特斯拉社招 889 张、康龙化成校招 566 张…）→ None。
 # 🚫 不去正文里找：正文里的日期是截止日 / 报名时间 / 年龄要求（「截止日期：2024年08月29日」），不是发布日。
+# ⚠️ 这个日期是 Moka 的 publishedAt = **最近一次发布**，对方刷新后会变新，不是岗位第一次开放的时间；它按浏览器时区渲染
+#    （CI 是 UTC，北京时间 0~8 点发布的岗会早一天，实测 0.38%）。租户把日期格式配成 dd/MM/yyyy、或门户渲染成别的语言时
+#    认不出 → None（416 个门户全是默认格式）。怎么量的：docs/crawler-adapter-notes.md「moka 卡片上的发布日期」。
 _MOKA_NEW_POSTED_RE = re.compile(
     "(?:" + "|".join(re.escape(p) for p in _MOKA_NEW_PUBLISHED_PREFIXES) + r")\s*(\d{4})-(\d{2})-(\d{2})")
 _MOKA_OLD_POSTED_RE = re.compile(r"发布时间[:：]\s*(\d{4})-(\d{2})-(\d{2})")
