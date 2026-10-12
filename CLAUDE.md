@@ -68,7 +68,7 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
      - 能证明的支点：**计数用的就是取候选那条 where**（同一份 conds/params），所以只需「where 成立 ⇒ `jobFilterMatch` 放行」这一个方向。四道门：结构门（`filtersFullyPushedToSql`，JS-only 条件生效即弃权）/ 偏好门（`exclude_keywords` 非空即弃权）/ **运行时自检**（候选里除 SQL 一并排除的 ignored·applied 外一条都不该被 JS 淘汰，不成立即弃权——这道门不依赖任何人记得改代码）/ 未分类门（`recruitment_category is null` 走信号超集兜底，不是充分条件）。
      - ⚠️ **`total` 的语义不许改**（= 可翻页条数）：真实总数塞进 `total` 会让 `hasMore` 判断失真，「加载更多」永远点不完。真实总数只走 `exactTotal`、只用于展示。
      - ⚠️ 新增筛选项**必须**在 `lib/job-filter.ts` 的 `SQL_PUSHED_FILTER_KEYS` / `JS_ONLY_FILTER_KEYS` / `NON_FILTERING_FILTER_KEYS` 三张表里显式归类，否则 `tests/ux-hardening-contract.test.js` 直接红（fail-safe：漏归类只会退回「N+」，不会给错数字）。
-   - **失活治理靠探活、且必须确认真的在跑**：active 一度膨胀到 ~13 万 → enrich/sweep 取工作队列的 `status='active' ORDER BY …` 查询撞 service_role ~8s statement_timeout **静默失败**（db-report 实测 87% 岗 `enrich_checked_at=NULL` 从未探活、死岗下架不掉 = 恶性循环）。已加 source 前导部分索引（150 summary-drain / 151 liveness-sweep）让队列查询走索引脱离超时。`liveness-sweep.yml`（只探活不抓列表、不回潮假 active；**2026-06-20 起每日 08:00 UTC 定时跑**，max-parallel:4 护住 HK `max_connections=100`）+ `dead-link-audit.yml`（浏览器 SPA 源：beisen/moka/feishu **及 nio/xiaomi/xpeng_feishu 变体 + 自建大厂 SPA byd/kuaishou/bytedance/google**，每日定时）真跑，并以 `db-report.yml` 复核 `never_liveness_checked` 持续下降。**⚠️ 死岗反复回潮的更深真因（2026-06-20 修，commit 01728ee）= list 重抓的 upsert 把 sweep 判死的 `expired` 刷回 active、并抹掉 `enrich_checked_at`（巡检按 nulls first 轮转 → 被抹的岗反复插队、sweep 永远追不上，89% never-checked 真因）→ status 走 `CASE` 黏住 expired、`_UPDATE_COLS` 移除 enrich 簿记（jobs_db.py + write.ts 同口径）。改 upsert 务必保住此不变量。**
+   - **失活治理靠探活、且必须确认真的在跑**：active 一度膨胀到 ~13 万 → enrich/sweep 取工作队列的 `status='active' ORDER BY …` 查询撞 service_role ~8s statement_timeout **静默失败**（db-report 实测 87% 岗 `enrich_checked_at=NULL` 从未探活、死岗下架不掉 = 恶性循环）。已加 source 前导部分索引（150 summary-drain / 151 liveness-sweep）让队列查询走索引脱离超时。`liveness-sweep.yml`（只探活不抓列表、不回潮假 active；**2026-06-20 起每日 08:00 UTC 定时跑**，max-parallel:4 护住 HK `max_connections=100`）+ `dead-link-audit.yml`（浏览器 SPA 源：beisen/moka/feishu **及 nio/xiaomi/xpeng_feishu 变体 + 自建大厂 SPA kuaishou/bytedance 等**，每日定时；📌 纠错 2026-10-12：此处原列着 byd / google——google 2026-07-14 起改走 httpx 探活，byd 巡检判不了、2026-10-12 移出，见下文「比亚迪撤岗页是空壳」）真跑，并以 `db-report.yml` 复核 `never_liveness_checked` 持续下降。**⚠️ 死岗反复回潮的更深真因（2026-06-20 修，commit 01728ee）= list 重抓的 upsert 把 sweep 判死的 `expired` 刷回 active、并抹掉 `enrich_checked_at`（巡检按 nulls first 轮转 → 被抹的岗反复插队、sweep 永远追不上，89% never-checked 真因）→ status 走 `CASE` 黏住 expired、`_UPDATE_COLS` 移除 enrich 簿记（jobs_db.py + write.ts 同口径）。改 upsert 务必保住此不变量。**
    - **失活校验全部放在「不挡用户」的层，绝不放点击路径（2026-06-21 定，踩坑后修正）**：⚠️ 曾把实时探活放进点击门（`/api/jobs/go` 服务端探完再 302）——云函数冷启动 + 跨区连香港库 + 跨区探外网叠加，**实测点击要 5-8s，体验很差，已废弃并删除**。教训：**质量校验是后台/异步的事，不能卡在用户点击这一下**。现行设计 = **点击直跳官网（瞬开；JobCard 的标题 /「官网详情」和 applied 的「查看官网」都是 `<a target="_blank">` 真链接。📌 纠错 2026-10-10：此处原写「JobCard/applied 直接 `window.open(jd_url)`」，JobCard 当天改成了真链接——`<button>` + `window.open` 让右键新标签打开、中键、复制链接地址都用不了；埋点与后台核验仍挂在点击上）** + 两层离线/异步校验把死岗挤掉：
      - **② 展示时校验（非阻塞）**：看板（Today/Jobs）加载后**异步**批量探活当下可见岗（`POST /api/jobs/liveness-check` → `lib/liveness-client.js`，复刻 enrich.py 的 wt `req_state=9501`/hotjob `state=1017`/workday 404，封顶 2.5s、并发 6、跳过 24h 内刚探过的、`hasSessionCookie` 廉价判登录态不走 getUser）；死的标 expired + 当场从看板隐藏（deadIds 过滤渲染），活的盖 `enrich_checked_at`。看板先渲染、不被它阻塞；它只让死岗随后悄悄消失。
      - **③ 后台 sweep / 浏览器审计**：大盘卫生主力（见上）。
@@ -92,7 +92,7 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
      `job-info/31711`，第二个读到的是第一个的「该职位已下线」→ 判 dead → `--apply` 置 expired
      → 次日被 `purge-expired` **永久删除**。加 reload 后 31711 正常渲染出自己的正文，判回 alive。
      影响面：byd 6,362 + kuaishou 2,830 个 active 岗的 jd_url 都是「同一个 base + 不同 hash」，
-     两者都在 `_BROWSER_ADAPTERS` 里、每天带 `--apply` 跑。
+     立碑时两者都在 `_BROWSER_ADAPTERS` 里、每天带 `--apply` 跑（byd 2026-10-12 移出，见下一条）。
      ✅ 防：`audit_dead_links.is_same_document_nav(prev, url)` —— 只在真的同文档跳转上多花一次
      reload；浏览器重建 / 上一跳失败时清空 prev。回归钉在 `crawler/test_audit_hash_route_nav.py`。
      📌 同一个机制在农行 adapter 里也咬过一次（「换机构必须 page.reload()」，见目录结构里 abchina
@@ -100,6 +100,16 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
      ⚠️ **农行（abchina）刻意没加进浏览器巡检**：它的死岗文案是「该岗位已过期」，`DEAD_MARKERS`
      一条都不匹配 → 光加 adapter 只会白烧浏览器预算；而「先加文案、后修导航」的顺序会当场误杀
      （2026-09-06 实测：不 reload 时 3 个在招岗全部读到上一个岗的过期页）。
+   - **🚫 巡检判「疑似」≠ 还在招：比亚迪撤岗页是空壳，已撤岗挂了近四个月（2026-10-12 立）**：
+     ❌ 比亚迪社招在招 7,481 行里 5,429 行早已撤岗（最早 6 月），其中 3,160 行被浏览器巡检看过，照样 active。
+     ✅ 根因：撤岗后的详情页不渲染岗位名和正文，也**没有任何「已下线」文案**（页面自己的详情接口回 code=0 + 字段全空的骨架）。
+     `classify()` 对它只能落 suspect——375 个真渲染样本里 300 个已撤岗全判 suspect、0 个判 dead——而 suspect 只盖戳不下架。
+     既不是「文案没收进 `DEAD_MARKERS`」，也不是浦发那种「撤了照样渲染正文」，是第三种。
+     ✅ 防：`crawler/byd_liveness.py`（`byd-liveness.yml` 每日）：库里链接让官方路由解回岗位 id，「不在本轮全量列表」且「详情接口两轮都回
+     空骨架」才下架，七道闸任何一道不过整轮不下架并变红。全集对拍 7,481 行两个方向 0 反例；2026-10-12 清存量下架 5,372 行，
+     事后拿当时的官网列表复核，被下架的 0 行还在列表里。byd 已移出 `_BROWSER_ADAPTERS`（留着只会白烧预算，同 huawei / google）。
+     ⚠️ 没开 list-absence：存量 73% 缺席会被 50% 安全闸永远跳过（开了等于没开）；且它认的是「这轮没写库」，不是「不在列表」。
+     📌 SPA 详情页判不了死活时，**先抓页面自己发的详情请求回什么**，再决定收文案还是走接口。巡检名单里其它自建站有没有同样的盲区还没查完。
    - **国有大行 + 中国移动已有逐岗探活（2026-09-06 接入，此前这五家 9,292 个 active 岗只进不出，实测同日）**：
      spdb/icbc/ccb/bankcomm/cmcc 进 `ENRICH_REGISTRY` + liveness-sweep matrix；判死信号真伪 id
      live 对拍、**一律双条件**（见 `crawler/enrich.py` 各 `_detail_xxx` 注释）。三条诚实边界：
@@ -207,7 +217,7 @@ app-route 模板把同一个 promise 既交给 waitUntil 又交给 sendResponse�
 
 | 组件 | 在哪 | 干什么 |
 |---|---|---|
-| 期望清单 | `crawler/audit_contract.yaml`（90 条：数据 14 / 体验 22 / 链路 37 / 老告警桥接 17；原写 85 条是 09-19 上线时的数，09-23 复核更正为 87；10-04 加规则 Q 时实数已是 89、加完 90；10-10 体验层再加「现查派发失败」「公告页读取上限」两条，实数 92；10-11 数据层加「公司画像撞名」两条，实数 94；同日再加「公司名带渠道后缀」两条（招聘来源 / 在招岗各一条），实数 96） | 每条声明 `normal`；`name/why/action` 是**人话**，晨报直接念 |
+| 期望清单 | `crawler/audit_contract.yaml`（90 条：数据 14 / 体验 22 / 链路 37 / 老告警桥接 17；原写 85 条是 09-19 上线时的数，09-23 复核更正为 87；10-04 加规则 Q 时实数已是 89、加完 90；10-10 体验层再加「现查派发失败」「公告页读取上限」两条，实数 92；10-11 数据层加「公司画像撞名」两条，实数 94；同日再加「公司名带渠道后缀」两条（招聘来源 / 在招岗各一条），实数 96；10-12 加比亚迪撤岗两条（核验有没有跑成 / 陈旧在招岗个数），实数 98） | 每条声明 `normal`；`name/why/action` 是**人话**，晨报直接念 |
 | 执行器 | `crawler/audit_runner.py` + `structural-audit.yml`（每日北京 08:50） | 逐条量，写 `audit_results`（Supabase，迁移 281/282）；`unique(check_id, run_date)` 一天一行 = 趋势表。可选 `detail_sql` 列出「具体是哪几处」进 `detail.findings`，晨报 ⑤⑦ 据此点名；它失败不改数值与判定 |
 | 覆盖率差集 | `crawler/audit_coverage.py` + `audit_exemptions.yaml` | 左边**自动枚举**（带 cron 的 workflow / 写 ops_runs 的模块 / jobs 表列 / 走查指标），减去有期望的；上线时 68 条 → 现 14 条（全是 jobs 列） |
 | 老告警桥接 | `ops_watchdog.py` 的 `publish_audit_bridge` | 16 条规则**判定与阈值一字未动**，只把每条的命中数 + 明细写进同一张表（`detail.findings[].title` 与 issue 标题逐字一致） |

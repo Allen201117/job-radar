@@ -371,7 +371,7 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #       300 个伪 id（含真 id 的相邻值）全是空骨架。非数字 / 超 int64 的 id 回 code=4005，不判死。
                          #     社招列表是全集：`pageNum` 是行偏移不是页码；去重后凑不齐自报 total 就抛错。列表里省市皆空的行
                          #       （当天 26 条）在 parse 被地点门挡掉，从不入库。
-                         #     社招撤岗核验 = `crawler/byd_liveness.py`（+ `byd-liveness.yml`，手动触发、默认 dry-run）：库里的链接让官方
+                         #     社招撤岗核验 = `crawler/byd_liveness.py`（+ `byd-liveness.yml`，每日定时真跑、手动触发默认 dry-run）：库里的链接让官方
                          #       路由解回岗位 id（老的坏链接唯一解才修），「不在本轮全量列表」且「详情两轮都回空骨架」才下架；逐岗探之前、
                          #       每探 500 个之后都过阳性 / 阴性对照；另有四道整轮作废的闸（链接解不出 id / 上一轮的岗大面积缺席 /
                          #       不在列表却读到在招的太多 / 判死占比）。社招不开 list-absence：它认的是「这轮没被写库」，列表里有、
