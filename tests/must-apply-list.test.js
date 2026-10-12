@@ -50,11 +50,18 @@ test("must-apply JSON follows the canonical industry taxonomy and preserves the 
 });
 
 test("overseas must-apply JSON follows the domestic industry taxonomy and keeps each industry distinct", () => {
-  assert.deepEqual(Object.keys(overseasJson), Object.keys(json).filter((key) => !key.startsWith("_")));
-  for (const [industry, companies] of Object.entries(overseasJson)) {
-    assert.equal(companies.length, 30, `${industry} must have 30 overseas companies`);
-    assert.equal(new Set(companies.map((company) => company.name)).size, 30, `${industry} names must be unique`);
-    assert.equal(new Set(companies.map((company) => company.pattern)).size, 30, `${industry} patterns must be unique`);
+  const industries = Object.entries(overseasJson).filter(([key]) => !key.startsWith("_"));
+  assert.deepEqual(industries.map(([key]) => key), Object.keys(json).filter((key) => !key.startsWith("_")));
+  // 同一家公司占了两个名额、并掉一个时在 `_merged` 留记录（海外清单 2026-10-12 起也有）：「现有家数 + 并掉的家数 = 30」。
+  const mergedByIndustry = {};
+  for (const record of Object.values(overseasJson._merged || {})) {
+    mergedByIndustry[record.industry] = (mergedByIndustry[record.industry] || 0) + 1;
+  }
+  for (const [industry, companies] of industries) {
+    const expected = 30 - (mergedByIndustry[industry] || 0);
+    assert.equal(companies.length, expected, `${industry}: ${companies.length} 家 + 并掉 ${mergedByIndustry[industry] || 0} 家应为 30`);
+    assert.equal(new Set(companies.map((company) => company.name)).size, expected, `${industry} names must be unique`);
+    assert.equal(new Set(companies.map((company) => company.pattern)).size, expected, `${industry} patterns must be unique`);
     // 两种合法形态：%子串%（常规），或无通配的精确匹配（UPS/2U 这类短名：%UPS% 会误吞
     // Groups/Startups 等含子串的公司，ILIKE 无通配即等值匹配，专治「名字太短放宽必误伤」）。
     for (const company of companies) assert.match(company.pattern, /^(%[^%]+%|[^%]+)$/);
@@ -78,7 +85,9 @@ test("must-apply scope APIs select overseas data without changing domestic defau
   assert.deepEqual(M.mustApplyByIndustry("domestic"), Object.fromEntries(
     Object.entries(json).filter(([key]) => !key.startsWith("_")),
   ));
-  assert.deepEqual(M.mustApplyByIndustry("overseas"), overseasJson);
+  assert.deepEqual(M.mustApplyByIndustry("overseas"), Object.fromEntries(
+    Object.entries(overseasJson).filter(([key]) => !key.startsWith("_")),
+  ));
   assert.deepEqual(M.mustApplyUnion("overseas").slice(0, 2), overseasJson["互联网/科技"].slice(0, 2));
   assert.deepEqual(M.industriesForPattern("%Google%", "overseas"), ["互联网/科技"]);
   assert.deepEqual(M.industriesForPattern("%Google%"), []);
@@ -211,6 +220,43 @@ test("_merged：万达电影并进儒意影业（同一家公司改名后在清�
   }
 });
 
+// 2026-10-12（创始人同意）：同一家公司占两个名额的三组收成一条。独占归属下，两个名额里总有一个恒为 0——
+// 缺口台账把它记成「没岗」，是假缺口；看板改成独占后也一样。依据是 10-12 的在招岗与源名全集：
+//   · 学而思：库里只有「好未来（学而思）」一个名字（49 个健康岗），就是好未来；
+//   · A.P. Moller：库里没有任何含 Moller 的名字，它靠别名 %马士基% 认的「马士基 Maersk」本来就归 Maersk；
+//   · Grab Mobility：与互联网清单里的 Grab 是同一家、同一个模式，改成同名（贝壳、Stripe 也是一家公司放两个行业）。
+test("同一家公司不再占两个名额：学而思并进好未来、A.P. Moller 并进 Maersk、Grab 两个行业同名", () => {
+  const namesOf = (list) => Object.entries(list).filter(([k]) => !k.startsWith("_")).flatMap(([, v]) => v).map((c) => c.name);
+  for (const [list, gone, into, industry] of [
+    [json, "学而思", "好未来", "教育"],
+    [overseasJson, "A.P. Moller", "Maersk", "物流/供应链"],
+  ]) {
+    assert.ok(!namesOf(list).includes(gone), `${gone} 已并掉却仍在清单里`);
+    const record = (list._merged || {})[gone];
+    assert.ok(record, `${gone} 并掉要在 _merged 留记录`);
+    assert.equal(record.merged_into, into);
+    assert.equal(record.industry, industry);
+    assert.ok(list[industry].some((c) => c.name === into), `${into} 必须还在 ${industry} 里`);
+    for (const field of ["pattern", "evidence", "verified_at", "decision"]) {
+      assert.ok(typeof record[field] === "string" && record[field].trim(), `${gone}.${field} 不能为空`);
+    }
+    assert.match(record.verified_at, /^\d{4}-\d{2}-\d{2}$/);
+  }
+  assert.ok(!namesOf(overseasJson).includes("Grab Mobility"));
+  const grabs = Object.entries(overseasJson).filter(([k]) => !k.startsWith("_"))
+    .flatMap(([industry, v]) => v.filter((c) => c.pattern === "%Grab%").map((c) => [industry, c.name]));
+  assert.deepEqual(grabs, [["互联网/科技", "Grab"], ["汽车/出行", "Grab"]]);
+  // 爬虫侧同样读不到被并掉的名字
+  const py = execFileSync("python3", ["-c", [
+    "import json, sys",
+    `sys.path.insert(0, ${JSON.stringify(path.join(__dirname, "..", "crawler"))})`,
+    "import must_apply",
+    "names = must_apply.all_names()",
+    "print(json.dumps([n for n in ['学而思', 'A.P. Moller', 'Grab Mobility'] if n in names], ensure_ascii=False))",
+  ].join("\n")], { encoding: "utf8" });
+  assert.deepEqual(JSON.parse(py), []);
+});
+
 test("元数据键不会漏进读取方：TS 与 Python 两侧都只读行业数组", () => {
   assert.deepEqual(M.MUST_APPLY_INDUSTRIES, INDUSTRY_CATEGORIES);
   assert.equal(M.MUST_APPLY_VERSION, "2026Q3-v2");
@@ -247,6 +293,7 @@ test("当前别名清单逐条钉死（国内：库里记的是英文名）", ()
 test("当前别名清单逐条钉死（海外：库里记的是中文名）", () => {
   const rows = Object.entries(overseasJson).filter(([k]) => !k.startsWith("_")).flatMap(([, v]) => v)
     .filter((entry) => entry.aliases).map((entry) => [entry.name, entry.aliases]);
+  // 2026-10-12：`A.P. Moller` 那条（别名 %马士基%）并进了 Maersk——库里只有「马士基 Maersk」一个名字，本来就被 %Maersk% 认到。
   assert.deepEqual(rows, [
     ["Walmart", ["%沃尔玛%"]],
     ["McDonald's", ["%麦当劳%"]],
@@ -271,7 +318,6 @@ test("当前别名清单逐条钉死（海外：库里记的是中文名）", ()
     ["Prologis", ["%普洛斯%"]],
     ["CapitaLand", ["%凯德%"]],
     ["J&T Express", ["%极兔%"]],
-    ["A.P. Moller", ["%马士基%"]],
     ["Bandai Namco", ["%万代南梦宫%"]],
   ]);
 });
