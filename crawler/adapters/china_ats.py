@@ -360,6 +360,10 @@ def _beyond_location_column(place: str) -> bool:
     """
     if place.lower() in _MOKA_VAGUE_PLACES:
         return True
+    # 拼音写的省（「Jiangsu」「Henan Sheng」）同样只说到省：「Changzhou, Jiangsu, China」里的城市由拼音表认
+    # （geo.latin_cn_places），省这一段不算丢了的地点。
+    if normalizer.latin_cn_bare_province(place, assume_cn=True):
+        return True
     code = normalizer.derive_country_code(place)
     return code is not None and code not in ("CN", "HK", "MO")
 
