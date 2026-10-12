@@ -436,6 +436,44 @@ checks:
     why: 比亚迪撤掉的岗位，官网详情页只剩一个空白页、没有任何提示，常规的页面巡检认不出来，要靠每天对照官网在招名单来下架。这个数涨上去，说明那条每日核验没在起作用，用户点开比亚迪的岗位会看到空白页。2026-10-12 之前它攒到过五千多个。
     action: 把这条转给 Claude，让它看比亚迪撤岗核验最近一次运行是被哪道安全闸拦下的，或者为什么没跑
 
+  # Workday：对方改了帖子的主地点，链接里的地点段跟着变，旧链接照样能开（对方只按链接最后一段找帖子）
+  # → 列表按新链接插一行，旧行逐岗探活每次都回 200，同一个帖子两行都在招。
+  # 写库时已经认旧链接（jobs_db.plan_moved_postings，2026-10-12）；这条盯着那套机制有没有在起作用。
+  # 上线前真库实测 587 个帖子 / 多出 610 行（2026-10-12；其中腾讯海外岗 18 个帖子，它的链接也在 Workday 上）。
+  # 口径 = 同一个 站点 + 链接最后一段 的在招行数 − 1；不按招聘编号数（库里真有两个帖子编号段都是「-1」）。
+  - id: jobs.workday_same_posting_two_links
+    name: Workday 渠道里同一个岗位挂着两个链接、多出来的行数
+    layer: data
+    db: jobs
+    owner: crawler/jobs_db.py
+    sql: >
+      select coalesce(sum(copies - 1), 0) from (
+        select count(*) as copies
+        from jobs where status = 'active' and jd_url like '%myworkdayjobs.com/%/job/%'
+        group by lower(substring(jd_url from '^https?://([^/]+)')),
+                 lower(substring(split_part(jd_url, '?', 1) from '^https?://[^/]+/(?:[A-Za-z]{2}-[A-Za-z]{2}/)?([^/]+)/job/')),
+                 substring(split_part(jd_url, '?', 1) from '/([^/]+)$')
+        having count(*) > 1
+      ) g
+    detail_sql: >
+      with p as (
+        select company, count(*) as copies
+        from jobs where status = 'active' and jd_url like '%myworkdayjobs.com/%/job/%'
+        group by company,
+                 lower(substring(jd_url from '^https?://([^/]+)')),
+                 lower(substring(split_part(jd_url, '?', 1) from '^https?://[^/]+/(?:[A-Za-z]{2}-[A-Za-z]{2}/)?([^/]+)/job/')),
+                 substring(split_part(jd_url, '?', 1) from '/([^/]+)$')
+        having count(*) > 1
+      )
+      select format('「%s」有 %s 个岗位各挂着两个链接', company, count(*)) as title, company as key
+      from p group by company order by count(*) desc, company limit 30
+    normal: "<= 20"               # 待上线后回读校准：留下来的只该是对方两次查询之间刚改地点的那几个，下一轮就消
+    severity: warn
+    covers: [jd_url]
+    calibrated: false
+    why: 外企常用的 Workday 招聘系统里，公司一改岗位的工作地点，岗位链接就跟着变，旧链接还照样打得开。我们抓到新链接时如果认不出它是同一个岗位，库里就会多出一行：用户会刷到两张一样的卡，其中一张写的还是旧地点；老岗位也会被当成新岗位排到前面。10 月 12 日之前这样多出来的有六百多行，最早的挂了三个半月。
+    action: 把这条转给 Claude，让它看点名的公司最近一次抓取有没有把旧链接的行换掉或下架，没有的话查写库时认旧链接那一步
+
   # ===== 体验层 =====
   # 全部 db: supabase（events / job_actions / auth.users / ops_runs 都在 Supabase）。
   # 口径统一「昨天全天（Asia/Shanghai）」；SQL 已在真库跑通，实测值写在各条注释里
