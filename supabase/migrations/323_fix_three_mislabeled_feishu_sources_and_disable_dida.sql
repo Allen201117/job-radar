@@ -1,4 +1,4 @@
--- 322 — 纠正三条挂错公司名的飞书源，停用门户已不存在的道旅科技
+-- 323 — 纠正三条挂错公司名的飞书源，停用门户已不存在的道旅科技
 --       （2026-10-11 飞书系 138 条源全量普查查实，创始人 2026-10-12 同意「1234 都做」）
 --
 -- 现象（三条都是迁移 218 那批：外部清单 → probe.py 探活 → 入库，那条路当时没有任何核名）：
@@ -109,30 +109,30 @@ begin
        where (source_url = 'https://mammotion.jobs.feishu.cn/index/position' and company = '库犸科技')
           or (source_url = 'https://global-intco.jobs.feishu.cn/index/position' and company = '英科再生')
           or (source_url = 'https://tranxmart.jobs.feishu.cn/index/position' and company = '千曙科技')) <> 3 then
-    raise exception '322: 三条源没有都改成新名';
+    raise exception '323: 三条源没有都改成新名';
   end if;
   if exists (select 1 from sources
               where (source_url like 'https://mammotion.jobs.feishu.cn/%' and company <> '库犸科技')
                  or (source_url like 'https://global-intco.jobs.feishu.cn/%' and company <> '英科再生')
                  or (source_url like 'https://tranxmart.jobs.feishu.cn/%' and company <> '千曙科技')) then
-    raise exception '322: 这三个租户下还有源挂着别的名字';
+    raise exception '323: 这三个租户下还有源挂着别的名字';
   end if;
   if exists (select 1 from sources where enabled and company in ('容知日新', '英科医疗', '千署科技')) then
-    raise exception '322: 还有 enabled 的源挂着旧名';
+    raise exception '323: 还有 enabled 的源挂着旧名';
   end if;
   if exists (select 1 from sources
               where source_url = 'https://didatravel.jobs.feishu.cn/index/position' and enabled) then
-    raise exception '322: 道旅科技的源还是 enabled';
+    raise exception '323: 道旅科技的源还是 enabled';
   end if;
   if (select count(*) from company_profiles where company = '千曙科技') <> 1
      or exists (select 1 from company_profiles where company = '千署科技') then
-    raise exception '322: 画像「千署科技」→「千曙科技」没有落成恰好一个';
+    raise exception '323: 画像「千署科技」→「千曙科技」没有落成恰好一个';
   end if;
   if exists (select 1
                from insight_subjects s
                join company_profiles p on p.id = s.company_id
               where p.company = '千曙科技' and s.kind = 'company' and s.name <> '千曙科技') then
-    raise exception '322: 「千曙科技」画像下的公司主体还叫旧名';
+    raise exception '323: 「千曙科技」画像下的公司主体还叫旧名';
   end if;
   if exists (select 1
                from insight_items i
@@ -140,6 +140,6 @@ begin
               where p.company in ('容知日新', '英科医疗')
                 and i.origin = 'derived'
                 and i.status = 'active') then
-    raise exception '322: 错名画像下还有在展的派生指标';
+    raise exception '323: 错名画像下还有在展的派生指标';
   end if;
 end $$;
