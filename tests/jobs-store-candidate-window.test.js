@@ -7,6 +7,9 @@ const { loadTs } = require("./_load-ts");
 // 什么时候必须弃权」——弃权比给错数字重要：给错数字比现在（把上限当真实值）更糟。
 const ROOT = path.join(__dirname, "..");
 const FTS_CAP = 8000;
+// 「7 天内新岗」在候选 SQL 里的写法（正则片段）：lib/job-novelty.sqlIsNew("first_seen_at > now() - interval '7 days'")。
+const RECENT_SQL =
+  "\\(first_seen_at > now\\(\\) - interval '7 days' and \\(posted_at is null or first_seen_at - posted_at <= interval '7 days'\\)\\)";
 
 function loadSearch() {
   // 共享 cache，才能在 search.ts 拿到 client 之前把 jobsQuery 换成桩。
@@ -392,8 +395,11 @@ test("扫描路径（无筛选）同样按偏好优先截断", async () => {
   assert.match(c.sql, /first_seen_at > now\(\) - interval '7 days'/);
   // 候选查询必须带「方向 GIN 命中 OR 7 天内」的收窄条件（2026-09-18：不带它是全表扫，库上 2.3~2.6s；带上走 BitmapOr 493ms），
   // 且引用的占位符就是排序用的那个 tsquery 参数。
-  const m = c.sql.match(/where .* and \(search_doc @@ to_tsquery\('simple', \$(\d+)\) or first_seen_at > now\(\) - interval '7 days'\) order by/);
+  // 「7 天内」= 新岗判据（lib/job-novelty）：首见 7 天内，且不是进来时官方发布日就已经早 7 天以上的老岗。
+  const m = c.sql.match(new RegExp(`where .* and \\(search_doc @@ to_tsquery\\('simple', \\$(\\d+)\\) or ${RECENT_SQL}\\) order by`));
   assert.ok(m, `候选 SQL 缺少方向/7 天收窄条件：${c.sql}`);
+  // 粗排的「7 天内 +10」与收窄条件是同一个条件（不一致就会把拿不到新岗分的行留在窗口里）。
+  assert.match(c.sql, new RegExp(`\\(${RECENT_SQL} is true\\)::int \\* 10`));
   const narrow = c.params[Number(m[1]) - 1];
   assert.equal(typeof narrow, "string", "收窄条件引用的必须是 tsquery 参数");
   // 收窄用的是**未扩展**的原始方向词（每个角色一条 AND 短语），不是排序那个经词表扩展的宽查询：
@@ -582,7 +588,9 @@ test("粗排收窄：选了校招/实习时按招聘类型拆成三支（逐行�
   await search.searchJobsStore({ ...DEFAULT_FILTERS, jobType: "实习" }, prefsWith({ target_roles: ["产品经理"] }), [], 0, 60);
   const c = candidateSql(calls);
   const m = c.sql.match(
-    /and \(\(search_doc @@ to_tsquery\('simple', \$(\d+)\) and recruitment_category = '实习'\) or \(first_seen_at > now\(\) - interval '7 days' and recruitment_category = '实习'\) or \(recruitment_category is null and \(search_doc @@ to_tsquery\('simple', \$(\d+)\) or first_seen_at > now\(\) - interval '7 days'\)\)\) order by/,
+    new RegExp(
+      `and \\(\\(search_doc @@ to_tsquery\\('simple', \\$(\\d+)\\) and recruitment_category = '实习'\\) or \\(${RECENT_SQL} and recruitment_category = '实习'\\) or \\(recruitment_category is null and \\(search_doc @@ to_tsquery\\('simple', \\$(\\d+)\\) or ${RECENT_SQL}\\)\\)\\) order by`,
+    ),
   );
   assert.ok(m, c.sql);
   assert.equal(m[1], m[2], "三支引用的是同一个收窄 tsquery");

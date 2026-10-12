@@ -32,6 +32,7 @@ import {
 } from "@/lib/job-fields";
 import { gradClassLabel, isEarlyBatch } from "@/lib/campus-batch";
 import { formatDateLabel } from "@/lib/relative-time";
+import { NEW_BADGE_DAYS, isNewWithinDays } from "@/lib/job-novelty";
 import { matchTier } from "@/lib/scoring";
 import CompanyInsightDrawer from "@/components/CompanyInsightDrawer";
 import CompanyLogo from "@/components/CompanyLogo";
@@ -421,9 +422,8 @@ export default function JobCard({
     }, 2000);
   }
 
-  const isNew =
-    job.first_seen_at &&
-    (Date.now() - new Date(job.first_seen_at).getTime()) / 86400000 <= 3;
+  // 首见 3 天内，且不是进来时就已经发布很久的老岗（与「仅新岗位」筛选同一个判据，见 lib/job-novelty）。
+  const isNew = isNewWithinDays(job, NEW_BADGE_DAYS);
   const posted = formatDateLabel(job.posted_at);
   const postedLabel = jobFieldDisplayValue(posted);
   const freshnessText = freshness.stale
