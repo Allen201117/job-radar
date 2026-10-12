@@ -96,9 +96,7 @@ from adapters.gree import GreeAdapter
 SUMMARY_STORAGE_LIMIT = int(os.environ.get("JOB_SUMMARY_STORAGE_LIMIT", "500") or "500")
 # 声明了 supports_absence_liveness、但按缺席下架还只许 dry-run 的 adapter（env LIVENESS_ABSENCE_OBSERVE 可整体覆盖）。
 # byd_campus 2026-10-11 新接：还没见过「列表里消失的岗在官网上是什么样」，先看几晚 dry-run 数字。
-# 字节三条源 2026-10-12 改成按公开门户取列表：第一轮只看 dry-run 数字（预期：社招约 900、校招约 280、
-# 全球站约 0——全球站在招且在地区白名单内的存量行已先挪走），对上了再从这里拿掉。
-ABSENCE_OBSERVE_DEFAULT = "beisen,byd_campus,bytedance,bytedance_campus,bytedance_global"
+ABSENCE_OBSERVE_DEFAULT = "beisen,byd_campus"
 
 
 def cap_summary_for_storage(summary):
