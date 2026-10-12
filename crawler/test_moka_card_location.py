@@ -208,11 +208,17 @@ class MokaMultiPlaceTest(unittest.TestCase):
                 self.assertEqual(self._location(line), line)
                 self.assertEqual(normalizer.clean_location(line), stored)
 
-    def test_not_written_when_cleaning_would_lose_a_listed_city(self):
-        # 清洗把「牡丹江市·西安区」折成西安（折错的存量问题，见 normalizer.clean_location）：这时沈阳、牡丹江都不在结果里。
+    def test_district_named_like_another_city_no_longer_blocks_the_line(self):
+        # 2026-10-12 前清洗把「牡丹江市·西安区」折成西安，沈阳、牡丹江都不在结果里，这一行只能不写。
         line = "黑龙江·牡丹江市·西安区 辽宁·沈阳市"
+        self.assertEqual(self._location(line), line)
+        self.assertEqual(normalizer.clean_location(line), "牡丹江市/沈阳市")
+
+    def test_not_written_when_cleaning_would_lose_a_listed_city(self):
+        # 「全国」和城市并列：清洗只留「全国」，保定不在结果里。
+        line = "全国 河北·保定市"
         self.assertTrue(_moka_places(line), "它是地点字段，只是不能写")
-        self.assertEqual(normalizer.clean_location(line), "西安")
+        self.assertEqual(normalizer.clean_location(line), "全国")
         self.assertIsNone(self._location(line))
 
     def test_truncated_list_is_never_written(self):
