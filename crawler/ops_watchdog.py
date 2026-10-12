@@ -159,6 +159,15 @@ VERDICT_STATUS_MODULES = frozenset({"gap_funnel", "gap_funnel_browser", "campus_
 # 2026-09-03 实测：11 个源一周 28 轮全挂（Workday 站点名错 / 板块改名 / 反爬 403 / 浏览器没装），
 # 每轮各自被吞成 crawl_runs 一行 failed，模块级绿灯完全看不见——只有源级视角才抓得到。
 DEAD_SOURCE_MIN_RUNS = 8   # 少于这个次数不判（新源、低频源不冤枉）
+# 规则 F 的第二条口径（2026-10-12 加）：每天只跑一轮的源（Moka 等浏览器源只在重档里跑）5 天只有 5 轮，
+# 永远够不到上面的 8 轮。2026-10-11 实测：10 条启用中的源近 14 天 13 轮全失败（9 条 Moka 门户关停 / 搬走 +
+# 农业银行），规则 F 命中 0 条；人福医药、仙工、流利说等从 09-13 起连败 27 轮，一条告警都没有。
+# 阈值是回测定的（09-08 ~ 10-12 全部 crawl_runs，逐日模拟）：「近 7 天每一轮都失败，且失败落在 ≥6 个不同日期」
+# 比现行口径多抓到 13 条源（正是上面那批 + 好未来 / 乐元素 / 极米），首次命中时已连败 6 天（中位数）；
+# 同期两次「门户挂 2~4 天关停页又恢复」（阿克苏诺贝尔 2 天、云顶新耀 4 天）都不命中。
+# 取 5 天 / ≥4 天会把这类临时关停报出来；取 ≥7 天则任何一晚重档没轮到它就永远凑不齐。
+DEAD_SOURCE_DAILY_WINDOW_DAYS = 7
+DEAD_SOURCE_DAILY_MIN_DAYS = 6
 
 # 「0 就是正常」的模块：产出为 0 表示没东西可做，不是坏了 → 明确排除在规则 A 之外，
 # 也不用在日志里提醒「补口径」。
@@ -480,38 +489,72 @@ def evaluate_zero_output(rows, today, days=2, muted=()):
 UNFINISHED_CRAWL_HOURS = 6
 
 
-def evaluate_dead_sources(crawl_rows, sources_by_id, days=5, min_runs=DEAD_SOURCE_MIN_RUNS):
-    """规则 F：某个 enabled 源在近 days 天内跑了 ≥ min_runs 次且**全部** failed → 告警。
-
-    每个源一个 finding（标题稳定 = 同源去重）；evidence 带最常见的错误首行，看一眼就知道是
-    站点名错 / 板块改名 / 反爬 / 环境缺件，直接决定「改 URL / 停用 / 修 adapter」。
-    只看 status=='failed'：partial_success / 空产出不算（那是规则 A 的口径）。"""
-    by_source = defaultdict(lambda: {"n": 0, "failed": 0, "errors": Counter()})
-    for row in crawl_rows or []:
+def _failure_tally(rows):
+    """按源汇总：跑了几轮、失败几轮、还在跑的几轮、失败落在哪几天（Asia/Shanghai 日期）、各错误首行出现几次。"""
+    by_source = defaultdict(lambda: {"n": 0, "failed": 0, "running": 0, "errors": Counter(), "days": set()})
+    for row in rows or []:
         sid = row.get("source_id")
         if not sid:
             continue
         agg = by_source[sid]
         agg["n"] += 1
+        if row.get("status") == "running":
+            # 占位符，不是结论。这里只认 'running' 就够：规则 I 要看 finished_at 是因为迁移 234 之前的占位符是
+            # 'skipped'，那批孤儿行都在 2026-09-05 之前，落不进本规则的一周回看窗。
+            agg["running"] += 1
         if row.get("status") == "failed":
             agg["failed"] += 1
             agg["errors"][str(row.get("error_message") or "")[:100]] += 1
+            started = _as_dt(row.get("started_at"))
+            if started:
+                # 重档每晚 UTC 21 点前后开跑、常跨过 UTC 零点：同一晚的两轮会落在相邻两个 UTC 日期上，按 UTC 会数成两天。
+                # 北京日期的分界在 UTC 16 点，离重档、快档的开跑时间都远，一晚算一天。
+                agg["days"].add(started.astimezone(SHANGHAI).date())
+    return by_source
+
+
+def evaluate_dead_sources(crawl_rows, sources_by_id, days=5, min_runs=DEAD_SOURCE_MIN_RUNS,
+                          daily_rows=None, daily_window_days=DEAD_SOURCE_DAILY_WINDOW_DAYS,
+                          daily_min_days=DEAD_SOURCE_DAILY_MIN_DAYS):
+    """规则 F：某个 enabled 源每一轮都失败 → 告警。两条口径任一成立即报，同一个源只出一条：
+      ① 近 days 天内跑了 ≥ min_runs 次且**全部** failed（一天跑好几轮的源，几天就够数）；
+      ② 近 daily_window_days 天内每一轮都 failed，且失败落在 ≥ daily_min_days 个不同日期
+         （每天只跑一轮的源永远够不到 ①，见 DEAD_SOURCE_DAILY_* 的注释）。daily_rows 不传 = 只判 ①。
+         ② 不数还在跑的那一轮（status='running' 是占位符）：看门狗 UTC 00:30 跑，重档常常这时还没收尾，
+         把在飞的那一行当成「没失败」，这条源当天就报不出来。① 的判定一字未动（running 行照旧算在轮数里）。
+         daily_window_days 只是写进 summary 的标签，窗口由调用方截好传进来。
+
+    每个源一个 finding（标题稳定 = 同源去重）；evidence 带最常见的错误首行，看一眼就知道是
+    站点名错 / 板块改名 / 反爬 / 环境缺件，直接决定「改 URL / 停用 / 修 adapter」。
+    只看 status=='failed'：partial_success / 空产出不算（那是规则 A 的口径）。"""
+    by_source = _failure_tally(crawl_rows)
+    by_source_daily = _failure_tally(daily_rows)
     findings = []
-    for sid, agg in sorted(by_source.items()):
+    for sid in sorted(set(by_source) | set(by_source_daily)):
         source = sources_by_id.get(sid)
         if not source or not source.get("enabled", True):
             continue
-        if agg["n"] < min_runs or agg["failed"] != agg["n"]:
-            continue
-        top_error = agg["errors"].most_common(1)[0][0] if agg["errors"] else "(无错误信息)"
+        agg, daily = by_source.get(sid), by_source_daily.get(sid)
         label = f"{source.get('adapter_name') or '?'} / {source.get('company') or sid}"
+        if agg and agg["n"] >= min_runs and agg["failed"] == agg["n"]:
+            hit = agg
+            summary = f"源 `{label}` 近 {days} 天 {agg['n']} 轮抓取全部失败，一个岗都没进库。"
+        elif (daily and daily["failed"] and daily["failed"] == daily["n"] - daily["running"]
+              and len(daily["days"]) >= daily_min_days):
+            hit = daily
+            summary = (f"源 `{label}` 近 {daily_window_days} 天 {daily['failed']} 轮抓取全部失败"
+                       f"（失败落在 {len(daily['days'])} 个不同日期），一个岗都没进库。")
+        else:
+            continue
+        top_error = hit["errors"].most_common(1)[0][0] if hit["errors"] else "(无错误信息)"
         findings.append({
             "rule": "F",
             "subject": label,
-            "summary": f"源 `{label}` 近 {days} 天 {agg['n']} 轮抓取全部失败，一个岗都没进库。",
+            "summary": summary,
             "evidence": [f"最常见错误：{top_error}",
                          f"source_url：{source.get('source_url') or '?'}"],
             "next": "按错误类型处置：4xx 站点名/板块名错 → 改 source_url；403/反爬 → 停用（不绕）；"
+                    "门户关停 / 入口搬走 → 看官网招聘链接现在指到哪，换源或停用；"
                     "环境缺件（浏览器不存在等）→ 修 workflow；其它 → 修 adapter。别让它继续每轮白跑。",
         })
     return findings
@@ -1765,7 +1808,8 @@ def main():
     parser.add_argument("--lookback-days", type=int, default=5,
                         help="规则 B：回看几天的 workflow 运行（太短会漏掉几天才犯一次的；太长会在修好后多念叨几天）")
     parser.add_argument("--dead-source-days", type=int, default=5,
-                        help="规则 F：回看几天内某源每一轮都失败才告警")
+                        help="规则 F 口径①：回看几天内某源每一轮都失败才告警"
+                             "（口径②「每天一轮的源」固定回看 DEAD_SOURCE_DAILY_WINDOW_DAYS 天）")
     parser.add_argument("--apply", action="store_true", help="真开 issue（默认 dry-run 只打印）")
     parser.add_argument("--repo", default="", help="owner/name，默认自动识别")
     args = parser.parse_args()
@@ -1847,10 +1891,12 @@ def main():
         rule_errored.add("J")
     # 规则 F 单独包住：crawl_runs 是最大的一张表（1,400 源 × 4 轮/天），取不到不能拖垮 A/C/D。
     try:
-        # 规则 K 要 1 个最近窗 + 7 天基线、规则 L 要 10 天，一次取够；F/G/I 仍只看自己那 dead_source_days 天
+        # 规则 K 要 1 个最近窗 + 7 天基线、规则 L 要 10 天，一次取够；G/I 与 F 的口径①仍只看自己那 dead_source_days 天，
+        # F 的口径②另截近 DEAD_SOURCE_DAILY_WINDOW_DAYS 天
         # （2026-09-13 实测 8 天 51,971 行 / 45s，5 天 30,066 行 / 32s，都远在 job 超时之内；
         #  整个 watchdog job 在 CI 上 1.5~1.8 分钟跑完。本机从国内连同一查询 8 天要 463s，别拿本机耗时当 CI 的）。
-        crawl_days = max(args.dead_source_days, 1 + COLLAPSE_BASELINE_DAYS, SILENT_LOOKBACK_DAYS)
+        crawl_days = max(args.dead_source_days, DEAD_SOURCE_DAILY_WINDOW_DAYS,
+                         1 + COLLAPSE_BASELINE_DAYS, SILENT_LOOKBACK_DAYS)
         crawl_since = (now - timedelta(days=crawl_days)).isoformat()
         all_crawl_rows = db.fetch_all_rows(
             lambda: sb.table("crawl_runs")
@@ -1863,8 +1909,10 @@ def main():
                       .eq("enabled", True)
         )
         sources_by_id = {r["id"]: r for r in source_rows}
-        findings += evaluate_dead_sources(crawl_rows, sources_by_id,
-                                          days=args.dead_source_days)
+        findings += evaluate_dead_sources(
+            crawl_rows, sources_by_id, days=args.dead_source_days,
+            daily_rows=rows_started_since(
+                all_crawl_rows, now - timedelta(days=DEAD_SOURCE_DAILY_WINDOW_DAYS)))
         # 规则 G 复用同一批 crawl_rows / sources（多取四列，不多打一次库）。
         findings += evaluate_coverage_shortfall(crawl_rows, sources_by_id)
         # 规则 I 复用同一批 crawl_rows（多取 finished_at 一列，不多打一次库）。
