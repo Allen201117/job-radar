@@ -1,22 +1,40 @@
 name: rename-job-company
 
-# 香港 jobs 库「公司挂错名」的存量纠正：按 jd_url 前缀点名，把 company 从旧名改成新名。
-# 配套 sources.company 的 Supabase 迁移一起用（如 274：wecruit 租户 SU612f55… 由领益智造纠正为特变电工）——
-# 迁移改「以后抓进来的」，这条 workflow 改「已经在库里的」。手动触发、默认 dry-run。
-# 判据与护栏见 crawler/rename_job_company.py 的模块注释。
+# 香港 jobs 库「公司挂错名」的存量纠正。两种用法，二选一：
+#   · 前缀模式：按 jd_url 前缀点名，把 company 从旧名改成新名（如 274：wecruit 租户 SU612f55… 由领益智造纠正为特变电工）。
+#   · 批量模式（map_file）：一批「旧名 → 新名」只按旧名精确匹配一次改完，只给「旧名这个写法本身就不该存在」的情况用
+#     （如 320：源名去渠道后缀「TCL 校招」→「TCL」）。清单文件在 crawler/company_renames/。
+# 配套 sources.company 的 Supabase 迁移一起用——迁移改「以后抓进来的」，这条 workflow 改「已经在库里的」。
+# 手动触发、默认 dry-run。判据与护栏见 crawler/rename_job_company.py 的模块注释。
+# ⚠️ 改名的行招聘类型分类会被清空等重算：apply 之后立刻手动触发 backfill-recruitment-category。
 
 on:
   workflow_dispatch:
     inputs:
       url_prefix:
-        description: "jd_url 前缀（租户/门户级，完整 https 前缀）"
-        required: true
+        description: "前缀模式：jd_url 前缀（租户/门户级，完整 https 前缀）"
+        required: false
+        default: ""
       from_name:
-        description: "现在挂着的（错的）公司名，精确匹配"
-        required: true
+        description: "前缀模式：现在挂着的（错的）公司名，精确匹配"
+        required: false
+        default: ""
       to_name:
-        description: "改成的公司名"
-        required: true
+        description: "前缀模式：改成的公司名"
+        required: false
+        default: ""
+      map_file:
+        description: "批量模式：清单文件路径（如 crawler/company_renames/20261011_channel_suffix.json）。填了它就别填上面三个"
+        required: false
+        default: ""
+      rehearse:
+        description: "批量模式：true = 整套真执行后回滚，库里不留改动（先用它验一遍再 apply）"
+        required: false
+        default: "false"
+      allow_in_flight:
+        description: "批量模式：true = 有抓取在跑也执行（只在确认在飞的轮次都晚于源名迁移生效时用）"
+        required: false
+        default: "false"
       apply:
         description: "true = 真的写库；留空/false = 只 dry-run 报数"
         required: false
@@ -40,12 +58,25 @@ jobs:
           JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
           JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
           JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
+          # 批量模式要回读 sources / crawl_runs（源名迁移生效了没、有没有抓取在飞），所以需要 Supabase。
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           URL_PREFIX: ${{ github.event.inputs.url_prefix }}
           FROM_NAME: ${{ github.event.inputs.from_name }}
           TO_NAME: ${{ github.event.inputs.to_name }}
+          MAP_FILE: ${{ github.event.inputs.map_file }}
+          REHEARSE: ${{ github.event.inputs.rehearse }}
+          ALLOW_IN_FLIGHT: ${{ github.event.inputs.allow_in_flight }}
           APPLY: ${{ github.event.inputs.apply }}
         run: |
           set -euo pipefail
-          args=(--url-prefix "$URL_PREFIX" --from "$FROM_NAME" --to "$TO_NAME")
+          # 填了什么就原样传什么：两种模式混填由脚本自己拒绝，这里不替它挑。
+          args=()
+          if [ -n "$MAP_FILE" ]; then args+=(--map-file "$MAP_FILE"); fi
+          if [ -n "$URL_PREFIX" ]; then args+=(--url-prefix "$URL_PREFIX"); fi
+          if [ -n "$FROM_NAME" ]; then args+=(--from "$FROM_NAME"); fi
+          if [ -n "$TO_NAME" ]; then args+=(--to "$TO_NAME"); fi
+          if [ "$REHEARSE" = "true" ]; then args+=(--rehearse); fi
+          if [ "$ALLOW_IN_FLIGHT" = "true" ]; then args+=(--allow-in-flight); fi
           if [ "$APPLY" = "true" ]; then args+=(--apply); fi
           python3 crawler/rename_job_company.py "${args[@]}"

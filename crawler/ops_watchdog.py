@@ -212,6 +212,9 @@ COVERAGE_STOP_LABELS = {
     "list_cap": "撞单源条数上限",
     "page_click_failed": "点「下一页」失败",
     "page_no_new_rows": "翻页不生效，下一页全是已见过的岗",
+    "page_render_timeout": "点了「下一页」，列表迟迟没渲染出来",
+    "paginator_not_found": "页面上没找到下一页按钮，但门户自报的岗位数比抓到的多",
+    "short_of_portal_total": "页面上没有更多可翻的页，抓到的仍比门户自报的岗位数少",
 }
 
 # 规则 G：创始人已接受「撞单源条数上限」这个取舍的源（2026-09-28 拍板），按 source_url 的 host 认——
