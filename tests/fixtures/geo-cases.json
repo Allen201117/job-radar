@@ -1091,6 +1091,361 @@
       "location": "LI, REMOTE",
       "expected": null,
       "note": "LinkedIn 招聘标签 #LI-Remote（爱德华兹美国远程岗），开头的 LI 不是列支敦士登（live 5 行）"
+    },
+    {
+      "location": "塔吉格",
+      "expected": "PH",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Taguig，字节跳动 74 行"
+    },
+    {
+      "location": "帕西格市",
+      "expected": "PH",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Pasig，字节跳动 8 行"
+    },
+    {
+      "location": "帕赛市",
+      "expected": "PH",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Pasay，多点 1 行"
+    },
+    {
+      "location": "南雅加达行政市",
+      "expected": "ID",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：字节跳动 12 行"
+    },
+    {
+      "location": "北雅加达行政市",
+      "expected": "ID",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：字节跳动 1 行"
+    },
+    {
+      "location": "大雅加达首都特区",
+      "expected": "ID",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：阿里国际 1 行"
+    },
+    {
+      "location": "普哇加达县",
+      "expected": "ID",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Purwakarta Regency，小鹏 5 行"
+    },
+    {
+      "location": "巴厘",
+      "expected": "ID",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Bali，蚂蚁 1 行"
+    },
+    {
+      "location": "古来",
+      "expected": "MY",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Kulai，字节跳动 10 行"
+    },
+    {
+      "location": "亚罗牙也",
+      "expected": "MY",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Alor Gajah，小鹏 11 行"
+    },
+    {
+      "location": "巴生",
+      "expected": "MY",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Klang，1 行"
+    },
+    {
+      "location": "新山",
+      "expected": "MY",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Johor Bahru，阿里云 1 行"
+    },
+    {
+      "location": "古尔冈",
+      "expected": "IN",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Gurgaon，字节跳动 8 行"
+    },
+    {
+      "location": "阿什本",
+      "expected": "US",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Ashburn，字节跳动 7 行"
+    },
+    {
+      "location": "波士顿",
+      "expected": "US",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：字节跳动 1 行"
+    },
+    {
+      "location": "亚特兰大",
+      "expected": "US",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：菜鸟 1 行"
+    },
+    {
+      "location": "布法罗",
+      "expected": "US",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Buffalo，艾德生物 3 行"
+    },
+    {
+      "location": "奇诺",
+      "expected": "US",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Chino，岗位写北美渠道销售，2 行"
+    },
+    {
+      "location": "春武里",
+      "expected": "TH",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Chonburi，字节跳动 5 行"
+    },
+    {
+      "location": "春武里府治",
+      "expected": "TH",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Mueang Chonburi，xTool 1 行"
+    },
+    {
+      "location": "北揽",
+      "expected": "TH",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Samut Prakan，禾赛 13 行"
+    },
+    {
+      "location": "农凯",
+      "expected": "TH",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Nong Khae，中际旭创 12 行"
+    },
+    {
+      "location": "是拉差",
+      "expected": "TH",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Si Racha，会通 1 行"
+    },
+    {
+      "location": "普吉",
+      "expected": "TH",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Phuket，蚂蚁 1 行"
+    },
+    {
+      "location": "邦巴沙都拍",
+      "expected": "TH",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Pom Prap Sattru Phai，极兔 1 行"
+    },
+    {
+      "location": "清化市",
+      "expected": "VN",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Thanh Hoá，14 行"
+    },
+    {
+      "location": "北宁",
+      "expected": "VN",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Bac Ninh，歌尔 4 行"
+    },
+    {
+      "location": "桂武县",
+      "expected": "VN",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Que Vo，歌尔 1 行"
+    },
+    {
+      "location": "巴亭",
+      "expected": "VN",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Ba Dinh，智元 1 行"
+    },
+    {
+      "location": "富寿",
+      "expected": "VN",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Phu Tho，1 行"
+    },
+    {
+      "location": "巴布亚新几内亚",
+      "expected": "PG",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：中国五矿 21 行"
+    },
+    {
+      "location": "迪门",
+      "expected": "NL",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Diemen，小鹏 8 行"
+    },
+    {
+      "location": "奥克兰",
+      "expected": "NZ",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Auckland，腾讯 4 行（详情链接路径 New-Zealand-Auckland）"
+    },
+    {
+      "location": "布洛涅-比扬古",
+      "expected": "FR",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Boulogne-Billancourt，小米 4 行；连字符会被切成两段，两段都收"
+    },
+    {
+      "location": "千代田区",
+      "expected": "JP",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Chiyoda，库洛 4 行"
+    },
+    {
+      "location": "江差町",
+      "expected": "JP",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Esashi，1 行"
+    },
+    {
+      "location": "汉堡",
+      "expected": "DE",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Hamburg，小米 2 行"
+    },
+    {
+      "location": "诺伊斯莱茵县",
+      "expected": "DE",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Rhein-Kreis Neuss，xTool 2 行"
+    },
+    {
+      "location": "巴巴多斯",
+      "expected": "BB",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：中国铁建国际 2 行"
+    },
+    {
+      "location": "阿拉伯联合酋长国",
+      "expected": "AE",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：1 行"
+    },
+    {
+      "location": "城南市",
+      "expected": "KR",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Seongnam，商汤 1 行"
+    },
+    {
+      "location": "不列颠哥伦比亚省",
+      "expected": "CA",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：腾讯 1 行"
+    },
+    {
+      "location": "马达加斯加",
+      "expected": "MG",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：中核 1 行"
+    },
+    {
+      "location": "毛里塔尼亚",
+      "expected": "MR",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：中国交建 1 行"
+    },
+    {
+      "location": "刚果共和国",
+      "expected": "CG",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：中国五矿 1 行"
+    },
+    {
+      "location": "博茨瓦纳",
+      "expected": "BW",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：中国五矿 1 行"
+    },
+    {
+      "location": "丹吉尔",
+      "expected": "MA",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：Tangier，海亮 1 行"
+    },
+    {
+      "location": "摩纳哥",
+      "expected": "MC",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：非在招 1 行"
+    },
+    {
+      "location": "莫桑比克",
+      "expected": "MZ",
+      "note": "境外城市中文名（2026-10-12 香港库在招岗实测，此前按 source.regions 兜底判成国内）：非在招 1 行"
+    },
+    {
+      "location": "塔吉格市",
+      "expected": "PH",
+      "note": "同一地名的后缀变体（库里还没出现过，按地名本身收；都不含任何大陆地名）"
+    },
+    {
+      "location": "帕西格",
+      "expected": "PH",
+      "note": "同一地名的后缀变体（库里还没出现过，按地名本身收；都不含任何大陆地名）"
+    },
+    {
+      "location": "帕赛",
+      "expected": "PH",
+      "note": "同一地名的后缀变体（库里还没出现过，按地名本身收；都不含任何大陆地名）"
+    },
+    {
+      "location": "东雅加达行政市",
+      "expected": "ID",
+      "note": "同一地名的后缀变体（库里还没出现过，按地名本身收；都不含任何大陆地名）"
+    },
+    {
+      "location": "西雅加达行政市",
+      "expected": "ID",
+      "note": "同一地名的后缀变体（库里还没出现过，按地名本身收；都不含任何大陆地名）"
+    },
+    {
+      "location": "中雅加达行政市",
+      "expected": "ID",
+      "note": "同一地名的后缀变体（库里还没出现过，按地名本身收；都不含任何大陆地名）"
+    },
+    {
+      "location": "雅加达首都特区",
+      "expected": "ID",
+      "note": "同一地名的后缀变体（库里还没出现过，按地名本身收；都不含任何大陆地名）"
+    },
+    {
+      "location": "巴厘岛",
+      "expected": "ID",
+      "note": "同一地名的后缀变体（库里还没出现过，按地名本身收；都不含任何大陆地名）"
+    },
+    {
+      "location": "春武里府",
+      "expected": "TH",
+      "note": "同一地名的后缀变体（库里还没出现过，按地名本身收；都不含任何大陆地名）"
+    },
+    {
+      "location": "北揽府",
+      "expected": "TH",
+      "note": "同一地名的后缀变体（库里还没出现过，按地名本身收；都不含任何大陆地名）"
+    },
+    {
+      "location": "普吉岛",
+      "expected": "TH",
+      "note": "同一地名的后缀变体（库里还没出现过，按地名本身收；都不含任何大陆地名）"
+    },
+    {
+      "location": "新西兰",
+      "expected": "NZ",
+      "note": "同一地名的后缀变体（库里还没出现过，按地名本身收；都不含任何大陆地名）"
+    },
+    {
+      "location": "大城",
+      "expected": null,
+      "note": "红线：泰国大城府（Ayutthaya，中际旭创 1 行）刻意不收 —— 河北廊坊有大城县，农业银行这类源会把区县名裸写，收了就把大陆岗判成泰国"
+    },
+    {
+      "location": "大城县",
+      "expected": null,
+      "note": "红线：县区级不进词表，留空按 source.regions 兜底（农业银行 1 行）"
+    },
+    {
+      "location": "廊坊市·大城县",
+      "expected": "CN",
+      "note": "红线：上级是大陆地级市，照旧判 CN"
+    },
+    {
+      "location": "深圳、富寿",
+      "expected": "CN",
+      "note": "一岗多地中国优先：这个岗在飞书上登记的就是 富寿 + 深圳 两个城市，补了「富寿」也不许把它翻成越南"
+    },
+    {
+      "location": "昆明市·普吉",
+      "expected": "CN",
+      "note": "红线：昆明有普吉街道，前面带着大陆城市时仍判 CN"
+    },
+    {
+      "location": "北宁市",
+      "expected": null,
+      "note": "红线：越南北宁只收裸名 —— 辽宁北镇市 2006 年前叫北宁市，带「市」的写法不收"
+    },
+    {
+      "location": "清化",
+      "expected": null,
+      "note": "红线：越南清化只收「清化市」—— 河南博爱县有清化镇，裸名不收"
+    },
+    {
+      "location": "圣弗朗西斯科",
+      "expected": null,
+      "note": "刻意不收：飞书登记的英文名是 Sao Francisco，岗位标题却写 Mexico，国别对不上（艾德生物 1 行）"
+    },
+    {
+      "location": "阿姆斯特朗",
+      "expected": null,
+      "note": "刻意不收：Armstrong 在加拿大、美国、阿根廷都有重名城市（元气森林 1 行）"
+    },
+    {
+      "location": "巴尔韦伦",
+      "expected": null,
+      "note": "刻意不收：Balveren 在荷兰和土耳其都有（安克 1 行）"
     }
   ]
 }
