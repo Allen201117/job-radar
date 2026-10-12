@@ -435,6 +435,78 @@ def _moka_portal_total(document_html: str) -> Optional[int]:
     return None
 
 
+# ── 一个 Moka 门户发多家公司的岗（2026-10-12）────────────────────────────────────────────
+# 北森国寿 / 广发那块碑（_BEISEN_SHARED_TENANTS）在 Moka 上的同一种情况。
+# 租户 crland 是华润置地的，校招门户 168540（门户名「华润置地2027届秋招」）自报 441 个岗，其中 372 个的部门挂在
+# 「华润万象生活」节点下（必投清单里是另一家公司）。旧代码每条都贴 sources.company →
+# 缺口台账记华润置地校招 441、华润万象生活校招 5，按「华润万象生活」筛校招几乎看不到岗。
+#
+# 判据 = 标题末尾括号里「-」之前的那一段（「万象生-推广岗（商业-厦门)」→ 商业）。为什么是它：
+#   · 岗位卡只渲染标题和地点（门户配置 jobsListSettings.jobEnableFields = ["title", "location"]），部门不在卡片上；
+#   · 2026-10-12 全集对拍：用页面自己的部门筛选（hash 参数 department[0]=<部门 id>）把 46 个部门逐个取回来，
+#     每个部门的条数都等于门户内嵌数据 jobsGroupedByDepartment 的 jobCount（父节点的结果含整棵子树：
+#     商业航道 245 = 直属 17 + 11 个子部门，物业航道 123 = 直属 12 + 14 个子部门）。441 个岗逐个比「直属部门」与「标题这一段」：
+#       商业 242 / 物业 123 / 万象生活总部 4 / 写字楼 3 → 部门全在华润万象生活节点下（372）；
+#       开发 34 / 文体 23 / 有巢 7 / 酒管 5 → 部门全是华润置地其它航道（69）；对不上 0、认不出 0。
+#     逐条真值在 fixtures/moka_crland_campus_titles.json，test_moka_shared_portal 全量回放。
+#   · 不用页面上的「业务赛道」筛选（自定义字段 332245）：同日 10 个岗（全在商业华北大区）没填这个字段。
+#   · 不在抓取里用部门筛选逐个取：每晚要多翻一遍列表，而且筛选参数名一旦对不上页面会直接忽略它、
+#     返回整个列表（实测 departmentIds[0] / deptId[0] 都是这样）——那会把全部岗都判给别家。
+#   · 标题开头的校招品牌（百匠新人 / 万象生 / 万悦生 / 销冠生）不是判据：百匠新人同时出现在开发 32、商业 37、物业 12，
+#     万悦生在物业 111、酒管 5，万象生在商业 205、文体 18。
+# 认不出的业务段（含没有末尾括号的标题）一律留在门户本家，不猜；每轮在日志里点名。
+#
+# 「租户/门户号」→ {"owners": {业务段: 归属公司}, "home_segments": 核实过属于门户本家的业务段, "home_company": 门户本家}。
+# 按整段相等认，不按子串（同 _BEISEN_SHARED_TENANTS 用前缀不用子串的理由）。
+# 本家的行抓取时不写公司名、照旧由 sources.company 兜底（与别的 adapter 同一个约定）；home_company 是给存量脚本
+# 核对用的：那条源在 sources 里的名字和它对不上时，reattribute_moka_shared_portal 拒绝动库。
+# ⚠️ 只登记核实过的这一个门户：校招换期会换门户号，新门户要重新对拍后再登记（那条源的 notes 里也写了）。
+_MOKA_SHARED_PORTALS = {
+    "crland/168540": {
+        "owners": {"商业": "华润万象生活", "物业": "华润万象生活",
+                   "写字楼": "华润万象生活", "万象生活总部": "华润万象生活"},
+        "home_segments": frozenset({"开发", "文体", "有巢", "酒管"}),
+        "home_company": "华润置地",
+    },
+}
+# 门户页地址 / 岗位链接里的「租户/门户号」：…mokahr.com/{campus-recruitment|social-recruitment|apply|…}/{租户}/{门户号}
+_MOKA_PORTAL_KEY_RE = re.compile(r"^https?://[^/]*mokahr\.com/[^/#?]+/([^/#?]+)/(\d+)(?![\w-])", re.I)
+_MOKA_TITLE_TAIL_RE = re.compile(r"[（(]([^（()）]*)[)）]\s*$")
+_MOKA_SEGMENT_SEP_RE = re.compile(r"[-－—–]")
+
+
+def moka_portal_key(url: str) -> str:
+    """Moka 门户页地址或岗位链接 → 「租户/门户号」（小写，同 ops_watchdog.portal_identity）；认不出返回空串。"""
+    m = _MOKA_PORTAL_KEY_RE.match(url or "")
+    return f"{m.group(1)}/{m.group(2)}".lower() if m else ""
+
+
+def moka_title_segment(title: str) -> str:
+    """标题末尾括号里「-」之前的那一段；标题不以括号结尾返回空串。"""
+    m = _MOKA_TITLE_TAIL_RE.search(title or "")
+    return _MOKA_SEGMENT_SEP_RE.split(m.group(1))[0].strip() if m else ""
+
+
+def moka_shared_portal(url: str) -> Optional[dict]:
+    """门户页地址或岗位链接所在的门户若登记为「发多家公司的岗」，返回它的登记项；否则 None。"""
+    return _MOKA_SHARED_PORTALS.get(moka_portal_key(url))
+
+
+def moka_shared_portal_verdict(portal_url: str, title: str):
+    """共享门户里这个岗归谁 → (归属公司 | None, 判得了没有)。
+
+    (公司, True) = 归别家；(None, True) = 不是共享门户，或业务段核实过属于门户本家；
+    (None, False) = 共享门户里认不出的业务段，留在本家（沿用 sources.company），调用方要点名。"""
+    portal = moka_shared_portal(portal_url)
+    if not portal:
+        return None, True
+    segment = moka_title_segment(title)
+    owner = portal["owners"].get(segment)
+    if owner:
+        return owner, True
+    return None, segment in portal["home_segments"]
+
+
 class MokaAdapter(PlaywrightAdapter):
     """Moka 招聘（{tenant}.mokahr.com / app.mokahr.com）—— 大量消费/互联网/游戏私企在用。
 
@@ -950,6 +1022,8 @@ class MokaAdapter(PlaywrightAdapter):
         seen = set()
         too_old = []
         oldest_kept = self._today() - timedelta(days=self._MAX_AGE_DAYS) if self._MAX_AGE_DAYS else None
+        shared = moka_shared_portal(base) is not None   # 一个门户发多家公司的岗：逐行归属
+        unknown_titles = []
         for c in data.get("cards", []):
             m = re.search(r"#/job/([\w-]+)", c.get("href") or "")
             if not m:
@@ -965,8 +1039,13 @@ class MokaAdapter(PlaywrightAdapter):
             if jd_url in seen:
                 continue
             seen.add(jd_url)
+            owner = None
+            if shared:
+                owner, known = moka_shared_portal_verdict(base, title)
+                if not known:
+                    unknown_titles.append(title)
             out.append(RawJob(
-                company=self.company_name or "",
+                company=owner or self.company_name or "",
                 title=title,
                 location=location,
                 job_type=None,
@@ -975,6 +1054,17 @@ class MokaAdapter(PlaywrightAdapter):
                 apply_url=jd_url,
                 posted_at=None,
             ))
+        if len(unknown_titles) * 2 > len(out):
+            # 过半的岗认不出业务段 = 标题写法变了，登记的规则已经对不上这个门户。照常入库会把这些岗（包括库里已经
+            # 归到别家的）悄悄贴回 sources.company，正是要修的错（同北森共享租户「整批没有招聘机构」那条）：
+            # 记失败、这一轮不写，让人来重新对拍。个别认不出的不在此列，走下面的日志。
+            raise RuntimeError(
+                f"moka: shared portal {moka_portal_key(base)} 的 {len(out)} 个岗里 {len(unknown_titles)} 个认不出业务段"
+                f"（例：{unknown_titles[0]}）；拒绝把它们贴给 sources.company，先重新核对标题写法")
+        if unknown_titles:
+            _log.warning("moka: shared portal %s 有 %d/%d 个岗的业务段认不出，留在门户本家：%s",
+                         moka_portal_key(base), len(unknown_titles), len(out),
+                         "；".join(dict.fromkeys(unknown_titles[:8])))
         if too_old:
             # 同一个岗万一有两张卡（一张写着旧日期、一张没日期），以写了日期的为准：不能一边点名下架、一边又收进来，
             # 那样库里这一行每晚先下架再被写回。
