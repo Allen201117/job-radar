@@ -33,14 +33,23 @@ class _Handle:
         return self._v
 
 
+class _DocResponse:
+    def __init__(self, body):
+        self._body = body
+
+    def text(self):
+        return self._body
+
+
 class _FakePage:
     """按路由编排行为：("cards", n) / ("empty",) / ("closed",) / ("timeout",) / ("goto_error",)。"""
 
-    def __init__(self, behaviors, reopen_behaviors=None):
+    def __init__(self, behaviors, reopen_behaviors=None, document=None):
         self.behaviors = behaviors
         self.reopen_behaviors = reopen_behaviors or {}
         self.route = None
         self.gotos = []  # (route, wait_until)
+        self.document = document  # 主文档 HTML；只有第一次 goto 返回响应（之后只换 hash，真浏览器返回 None）
 
     def _behavior(self):
         opened = sum(1 for r, _ in self.gotos if r == self.route)
@@ -54,8 +63,13 @@ class _FakePage:
         self.gotos.append((self.route, wait_until))
         if self._behavior()[0] == "goto_error":
             raise _Timeout(f"goto {url} timed out")
+        if self.document is not None and len(self.gotos) == 1:
+            return _DocResponse(self.document)
+        return None
 
     def wait_for_function(self, js, arg=None, timeout=None, polling=None):
+        if js == MokaAdapter._FIRST_PAGE_JS:
+            return None   # 开读前等首屏列表（只在读到门户总数时发生）：这里的替身页面一步到位
         b = self._behavior()
         if b[0] in ("timeout", "goto_error"):
             raise _Timeout("wait_for_function timed out")
@@ -114,9 +128,9 @@ def _fake_playwright_modules(page):
     return {"playwright": pkg, "playwright.sync_api": sync_api}
 
 
-def _run(behaviors, reopen_behaviors=None):
-    page = _FakePage(behaviors, reopen_behaviors)
-    adapter = MokaAdapter()
+def _run(behaviors, reopen_behaviors=None, document=None, adapter=None):
+    page = _FakePage(behaviors, reopen_behaviors, document)
+    adapter = adapter or MokaAdapter()
     # BASE 是带 id 的校招门户：0 岗时 fetch 会去问平台「当前生效的校招门户」——单测不打真网络，
     # 这里固定答「就是它自己」（= 真休眠）。换期那条路径钉在 test_fake_green_sources.py。
     adapter._current_campus_portal_id = lambda host, tenant: BASE.rsplit("/", 1)[-1]
@@ -191,6 +205,28 @@ class MokaRenderWaitTest(unittest.TestCase):
         with mock.patch.dict(sys.modules, _fake_playwright_modules(page)):
             with self.assertRaises(Exception):
                 adapter.fetch(BASE)
+
+    def test_fetch_reads_portal_total_from_the_main_document(self):
+        """端到端接线：goto 的响应 → 门户自报总数 → 抓全判定。祖龙改前的现场：首屏 15 张、没认出翻页器、门户自报 86。"""
+        doc = '<input id="init-data" value="{&quot;jobStats&quot;:{&quot;total&quot;:86}}">'
+        with self.assertLogs("adapters.china_ats", level="WARNING"):
+            adapter, _, data = _run({"#/jobs": ("cards", 15)}, document=doc)
+        self.assertEqual(len(data["cards"]), 15)
+        self.assertEqual(adapter._portal_total, 86)
+        self.assertEqual(adapter.reported_total, 86)
+        self.assertFalse(adapter.fetch_complete)
+        self.assertEqual(adapter.coverage_stop_reason, "paginator_not_found")
+
+    def test_portal_total_is_reset_between_sources(self):
+        """同一个实例接着抓下一条源（探活 / 单测会复用）：上一条源的门户总数不许带过来。"""
+        doc = '<input id="init-data" value="{&quot;jobStats&quot;:{&quot;total&quot;:86}}">'
+        with self.assertLogs("adapters.china_ats", level="WARNING"):
+            adapter, _, _ = _run({"#/jobs": ("cards", 15)}, document=doc)
+        adapter, _, _ = _run({"#/jobs": ("cards", 15)}, adapter=adapter)   # 这一条的主文档读不到总数
+        self.assertIsNone(adapter._portal_total)
+        self.assertEqual(adapter.reported_total, 15)
+        self.assertTrue(adapter.fetch_complete)
+        self.assertIsNone(adapter.coverage_stop_reason)
 
     def test_ready_js_checks_cards_and_empty_markers(self):
         js = MokaAdapter._READY_JS

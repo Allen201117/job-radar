@@ -32,6 +32,7 @@ test("adapter 白名单覆盖 crawler ADAPTERS 全部值（含通用 ATS）", ()
     "bytedance", "bytedance_campus", "nio_feishu", "xpeng_feishu", "horizon_feishu",
     "xiaomi_feishu", "greenhouse", "lever", "ashby", "smartrecruiters", "successfactors", "workday",
     "moka", "beisen", "company_spa", "feishu", "hotjob", "eightfold", "oracle", "amazon", "phenom", "microsoft", "google", "gllue", "cnstaff", "midea", "cmb", "cmbc", "gree", "chnenergy",
+    "byd", "byd_campus",
   ]) {
     assert.equal(S.isValidAdapter(v), true, `${v} 应在白名单`);
   }
@@ -99,6 +100,32 @@ test("validateSourceInput: enabled 默认 true，显式 false 保留；notes 空
   });
   assert.equal(r2.value.enabled, true); // 默认启用
   assert.equal(r2.value.crawl_method, "http"); // 默认 http
+});
+
+test("validateSourceInput: 公司名带「校招 / 实习 / 社招」后缀 → 拒绝并告诉该写什么", () => {
+  const base = { source_url: "https://wecruit.hotjob.cn/SUx/pb/school.html", adapter_name: "hotjob" };
+  for (const [name, want] of [
+    ["TCL 校招", "TCL"],
+    ["华润电力 CR Power 实习", "华润电力 CR Power"],
+    ["云尖信息  社招 ", "云尖信息"], // 多个空白 + 尾随空白
+  ]) {
+    const r = S.validateSourceInput({ ...base, company: name });
+    assert.equal(r.ok, false, name);
+    assert.ok(r.errors.company.includes(`「${want}」`), r.errors.company);
+  }
+  // 反方向：名字本身带这两个字、但不是「空白 + 后缀」的不拦
+  for (const name of ["实习僧", "某某校招网", "TCL", "华润电力 CR Power"]) {
+    assert.equal(S.validateSourceInput({ ...base, company: name }).ok, true, name);
+  }
+});
+
+test("渠道后缀规则四处逐字相同（加源校验 / 画像归属 TS / 画像归属 Python / 探活出迁移）", () => {
+  const read = (rel) => fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
+  const pattern = "\\s+(?:校招|实习|社招)$";
+  assert.ok(read("lib/source-adapters.ts").includes(`const CHANNEL_SUFFIX_RE = /${pattern}/;`));
+  assert.ok(read("lib/insight-profile-resolve.ts").includes(`const CHANNEL_SUFFIX_RE = /${pattern}/;`));
+  assert.ok(read("crawler/bu_extract.py").includes(`_CHANNEL_SUFFIX_RE = re.compile(r"${pattern}")`));
+  assert.ok(read("crawler/probe.py").includes(`_CHANNEL_SUFFIX_RE = re.compile(r"${pattern}")`));
 });
 
 test("每个 adapter 必标 origin（外企/本土），FOREIGN_ATS_ADAPTERS 由此自动派生", () => {
