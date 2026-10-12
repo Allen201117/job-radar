@@ -60,6 +60,31 @@ class ControlTest(unittest.TestCase):
         self.assertIsNone(R.control_ok("h", None, lambda j, p: 1))
 
 
+class CurrentPortalMapTest(unittest.TestCase):
+    """共享租户的归属门户列表没取全时 adapter 会抛错（英科再生那条源）：按「列表没打通」算，不许掀掉整轮对账。"""
+
+    class _Ad:
+        website_path = ""
+        detail_template = f"{H}/index/position/{{id}}/detail"
+
+        def __init__(self, result):
+            self._result = result
+
+        def _httpx_fetch(self, _host):
+            if isinstance(self._result, Exception):
+                raise self._result
+            return self._result
+
+    def test_adapter_refusing_a_partial_shared_tenant_list_counts_as_unreached(self):
+        self.assertEqual(R.current_portal_map(self._Ad(RuntimeError("owner portal list incomplete")), "t"),
+                         (None, False))
+
+    def test_normal_list_maps_each_job_to_its_portal(self):
+        rows = [{"id": "1", "_portal": "career"}, {"id": "2"}]
+        self.assertEqual(R.current_portal_map(self._Ad((rows, 2, True)), "t"),
+                         ({"1": "career", "2": "index"}, True))
+
+
 class RunControlTest(unittest.TestCase):
     """公开门户 0 岗的源（海底捞 / 地素时尚）无从本源对照，靠本轮全局对照。"""
 

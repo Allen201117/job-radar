@@ -148,6 +148,14 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #   radancy.py = Radancy/TalentBrew（欧莱雅 2026-10-05 从 Avature 迁来）：sitemap.xml → 按链接城市/
                          #     中文标题粗筛 → 逐岗详情页 ld+json。🚫 **TalentBrew 的 robots 一律禁 /search-jobs**：第一版抓搜索页，
                          #     本机试跑全绿、上线首轮被 robots 门挡成 skipped——接外企门户先读对方 robots.txt，再选入口。
+                         #   apple.py = Apple 官网搜索页的 hydration 数据。`apple` 写死只搜美国（location=united-states-USA），不按源的
+                         #     regions 过滤；`apple_cn` 不限地区、parse 后只留在华 / 远程（2026-10-12 查 sources：没有源在用它）。
+                         #     ⚠️ 列表行地点的 `name` 只是门店 / 园区 / 城市名（Cambridge / Maiden / Bellevue Square / Melbourne），不带国家；
+                         #     国家在同一个对象的 `countryID`（`iso-country-USA`，ISO 三字母码）里。2026-10-12 前 adapter 只取 name：
+                         #     香港库这条源 4,773 个在招岗里 291 个（155 种写法）判不出国家，按源登记的 regions（[CN]）兜底成了国内岗。
+                         #     现在由 `_declared_country` 交给 `RawJob.country_code`（normalize 只在地点文本说不清时采信；多地点里有一个
+                         #     在大中华就报大中华，有地点没报国家就不报）。同名地点别国也有（Cambridge 英国 / Melbourne 澳大利亚 /
+                         #     Vancouver 加拿大），🚫 **不要往 geo 词表里背门店名**。
                          #   wt.py / hotjob.py 的截止日（2026-10-10）：🚫 **列表里的 endDate 大多不是截止日**。只有「长期发布」标记
                          #     （wt `isLongTermRelease` / hotjob `longTermRelease`）== 1 才是官网显示的「下线时间」；== 0 时官网写「长期发布」，
                          #     endDate 是系统填的数（wt 回请求当天、hotjob 每晚续成 +7 天、3000-01-01、发布日+12 个月、早已过去的日期）。
