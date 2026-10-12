@@ -1,6 +1,7 @@
 import json
 import unittest
 
+import normalizer
 from adapters.tencent_music import TencentMusicAdapter
 
 
@@ -40,6 +41,26 @@ class TencentMusicAdapterTest(unittest.TestCase):
             campus.jd_url,
             "https://join.tencentmusic.com/campus/post-details/?id=14982",
         )
+
+    def test_campus_city_list_becomes_a_place_list_not_a_stringified_object(self):
+        # 2026-10-12 live：校招板块的 work_city 是 [{value, label}]，社招板块是字符串。直接 str() 的话交出去的是
+        # 「[{'value': 440300, 'label': '深圳市'}, …]」，清洗按别名表顺序折成其中一个城市（269 行里 146 行）。
+        payload = {
+            "social": [],
+            "campus": [
+                {"id": "1", "name": "前端开发", "work_city": [
+                    {"value": 440300, "label": "深圳市"}, {"value": 110000, "label": "北京市"},
+                    {"value": 440100, "label": "广州市"}]},
+                {"id": "2", "name": "产品实习生", "work_city": [{"value": 440100, "label": "广州市"}]},
+                {"id": "3", "name": "没写城市", "work_city": []},
+                {"id": "4", "name": "列表里直接是城市名", "work_city": ["深圳市", "广州市"]},
+            ],
+        }
+
+        jobs = TencentMusicAdapter().parse(json.dumps(payload, ensure_ascii=False))
+
+        self.assertEqual([j.location for j in jobs], ["深圳市、北京市、广州市", "广州市", None, "深圳市、广州市"])
+        self.assertEqual(normalizer.clean_location(jobs[0].location), "深圳/北京/广州")
 
     def test_parse_drops_rows_without_id_or_title_and_dedups(self):
         payload = {
