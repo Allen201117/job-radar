@@ -1,4 +1,15 @@
 {
+  "_merged": {
+    "A.P. Moller": {
+      "merged_into": "Maersk",
+      "industry": "物流/供应链",
+      "pattern": "%A.P. Moller%",
+      "evidence": "2026-10-12 在招岗与源名全集：没有任何含 Moller 的公司名；这条靠别名 %马士基% 认的「马士基 Maersk」（海外 321 个健康岗、1 条源）本来就被同一行业的 Maersk（%Maersk%）认到。独占归属下 A.P. Moller 恒为 0，是假缺口。",
+      "note": "是合并不是删除：A.P. Moller-Maersk 是马士基的母公司，同一个招聘入口，仍由「Maersk」这一行计入覆盖。",
+      "verified_at": "2026-10-12",
+      "decision": "创始人 2026-10-12：「按照你的建议来吧」（归属门 / 必投清单会话，建议见 docs/reviews/2026-10-11-attribution-gate-and-must-apply-patterns.md §3.4 的 B4）"
+    }
+  },
   "互联网/科技": [
     { "name": "Google", "pattern": "%Google%" },
     { "name": "Meta", "pattern": "%Meta Platforms%" },
@@ -156,7 +167,7 @@
     { "name": "Valeo", "pattern": "%Valeo%" },
     { "name": "Polestar", "pattern": "%Polestar%" },
     { "name": "Ferrari", "pattern": "%Ferrari%" },
-    { "name": "Grab Mobility", "pattern": "%Grab%" },
+    { "name": "Grab", "pattern": "%Grab%" },
     { "name": "Gojek", "pattern": "%Gojek%" }
   ],
   "医疗/医药": [
@@ -284,8 +295,7 @@
     { "name": "Schneider National", "pattern": "%Schneider National%" },
     { "name": "Penske Logistics", "pattern": "%Penske%" },
     { "name": "Kerry Logistics", "pattern": "%Kerry Logistics%" },
-    { "name": "Bolloré Logistics", "pattern": "%Bollor%" },
-    { "name": "A.P. Moller", "pattern": "%A.P. Moller%", "aliases": ["%马士基%"] }
+    { "name": "Bolloré Logistics", "pattern": "%Bollor%" }
   ],
   "传媒/文娱": [
     { "name": "Disney", "pattern": "%Walt Disney%" },
