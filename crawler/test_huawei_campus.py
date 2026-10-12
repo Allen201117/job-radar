@@ -104,7 +104,8 @@ class HuaweiCampusTest(unittest.TestCase):
         client = _FakeClient({"FRESH_GRADUATE": [_job_page(1, [_row(1, 2, "岗A")])],
                               "INTERN": [_job_page(0, [])]})
         _, jobs = self._run(client)
-        self.assertEqual(jobs[0].location, "China\\Guangdong-Shenzhen")
+        # jobAddress 里的每个地点都交出去（入库是「深圳/北京」），不只取第一个
+        self.assertEqual(jobs[0].location, "China\\Guangdong-Shenzhen、China\\Beijing-Beijing")
 
     def test_placeholder_text_never_becomes_summary(self):
         """没拿到方向正文时不许拿占位句凑数——那会把薄卡凑够 60 字混进「有效在招」。"""
