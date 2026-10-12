@@ -72,7 +72,8 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #       万科 882、移远 120、麦当劳 107、云从 94、科兴 91），2025 年 778，2026 年 2,547，卡片上没写日期的 221。
                          #       moka 不写 posted_at，这些岗在库里的首见时间都是上线当晚。门户仍把它们列为在招；
                          #       要不要设年限口径、要不要把发布日期写进 posted_at 没有定（上线前没量这一维，上线后才补量的）。
-                         #       同题另有一份逐门户的报告在未合入的分支 claude/keen-bassi-d13049（docs/reviews/2026-10-11-moka-old-paginator.md）。
+                         #       逐门户的对拍表、上线后对库的回读、已停止招聘却仍在招的 60 行：docs/reviews/2026-10-11-moka-old-paginator.md
+                         #       （📌 纠错：此处原写「另有一份逐门户的报告在未合入的分支」，报告已于 2026-10-12 进 main，只合了文档、没合那一版代码）。
                          #   tencent_music/antgroup/mihoyo = 必投清单大厂自建 SPA 门户（2026-07-06 live 验证：均有公开 JSON 接口，
                          #     纯 httpx 零浏览器，社招+校招一次抓全；company_spa 吃不掉——接口不返回 per-job URL，须模板拼已验证详情路由）
                          #   avature.py = Avature SearchJobs 通用层（siemens.py 是它的子类）：offset 翻页，
@@ -358,7 +359,8 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #       **取 route.fullPath，不取 href**：href 过 vue-router 的 cleanPath，把密文里的 `//` 压成 `/`，那条链接打开是空白页
                          #       （页面解不出 id，连详情接口都不调）。出现概率约 1.5%：校招 386 条里 6 条；社招一直在写这种坏链接，
                          #       2026-10-11 库里在招 7,481 条有 96 条（密文长度 43 / 42，正常是 44）。生成后再用页面自己的 parseQuery
-                         #       解一遍，解回同一个 id 才给 URL。
+                         #       解一遍，解回同一个 id 才给 URL。那 96 行 2026-10-12 已标 removed（创始人同意；没有用户操作指向它们；
+                         #       其中 32 个还在招的岗，上线当晚已经以正确链接重新入库）。
                          #     live（2026-10-11，本机 Chrome）：386 岗，质量门 386/386，详情页 386/386 真渲染标题一致；
                          #       真实 normalize + JS 分类器：校招 384 / 实习 2 / 社招 0，届别 2027 = 384。1,625 组方向正文里写「N 年以上经验」的只有 1 组。
                          #     下架：`supports_absence_liveness=True`（列表 = 页面「在招职位」全集，逐入口核对 totalCount；列表里有一个岗写不进库就不算抓全），
