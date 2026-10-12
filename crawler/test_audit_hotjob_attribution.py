@@ -364,8 +364,8 @@ class AuditFeishuTest(unittest.TestCase):
             {"company": "英科再生", "source_url": "https://global-intco.jobs.feishu.cn/757263/position"},
         ]
         mismatches, weak, _undecidable, _unknowns, ok = audit_feishu(swapped, _FeishuClient(pages))
-        self.assertEqual(ok, 0)
-        self.assertEqual(sorted(c for c, _, _ in mismatches + weak), ["英科再生", "英科医疗"])
+        self.assertEqual((ok, mismatches), (0, []))
+        self.assertEqual(sorted(c for c, _, _ in weak), ["英科再生", "英科医疗"])   # 只剩租户名「英科」反向对得上
 
     def test_sub_portal_page_that_does_not_load_is_unknown_not_judged_by_the_tenant_root(self):
         client = _FeishuClient({

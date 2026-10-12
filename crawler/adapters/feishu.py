@@ -44,7 +44,8 @@ def _int_or_none(value) -> Optional[int]:
 #   · global-intco（租户名只写「英科」，集团共用；2026-10-12 三个门户翻全、逐岗带头读状态）：
 #       index  = 英科再生社会招聘官网 87 岗      757263 = 英科医疗社会招聘官网 326 岗（英科医疗官网「社会招聘」链到这里）
 #     两边都挂、两边都在线的 17 个：14 个淮北「-凯泽」（安徽凯泽新材料，英科医疗持股 65%，公告 2026-051）、
-#     九江安环主管（江西英科医疗厂址）、国毅 / 公益基金会运营各 1 → 归英科医疗。
+#     九江安环主管（江西英科医疗厂址）、国毅 / 公益基金会运营各 1 → 归英科医疗。index ∩ 840753（英科医疗校招）= 0。
+# ⚠️ 登记在代码里、源的启停在库里：停用归属门户那条源之前先撤掉这里的登记，否则让出的岗两边都没人接。
 _SHARED_TENANT_PORTAL_OWNER = {
     "global-intco.jobs.feishu.cn": {"index": "757263"},
 }
@@ -206,13 +207,25 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
         归属门户的列表没取全 → 抛错、本轮不写。静默全收就是一岗两行；按半截列表剔，漏掉的那些同样是一岗两行。
         不在登记表里的门户（含归属门户自己那条源）零额外请求、原样返回。"""
         owners = _SHARED_TENANT_PORTAL_OWNER.get(host) or {}
+        if getattr(self, "_main_portal", False):
+            # 主门户源取的是「租户首页自报的门户 ∪ index」。登记时自报的就是让出的那个门户；对方哪天把首页换成
+            # 别的门户（最坏是归属门户本身），这条源会把别家的岗整批收进来 → 认不出的门户一律不写，等人重新核。
+            stray = sorted({self._row_portal(p) for p in rows} - set(owners))
+            if stray:
+                raise RuntimeError(
+                    f"feishu shared tenant {host}: main source now lists portal(s) {stray} that are not "
+                    "registered as yielding; re-verify the tenant's portal layout before writing")
         needed = sorted({owners[self._row_portal(p)] for p in rows if self._row_portal(p) in owners})
         if not needed:
             return rows, total
         owned = {}
         for owner in needed:
-            o_rows, o_total, o_reached = self._httpx_fetch_portal(host, owner)
-            if not o_reached or o_total is None or len(o_rows) < (o_total or 0):
+            for _attempt in range(2):   # 归属门户列表要翻好几页，抖一下就整源失败不值当：重取一次再判
+                o_rows, o_total, o_reached = self._httpx_fetch_portal(host, owner)
+                if o_reached and o_rows and o_total is not None and len(o_rows) >= o_total:
+                    break
+            else:
+                # 空列表同样按没取全算：归属门户瞬时回 0 岗时照单全收，让出的岗会被写回来。
                 raise RuntimeError(
                     f"feishu shared tenant {host}: owner portal {owner} list incomplete "
                     f"({len(o_rows)}/{o_total}); skip this run to avoid one job under two companies")
@@ -450,11 +463,11 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
                     {"_intercepted": [{"data": {"job_post_list": rows, "count": total if total is not None else len(rows)}}]},
                     ensure_ascii=False)
         # httpx 没打通（reached=False）→ 回退浏览器抓包（无 Playwright 环境会抛 → 上层记 failed，不写空）
-        owners = _SHARED_TENANT_PORTAL_OWNER.get(host) or {}
-        if owners and (getattr(self, "_main_portal", False) or self.website_path in owners):
-            # 浏览器链不做「让给归属门户」那一步：回退过去会把让出的岗又写回来（一岗两行）。
+        if host in _SHARED_TENANT_PORTAL_OWNER:
+            # 共享租户上的每一条源都不回退：浏览器链重放列表请求时不带 website-path 头（_replay_paginated），
+            # 取回的是整个租户的岗，会把别家公司的岗写到这条源名下；也不做「让给归属门户」那一步。
             raise RuntimeError(f"feishu shared tenant {host}: list API unreachable; "
-                               "no browser fallback for a portal that yields jobs to its owner portal")
+                               "no browser fallback on a tenant shared by several companies")
         return self._browser_fetch(source_url)
 
     def _browser_fetch(self, source_url: str) -> str:
