@@ -12,6 +12,20 @@
 ```
 crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd,haier,tencent,bytedance,feishu,greenhouse,lever,china_ats,
                          #   meituan,kuaishou,bilibili,pinduoduo,vivo,byd,tencent_music,antgroup,mihoyo}.py
+                         #   bytedance.py = 字节跳动三条源：社招官网 `bytedance` / 校招官网 `bytedance_campus` / 全球站 `bytedance_global`
+                         #   （joinbytedance.com）。同一个招聘租户的三个公开门户，同一个 posts 接口，靠请求头 `website-path` 区分
+                         #   （society / campus / en；另有 jp，以及 robots 明写 Disallow 的 referral——**内推门户不许碰**）。
+                         #   ⚠️ 列表必须带头按门户取（2026-10-12 改）。不带头取到的不是任何一个公开门户的列表：全集对拍，
+                         #     官网在招而我们从没抓到 368 个；我们挂着在招、中文站链接打开是「该职位已下线」2,148 个（其中 1,302 个
+                         #     只挂全球站）。巡检见「已下线」判死 → 清除 → 列表又插回来，墓碑复活 437 行里 346 行是这个循环。
+                         #   ⚠️ 判一个岗在不在招：详情接口带**链接所在门户**的头读 `channel_online_status`（按门户算，不带头读出来的不算数）。
+                         #   ⚠️ 海外岗的官方页面是 `joinbytedance.com/search/{编号}`，不是中文站。全球站地点用接口的英文名
+                         #     （中文名「圣地亚哥」会判成智利，实为 San Diego），并按 sources.regions 逐岗过滤。
+                         #   ⚠️ 社招根列表 count 封顶 10,000 → 按一级职类切；职类清单取 `/api/v1/config/job/filters/2` 的 job_type_list
+                         #     （只靠前 2,000 条采样，漏掉小职类发现不了）。同一返回体的 job_type_count_map 和列表对不上，别当总数。
+                         #   ⚠️ 每轮先带一个不存在的门户名问一次：必须回 site not exist；照样回了岗位（头被无视）或两次都没问到
+                         #     → 整轮抛错不写。叶子实取少于自报 / 封顶却没拿到职类清单 / 采样到清单外的职类 → 照常收，
+                         #     但不标抓全（不触发缺席撤岗）。
                          #   china_ats.py = 本土通用 ATS（moka / beisen / company_spa；host 从 source_url 动态解析，浏览器拦截 SPA）
                          #   ⚠️ moka 岗位卡的地点与标题（`_parse_moka_card`，2026-10-11 重写；判据是拿 397 个在招门户、38,789 张卡片
                          #     innerText 原文量出来的）：列表接口是密文，地点只能从卡片文字里认。卡片字段区是
@@ -208,6 +222,8 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #     枚举：`#/{recruitType}` 页的 state.batchCardInfo 出机构 → `#/RecruitmentOrgDetails/{rt}/{orgId}`
                          #       页的 state.posCardInfo 出岗位（recruitType 99=校招 / 100=社招）。
                          #     ⚠️ **必须先 goto 一次首页**把会话建起来，否则 hash 路由只渲染 222 字空壳、一条都抓不到。
+                         #       📌 2026-10-12 复核：getInfo 是应用外壳每次文档加载自己发的，当天冷启动直接开 `#/99` 也渲染出了
+                         #       46 个机构；那次「222 字空壳」更像页面被对方清空（见下）。这一步留着无害，别当必要条件推结论。
                          #     ⚠️ hash 路由是**同文档导航**，换机构必须 `page.reload()`——不然上一家的卡片还在 DOM 里，
                          #       会把上一家的岗位当成这一家的（第一版就是这么只抓到 2 个岗、还自称抓全了）。
                          #     ⚠️ 渲染慢且不均：农银人寿 34 个岗要 >8s 才出来，等太短会得到「0 个岗」这种
@@ -228,13 +244,46 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #     ⚠️ jd_url 里的冒号是**字面量**：`#/PositionDetails/:{jobPublishId}`（前端拼串时把
                          #       路由占位符一起拼进去了），删掉它详情页打不开。详情走 window.open，点一下像没反应。
                          #     ⚠️ **「页面没渲染出来」会伪装成「这家没在招」**：线上首轮比本机少 162 个岗
-                         #       （2,418 vs 2,580）而 fetch_complete 还是 True。判据改成页面固定文案
-                         #       （列表页「招聘机构」/ 机构页「在招岗位」，两页不一样别混用）：有 marker+0 岗
-                         #       = 真没在招；没 marker = 没等到 = 漏抓。没等到的机构走完一圈后**补一轮重试**，
-                         #       还不行才 fetch_complete=False 并日志点名。单机构页抖一下（ERR_EMPTY_RESPONSE）
-                         #       各自 try/except，不许炸掉整轮（否则前面几十家已抓的岗一起丢 + 整源记 failed）。
-                         #     诚实边界：社招靠「热招事项」卡枚举机构，当前站点自报「暂无热招事项」故为 0；
-                         #       哪天社招开了但站点不出热招事项卡，这里会漏——上线后拿 db-report 复核。
+                         #       （2,418 vs 2,580）而 fetch_complete 还是 True。判据是**对方自己写的空态文案**：
+                         #       列表页「暂无热招事项」/ 机构页「该机构暂无在招岗位」（两页不一样别混用）。有卡片 = 答了；
+                         #       写着这句 = 答了「没有」；两样都没有 = 没等到 = 漏抓。没等到的机构走完一圈后**补一轮重试**，
+                         #       还不行才 fetch_complete=False 并日志点名。单机构页抖一下各自 try/except，
+                         #       不许炸掉整轮（否则前面几十家已抓的岗一起丢 + 整源记 failed）。
+                         #       📌 纠错（2026-10-12）：此处原写判据是固定标题「招聘机构」/「在招岗位」。读站点 bundle 的
+                         #       render 分支：标题在数据回来之前就在；接口被限流（回「请求过于频繁」）时组件不更新 →
+                         #       标题在、卡片没有、「暂无」也没有，旧判据会把它记成「这家没在招」。
+                         #     🚫 **页面会被对方自己清空（2026-10-12 查实，09-05~10-11 这条源 39 轮 35 轮 failed 的真因）**：
+                         #       ❌ `Page.goto: Navigation to "…#/100" is interrupted by another navigation to "…/99/262"`，
+                         #          每个机构页「打开失败」，偶尔 `net::ERR_EMPTY_RESPONSE` / `chrome-error://chromewebdata`。
+                         #       ✅ 根因：入口页引的 `sm3/core.js`（名字是加密库）里夹着一段检测调试工具的代码，**每次文档加载**
+                         #          比 `console.table(大数组)` 与 `console.log(大数组)` 的耗时；有调试协议接着（DevTools / Playwright
+                         #          走的 CDP）时前者慢一个数量级，命中就 `for (k in window) window[k]=0` —— `location=0` 让主文档
+                         #          自己跳 `…/build/0`，对方网关回空响应。脚本文件 Last-Modified 2026-09-07，首次失败 09-05 20:15 UTC。
+                         #          证据：CDP `Network.requestWillBeSent` 的 initiator 栈落在 sm3/core.js 的 eval 代码里；
+                         #          不挂自动化的 headless Chrome 连开 6 次全正常；CI 与本机报错逐字相同（不是 CI 环境问题）。
+                         #          概率性的（console.log 那一下计到 ≥1ms 才判），且随机器快慢波动很大，没有一个稳定的命中率：
+                         #          诊断时多挂了 CDP 网络监听，4 次新加载 3 次命中；adapter 自己的流程本机跑了 14 次
+                         #          （多数只加载 1 次文档），3 次命中；CI 上对方还在招的 09-05~10-08 共 35 轮（每轮约 47 次加载）
+                         #          = 3 轮成功、1 轮部分成功、31 轮失败；10-09 起的 4 轮是对方已没在招、被记成了失败。
+                         #       🔎 **性质判定**：它查的是「有没有调试协议接管」，不查 webdriver / UA / 行为；入口页内联脚本同时
+                         #          禁了 F12 / 右键、埋了 debugger 陷阱、把 console 方法换成空函数。是对方明确设的防调试措施，
+                         #          不是普通接口参数（对照下面 cib 那条）。
+                         #          → **不重试、不绕**：不重新加载碰运气，不屏蔽 / 改写它的脚本；要不要绕由创始人定。
+                         #       ✅ 现行处理：`_note_navigation` 记「主文档被带去了应用之外」，一发现就停（`_PageLeft`）：已读到的岗
+                         #          照常返回、不算抓全；一个都没读到就带真实原因 failed。列表页之间不 reload、改走「退回首页再进」
+                         #          （同路由组件不重挂，直接跳会读到上一个板块留下的内容；reload 则多给它一次判的机会）。
+                         #          所有「等页面」的轮询都走 `_poll`（每轮先查页面还在不在）；哪一页没答、为什么，经 `_note`
+                         #          拼进报错 → 进 crawl_runs.error_message（CI 日志只记过「打开失败：Error」，线索全丢）。
+                         #          「0 岗 + success」要三样都成立：两个板块都新鲜渲染、都写「暂无热招事项」、且同页「招聘机构」
+                         #          清单里没有机构标着在招（页面按 `disabled: '1' != flag` 画按钮）。10-12 本机实测 8~12 秒给出结论。
+                         #       ⚠️ 没解决的：机构页、详情页仍是每个一次 reload（逐岗正文每晚最多几百次）——有岗的季节里
+                         #          一轮几乎必然撞上，撞上即停 = 靠后的机构和大部分正文抓不到（库里 2,671 岗只有 55 个有正文）。
+                         #          改成整轮只加载一次文档（机构 / 详情全走 hash）能把暴露面降到 1 次，但当期没岗、验不了读法。
+                         #     诚实边界：靠「热招事项」卡枚举机构。2026-10-12 校招 / 社招两个板块都自报「暂无热招事项」
+                         #       （校招 46 个机构全部置灰，库里 2,671 岗截止日全是 10-08）→ adapter 返回 0 岗、记 success。
+                         #       哪天开了但站点不出热招事项卡，这里会漏——上线后拿 db-report 复核。
+                         #       「专项招聘」是 `#/102`（点站点顶栏得到的，当天同样空），未接；bundle 的路由清单里还有
+                         #       103 / 498~501 五个同类列表页，顶栏没有入口，不猜。
                          #   cib 兴业银行（2026-09-23）= 第二家走浏览器的银行，1574 岗（社招/校招/实习同一列表）。
                          #     不是反爬：门户建在兴业的 JUP 前端框架上，**每个请求都带现场签算的两个头**，裸请求一律 500：
                          #       X-VALID-TOKEN = SM3-HMAC(按键排序的请求体, signKey)；
@@ -383,7 +432,7 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #       300 个伪 id（含真 id 的相邻值）全是空骨架。非数字 / 超 int64 的 id 回 code=4005，不判死。
                          #     社招列表是全集：`pageNum` 是行偏移不是页码；去重后凑不齐自报 total 就抛错。列表里省市皆空的行
                          #       （当天 26 条）在 parse 被地点门挡掉，从不入库。
-                         #     社招撤岗核验 = `crawler/byd_liveness.py`（+ `byd-liveness.yml`，手动触发、默认 dry-run）：库里的链接让官方
+                         #     社招撤岗核验 = `crawler/byd_liveness.py`（+ `byd-liveness.yml`，每日定时真跑、手动触发默认 dry-run）：库里的链接让官方
                          #       路由解回岗位 id（老的坏链接唯一解才修），「不在本轮全量列表」且「详情两轮都回空骨架」才下架；逐岗探之前、
                          #       每探 500 个之后都过阳性 / 阴性对照；另有四道整轮作废的闸（链接解不出 id / 上一轮的岗大面积缺席 /
                          #       不在列表却读到在招的太多 / 判死占比）。社招不开 list-absence：它认的是「这轮没被写库」，列表里有、

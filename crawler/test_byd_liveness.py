@@ -504,5 +504,21 @@ class MainTest(unittest.TestCase):
         self.assertEqual((ledger[0][1], ledger[0][2]["expired"]), ("success", 3))
 
 
+class WiringTest(unittest.TestCase):
+    def test_byd_stays_out_of_the_browser_audit(self):
+        """浏览器巡检对比亚迪的空壳撤岗页只能判 suspect（只盖戳不下架）；加回去只会白烧预算。"""
+        import audit_dead_links
+        self.assertNotIn("byd", audit_dead_links._BROWSER_ADAPTERS)
+
+    def test_scheduled_runs_apply_and_manual_runs_default_to_dry_run(self):
+        import os
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".github", "workflows", "byd-liveness.yml")
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("APPLY: ${{ github.event_name == 'schedule' && 'true' || github.event.inputs.apply }}", text)
+        self.assertIn('default: "false"', text)
+        self.assertIn('if [ "${APPLY:-}" = "true" ]; then args+=(--apply); fi', text)
+
+
 if __name__ == "__main__":
     unittest.main()

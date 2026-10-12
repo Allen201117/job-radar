@@ -56,7 +56,10 @@ _BROWSER_ADAPTERS = (
     # google 已移出：2026-07-14 live 核实其详情页其实是 SSR，httpx 直接拿得到 <main> 正文
     # （活岗 5-6k 字符）+ 软 404 文案判死 → 已进 ENRICH_REGISTRY/liveness-sweep（httpx 快且能补正文），
     # 留在这里只会无头重复探活（与 wt/hotjob 同理：有 httpx 检测的就不走浏览器）。
-    "kuaishou", "byd", "bytedance", "bytedance_campus",
+    # byd 已移出（2026-10-12）：它撤岗后的详情页是空壳——不渲染岗位名和正文，也没有任何「已下线」文案，
+    # classify() 只能落 suspect（375 个真渲染样本里 300 个已撤岗 0 个判 dead），每天巡、只盖戳、从不下架，
+    # 攒过 5,429 个已撤岗。改由 crawler/byd_liveness.py 判（不在全量列表 + 详情接口空骨架），留在这里纯属白烧预算。
+    "kuaishou", "bytedance", "bytedance_campus",
     # 2026-06-25 补：db-report 实测 24h 覆盖=0 的大厂 SPA（alibaba 3789/netease 1177/ctrip 772/huawei 445 岗，
     # 之前不在任何保鲜流）。均为浏览器渲染详情页 → 纳入审计渲染探活（同上：命中 DEAD_MARKERS 才下架，否则只轮转盖戳）。
     "alibaba", "netease", "ctrip",
@@ -145,7 +148,7 @@ def is_same_document_nav(previous_url, url):
     自己的「头部达人运营-【电商】」，判定回到 alive。
 
     影响面：byd 6,362 + kuaishou 2,830 个 active 岗的 jd_url 都是「同一个 base + 不同 hash」，
-    两者都在 _BROWSER_ADAPTERS 里、每天带 --apply 跑。
+    立碑时两者都在 _BROWSER_ADAPTERS 里、每天带 --apply 跑（byd 2026-10-12 移出，原因见名单注释）。
     只在真正的同文档跳转上多花一次 reload，其余源一次都不多花。"""
     if not previous_url or not url:
         return False
