@@ -17,6 +17,7 @@ from geo import (
     _GREATER_CHINA,
     _REJECTED_COUNTRY_CODES,
     _is_overseas_pinned,
+    cn_name_is_part_of_another_place,
     cn_place_province,
     derive_country_code,
     derive_job_scope,
@@ -337,6 +338,40 @@ def location_place_keys(location: Optional[str]) -> set:
     return {key for key, _ in _scan_places(location)}
 
 
+# 折叠时哪些拼音 / 英文别名不算数：只排除「看得出是别的词或路名的一部分」的，其余照认（2026-10-12 live 逐条核过）。
+# 比上面认「并列地点」的 _LATIN_CITY_RE 松——那条是往结果里加城市，要两边都是空格 / 标点；这条是不把原来折对的改丢：
+#   · 前面粘着字母的不认（「C|hangzhou」常州、「Z|hangzhou」漳州、「Tong|xian|g」桐乡），驼峰的大写处除外
+#     （workday 把几段粘着写：「ChinaShandong|Qingdao|266000」）；
+#   · 后面跟着小写字母的不认（「Xian|yue」）；跟着大写字母的是粘写，照认（「Xian|China」「Suzhou|Jiangsu」「SINGAPORE|UNITS」）；
+#   · xian 后面是 g / yang / ning / tao / ju / you 的不认，不分大小写：xiang… 是另一个音节（湘潭 / 襄阳 / 桐乡），
+#     XianYang 咸阳、XianNing 咸宁、XianTao 仙桃、XianJu 仙居、XianYou 仙游；
+#   · 后面是路名的不认：Road / Street / Avenue / Dadao 这类整词，或「方位词 + St / Lu / Jie」（「Nanjing Xi Lu」）。
+#     光秃秃的 St / Lu / Jie 不算证据（「Shanghai, St. Regis」）。
+# 要喂原文：大小写是判断边界的依据。
+_ROAD_DIRECTION = r"(?:east|west|north|south|middle|central|e|w|n|s|dong|xi|nan|bei|zhong)"
+_LATIN_FOLD_RE = re.compile(
+    r"(?:(?<![A-Za-z])|(?<=[a-z])(?=[A-Z]))(?i:"
+    + "|".join(re.escape(a) + (r"(?!g|yang|ning|tao|ju|you)" if a == "xian" else "")
+               for a in sorted(_LATIN_CITY_ALIASES, key=len, reverse=True))
+    + r")(?![a-z])"
+    r"(?!(?i:(?:[\s,]+" + _ROAD_DIRECTION + r")?[\s,]+(?:road|rd|street|avenue|ave|boulevard|blvd|dadao|dajie)"
+    r"|[\s,]+" + _ROAD_DIRECTION + r"[\s,]+(?:st|lu|jie))(?![A-Za-z]))"
+)
+
+
+def _fold_city(loc: str) -> str:
+    """入库清洗用的折叠：与 normalize_city 同一张别名表、同一个顺序，只是拼音 / 英文城市名要过 _LATIN_FOLD_RE
+    （「Changzhou」里的 hangzhou、「Xinxiang」里的 xian 不算，后面跟着 Road 的是路名）。中文别名、「remote」仍按子串。"""
+    key = loc.lower()
+    if key in CITY_ALIASES:
+        return CITY_ALIASES[key]
+    latin = {m.group().lower() for m in _LATIN_FOLD_RE.finditer(loc)}
+    for alias, city in CITY_ALIASES.items():
+        if (alias in latin) if alias in _LATIN_CITY_ALIASES else (alias in key):
+            return city
+    return loc
+
+
 def clean_location(location: Optional[str]) -> Optional[str]:
     """清洗地点字段：单个地点折成别名表里的城市名；多地并列的逐个折、用「/」连起来。
 
@@ -347,9 +382,20 @@ def clean_location(location: Optional[str]) -> Optional[str]:
        所以一个在北京 / 深圳 / 上海都招的岗只有北京的用户看得到。
     ✅ 只动「会被折叠、且串里并列写着不止一个地方」的行：
        · 串里没有别名表里的城市 → 原样返回（改前就不折，每个城市都匹配得上）；
-       · 只写了一个地方（含上下级写法）→ 与改前逐字相同；
-       · 改前折出来的那个城市不在认出来的地点里（「牡丹江市·西安区」折成西安这类）→ 也与改前相同，
-         保证改前匹配得上的城市改后一定还匹配得上。那一类是折错了城市，另案处理，别在这里顺手改。
+       · 只写了一个地方（含上下级写法）→ 与改前逐字相同。
+
+    🚫 串里有别名城市的那几个字，不等于岗位在那个城市（2026-10-12）：
+    ❌ 「黑龙江省·牡丹江市·西安区」→ 西安、「宁波杭州湾新区」→ 杭州、「Changzhou, Jiangsu, China」→ 杭州
+       （hangzhou 是 changzhou 的子串）、「Beijing East Road, Shanghai」→ 北京：岗位被写成一个它不在的城市，
+       推给了不在那里的人，真正所在城市的人反而被硬拒。
+    ✅ 只在能证明折错的时候纠正，证明不了就维持折叠（不把原来对的城市改丢）：
+       · 拼音 / 英文别名：看得出是别的词或路名的一部分的不认（_LATIN_FOLD_RE）；认不出城市的英文串原样入库，
+         国家照样判得出；
+       · 中文：严格识别（location_places）在串里认出了别的地方、没认出折出来的城市，而且那几个字每一处都只是
+         别的地名 / 路名的一部分（geo.cn_name_is_part_of_another_place：后面是区 / 路 / 街、跨在别的地名上、
+         紧跟在另一个城市后面的「X湾」）→ 用严格识别的结果（牡丹江市 / 宁波）；
+       · 其余照旧。严格识别只在段首和省名后面认地名，它没认出来不等于折错：「华东区上海」「四川天府新区成都片区」
+         「可在北京 天津 青岛」「广州深圳等地」里的上海 / 成都 / 北京 / 深圳都是真的。
     """
     if not location:
         return None
@@ -357,11 +403,13 @@ def clean_location(location: Optional[str]) -> Optional[str]:
     loc = re.sub(r"\s+", " ", loc)
     if loc.lower() in ("unknown", "multiple locations", "various", ""):
         return None
-    folded = normalize_city(loc)
+    folded = _fold_city(loc)
     if folded == loc:
         return folded
     places = location_places(loc)
-    if len(places) > 1 and folded in places:
+    if folded in places:
+        return MULTI_PLACE_SEP.join(places)       # 只写了一个地方时就是 folded 本身
+    if places and folded not in _NON_PLACE_ALIAS_TARGETS and cn_name_is_part_of_another_place(loc, folded):
         return MULTI_PLACE_SEP.join(places)
     return folded
 
