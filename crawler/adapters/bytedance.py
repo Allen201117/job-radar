@@ -5,13 +5,26 @@
 httpx 直连，无签名 / token / cookie；旧浏览器被动拦截只翻 4 页 + 关键词枚举，会把 2 万级
 岗位截成几十条。本适配器按 recruitment_id 分轨道，服务端 offset/limit 翻页，社招触达
 count 封顶时用一级职类 + 城市切片把单片压到 1 万以内。
+
+🚫 列表必须带 `website-path` 头按**公开门户**取（2026-10-12 改，此前不带头）：
+  这个租户挂着 society（中文社招官网）/ campus（中文校招官网）/ en（全球站 joinbytedance.com）/ jp / referral
+  五个门户，robots.txt 明写 Allow 前四个、Disallow /referral——**内推门户不许碰**。
+  ❌ 不带头取到的不是任何一个公开门户的列表。全集对拍（四份列表翻全 + 差集 2,516 岗逐岗读详情状态 +
+     200 页真渲染，0 条与预期不符）：社招不带头 12,118 / 官网 10,960，校招 8,091 / 7,469；
+     官网有、不带头没有 368（官网页面在招，我们从没抓到）；不带头有、官网没有 2,148（我们存的中文站链接
+     打开是「该职位已下线」，其中 1,302 个在全球站在招）。巡检见「已下线」判死 → 清除 → 列表又插回来，
+     墓碑 437 行复活里 346 行是这个循环；缺席撤岗还删过 15 个官网上仍在招的岗。
+  ✅ 每条源只取自己那个门户：详情接口的 `channel_online_status` 是**按门户**算的，带哪个门户的头取列表，
+     逐岗在那个门户上就是在线的（带头读 1 / 不带头读 0 各 368/368，反向 2,148/2,148）。
+     海外岗的正确链接在全球站（BytedanceGlobalAdapter），不在中文站。
 """
 import json
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional, Set
+from typing import Callable, List, Optional, Set, Tuple
 from urllib.parse import quote
 
 import httpx
@@ -24,6 +37,16 @@ from .playwright_base import PlaywrightAdapter, _UA
 log = logging.getLogger(__name__)
 
 _POSTS_URL = "https://jobs.bytedance.com/api/v1/search/job/posts"
+# 门户自己的筛选项配置：job_type_list 是一级职类的权威清单。
+# ⚠️ 同一个返回体里的 job_type_count_map（合计 18,429）和列表（10,960）对不上，别拿它当总数。
+_FILTERS_URL = "https://jobs.bytedance.com/api/v1/config/job/filters/2"
+_SITE_NOT_EXIST = -9000003       # 带了一个租户没有的 website-path：200 + code=-9000003 "site not exist"
+_PROBE_WEBSITE_PATH = "no-such-portal"   # 探针用的假门户名：对方必须回 site not exist
+
+# 限速状态进程内共用：三条源打的是同一个接口主机、同一个出口 IP。全球站那条源的 source_url 在另一个域名上，
+# run.py 按 source_url 主机分队时会让它和另外两条并行——各限各的速，合起来就是双倍请求频率。
+_RATE_LOCK = threading.Lock()
+_LAST_REQUEST_AT: List[Optional[float]] = [None]
 _COUNT_CAP = 10000
 _DEFAULT_PAGE_LIMIT = 200
 _DEFAULT_MAX_JOBS = 25000
@@ -88,7 +111,7 @@ def build_search_body(
         "keyword": "",
         "limit": int(limit),
         "offset": int(offset),
-        "recruitment_id_list": [str(recruitment_id)],
+        "recruitment_id_list": [str(recruitment_id)] if recruitment_id else [],
     }
     if category_id:
         body["job_category_id_list"] = [str(category_id)]
@@ -192,13 +215,16 @@ def collect_bytedance_track(
     max_jobs: int = _DEFAULT_MAX_JOBS,
     sample_limit: int = _DEFAULT_SAMPLE_JOBS,
     count_cap: int = _COUNT_CAP,
+    category_ids_provider: Optional[Callable[[], List[str]]] = None,
 ) -> BytedanceFetchResult:
     """按一个招聘轨道抓全岗位，IO 通过 fetch_page 注入，便于单测切片规划。
 
     策略：
     - count < 10000：直接 offset 翻到 count；
-    - count >= 10000：先采样一级职类；单职类仍封顶时再采样城市；
-    - 任一叶子页失败 / 叶子仍封顶 / 撞安全上限，都保留已抓数据但 complete=False。
+    - count >= 10000：一级职类 = 门户自报清单（category_ids_provider，只在封顶时才去取）∪ 前 N 条采样到的；
+      单职类仍封顶时再采样城市；
+    - 任一叶子页失败 / 叶子仍封顶 / 撞安全上限 / 叶子实取少于自报，都保留已抓数据但 complete=False；
+      给了 provider 却没拿到清单，或采样到清单里没有的职类（= 清单不是全集），同样 complete=False。
     """
     rows: List[dict] = []
     seen: Set[str] = set()
@@ -210,7 +236,7 @@ def collect_bytedance_track(
     def safe_fetch(offset: int, limit: int, category_id: Optional[str] = None,
                    city_code: Optional[str] = None) -> BytedancePage:
         try:
-            page = fetch_page(str(recruitment_id), int(offset), int(limit), category_id, city_code)
+            page = fetch_page(str(recruitment_id or ""), int(offset), int(limit), category_id, city_code)
         except Exception as exc:
             return BytedancePage(ok=False, error=exc_brief(exc))
         if not isinstance(page, BytedancePage):
@@ -242,6 +268,7 @@ def collect_bytedance_track(
     def fetch_leaf(category_id: Optional[str], city_code: Optional[str], total: int) -> None:
         nonlocal complete, hit_max_jobs
         leaf_total = min(_as_count(total), count_cap)
+        leaf_ids: Set[str] = set()
         if total >= count_cap:
             # 叶子仍达到封顶值，说明还可能有不可翻出的尾部；保留前 1 万但不能声明抓全。
             complete = False
@@ -259,10 +286,19 @@ def collect_bytedance_track(
                 complete = False
                 log.warning("bytedance posts empty page before expected end scope=%s", scope)
                 return
+            leaf_ids.update(pid for pid in map(_post_id, page.jobs) if pid)
             if merge_unique_posts(rows, seen, page.jobs, max_jobs):
                 hit_max_jobs = True
                 complete = False
                 return
+        # 翻页期间对方上下架会让行跨页挪位：实取少于自报 = 有岗没翻到，这一轮不许拿去判缺席。
+        # （2026-10-12 实测：校招 390 轮里 6 轮实取 < 自报仍标抓全，最多差 28 个。）
+        if len(leaf_ids) < leaf_total:
+            complete = False
+            log.warning(
+                "bytedance posts leaf short cat=%s city=%s reported=%s fetched=%s; mark incomplete",
+                category_id or "-", city_code or "-", leaf_total, len(leaf_ids),
+            )
 
     root = safe_fetch(0, 1)
     if not root.ok:
@@ -283,7 +319,20 @@ def collect_bytedance_track(
         )
 
     sample = sample_posts(None, None, total)
-    categories = collect_primary_category_ids(sample)
+    # 根 count 封顶时「各职类 count 之和 ≥ 根 count」恒成立，采样漏掉一个小职类发现不了，
+    # 所以职类清单以门户自报的为准，采样只当补充（门户清单里没有的也收）。
+    known = [str(c) for c in (category_ids_provider() if category_ids_provider else []) if c]
+    sampled = collect_primary_category_ids(sample)
+    categories = list(dict.fromkeys(known + sampled))
+    if category_ids_provider is not None:
+        if not known:
+            complete = False
+            log.warning("bytedance posts capped root but portal category list unavailable; mark incomplete")
+        elif any(c not in known for c in sampled):
+            # 采样到了清单里没有的职类：清单已被证明不是全集，没采到的那些无从得知。
+            complete = False
+            log.warning("bytedance posts sampled categories outside portal list %s; mark incomplete",
+                        [c for c in sampled if c not in known])
     if not categories:
         complete = False
         log.warning("bytedance posts capped root but no category ids sampled; fetching capped root only")
@@ -378,6 +427,8 @@ class BytedanceAdapter(PlaywrightAdapter):
     recruitment_id = "1"
     recruit_type = "社招"
     board = "experienced"
+    # 这条源取哪个公开门户（请求头 website-path）。/experienced 页面自报 website_info.path = "society"。
+    website_path = "society"
     company_name = "字节跳动"
     official_hosts = ("jobs.bytedance.com",)
     intercept_match = "/api/v1/search/job/posts"
@@ -411,10 +462,9 @@ class BytedanceAdapter(PlaywrightAdapter):
         self.max_retries = _env_int("BYTEDANCE_MAX_RETRIES", _DEFAULT_MAX_RETRIES, minimum=0)
         self.fetch_complete = False
         self.reported_total = None
-        self._last_request_at: Optional[float] = None
 
     def _headers(self) -> dict:
-        return {
+        headers = {
             "User-Agent": _UA,
             "Accept": "application/json, text/plain, */*",
             "Accept-Language": "zh-CN,en;q=0.9",
@@ -422,22 +472,27 @@ class BytedanceAdapter(PlaywrightAdapter):
             "Origin": "https://jobs.bytedance.com",
             "Referer": f"https://jobs.bytedance.com/{self.board}/position",
         }
+        if self.website_path:
+            headers["website-path"] = self.website_path
+        return headers
 
     def _wait_for_rate_limit(self) -> None:
         if self.request_interval_s <= 0:
             return
-        now = time.monotonic()
-        if self._last_request_at is not None:
-            wait_s = self.request_interval_s - (now - self._last_request_at)
-            if wait_s > 0:
-                time.sleep(wait_s)
-        self._last_request_at = time.monotonic()
+        with _RATE_LOCK:   # 持锁睡：并行的几条源按到达顺序排队，每次请求之间都隔满一个间隔
+            last = _LAST_REQUEST_AT[0]
+            if last is not None:
+                wait_s = self.request_interval_s - (time.monotonic() - last)
+                if wait_s > 0:
+                    time.sleep(wait_s)
+            _LAST_REQUEST_AT[0] = time.monotonic()
 
-    def _request_page(self, client, body: dict) -> BytedancePage:
+    def _send(self, send) -> Tuple[Optional[dict], Optional[str]]:
+        """发一次请求取 JSON，405 退避重试。返回 (payload, error)：payload 为 None 时 error 是原因。"""
         for attempt in range(self.max_retries + 1):
             self._wait_for_rate_limit()
             try:
-                resp = client.post(_POSTS_URL, json=body)
+                resp = send()
                 status = getattr(resp, "status_code", 200)
                 if status == 405:
                     if attempt < self.max_retries:
@@ -447,21 +502,67 @@ class BytedanceAdapter(PlaywrightAdapter):
                         )
                         time.sleep(self.retry_backoff_s)
                         continue
-                    return BytedancePage(ok=False, error="HTTP 405 after retries")
+                    return None, "HTTP 405 after retries"
                 if hasattr(resp, "raise_for_status"):
                     resp.raise_for_status()
-                payload = resp.json()
+                return resp.json(), None
             except Exception as exc:
-                return BytedancePage(ok=False, error=exc_brief(exc))
+                return None, exc_brief(exc)
+        return None, "retry loop exhausted"
 
-            data = (payload or {}).get("data") if isinstance(payload, dict) else None
-            if not isinstance(data, dict):
-                return BytedancePage(ok=False, error="missing data")
-            jobs = data.get("job_post_list") or []
-            if not isinstance(jobs, list):
-                return BytedancePage(ok=False, error="job_post_list is not list")
-            return BytedancePage(count=_as_count(data.get("count")), jobs=jobs)
-        return BytedancePage(ok=False, error="retry loop exhausted")
+    def _request_page(self, client, body: dict) -> BytedancePage:
+        payload, error = self._send(lambda: client.post(_POSTS_URL, json=body))
+        if error:
+            return BytedancePage(ok=False, error=error)
+        data = (payload or {}).get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, dict):
+            code = payload.get("code") if isinstance(payload, dict) else None
+            return BytedancePage(ok=False, error=f"missing data (code={code})")
+        jobs = data.get("job_post_list") or []
+        if not isinstance(jobs, list):
+            return BytedancePage(ok=False, error="job_post_list is not list")
+        return BytedancePage(count=_as_count(data.get("count")), jobs=jobs)
+
+    def _portal_header_honored(self, client) -> Optional[bool]:
+        """对方这一轮是不是真按 website-path 分门户：True = 是 / False = 确定不是 / None = 没问到。
+
+        做法：带一个不存在的门户名取 1 条，正常回 code=-9000003 site not exist；要是照样回了岗位，
+        说明头被无视了，这一轮取到的就是「不带头」那份列表——会把官网上已下线的岗插回来、
+        把只挂官网的岗判缺席（小米私有部署 2026-09-23 出过一次无视头返回全集）。
+        """
+        body = build_search_body(self.recruitment_id, 0, 1)
+        payload, error = self._send(lambda: client.post(
+            _POSTS_URL, json=body, headers={"website-path": _PROBE_WEBSITE_PATH}))
+        if error or not isinstance(payload, dict):
+            return None
+        if payload.get("code") == _SITE_NOT_EXIST:
+            return True
+        data = payload.get("data")
+        if isinstance(data, dict) and (data.get("job_post_list") or _as_count(data.get("count")) > 0):
+            return False
+        return None
+
+    def _ensure_portal_header_honored(self, client) -> None:
+        """头被无视、或两次都没问到 → 抛错记 failed、整轮不写。
+        头被无视时安静地写下去 = 把官网已下线的岗当新岗插回来；没问到则无从确认这一轮取到的是哪份列表。"""
+        if not self.website_path:
+            return
+        honored = self._portal_header_honored(client)
+        if honored is None:
+            honored = self._portal_header_honored(client)   # 再问一次：网络抖一下不该废掉一轮
+        if honored is not True:
+            why = "不存在的门户也返回了岗位" if honored is False else "探针两次都没问到结果"
+            raise RuntimeError(f"{self.name}: 没法确认 website-path 头这一轮生效（{why}），整轮不写")
+
+    def _fetch_category_ids(self, client) -> List[str]:
+        """门户自报的一级职类清单；拿不到返回空（collect_bytedance_track 据此不标抓全）。"""
+        payload, error = self._send(lambda: client.get(_FILTERS_URL))
+        data = payload.get("data") if isinstance(payload, dict) else None
+        cats = data.get("job_type_list") if isinstance(data, dict) else None
+        ids = [str(c["id"]) for c in (cats or []) if isinstance(c, dict) and c.get("id")]
+        if not ids:
+            log.warning("%s: filters config gave no categories (%s)", self.name, error or "empty")
+        return ids
 
     def _httpx_fetch(self) -> BytedanceFetchResult:
         with httpx.Client(
@@ -469,6 +570,8 @@ class BytedanceAdapter(PlaywrightAdapter):
             follow_redirects=True,
             headers=self._headers(),
         ) as client:
+            self._ensure_portal_header_honored(client)
+
             def fetch_page(
                 rid: str,
                 offset: int,
@@ -487,6 +590,7 @@ class BytedanceAdapter(PlaywrightAdapter):
                 page_limit=self.page_limit,
                 max_jobs=self.max_jobs,
                 sample_limit=self.sample_limit,
+                category_ids_provider=lambda: self._fetch_category_ids(client),
             )
 
     def fetch(self, source_url: str) -> str:
@@ -507,6 +611,9 @@ class BytedanceAdapter(PlaywrightAdapter):
             ensure_ascii=False,
         )
 
+    def _city_name(self, city: dict) -> str:
+        return str(city.get("name") or "").strip()
+
     def _map(self, post: dict) -> Optional[RawJob]:
         pid = _post_id(post)
         title = (post.get("title") or post.get("name") or "").strip()
@@ -516,11 +623,11 @@ class BytedanceAdapter(PlaywrightAdapter):
         city = ""
         cl = post.get("city_list")
         if isinstance(cl, list) and cl and isinstance(cl[0], dict):
-            city = cl[0].get("name") or ""
+            city = self._city_name(cl[0])
         if not city:
             ci = post.get("city_info")
             if isinstance(ci, dict):
-                city = ci.get("name") or ""
+                city = self._city_name(ci)
 
         desc = (post.get("description") or "").strip()
         req = (post.get("requirement") or "").strip()
@@ -548,6 +655,7 @@ class BytedanceCampusAdapter(BytedanceAdapter):
     recruitment_id = "2"
     recruit_type = "校招"
     board = "campus"
+    website_path = "campus"     # /campus 页面自报 website_info.path = "campus"
     detail_template = "https://jobs.bytedance.com/campus/position/{id}/detail"
     list_urls = [
         _campus_kw("算法"),
@@ -559,3 +667,32 @@ class BytedanceCampusAdapter(BytedanceAdapter):
         _campus_kw("运营"),
         "https://jobs.bytedance.com/campus/position",
     ]
+
+
+class BytedanceGlobalAdapter(BytedanceAdapter):
+    """字节跳动全球站（joinbytedance.com）：同一租户的 `en` 门户，海外岗的官方页面在这里。
+
+    为什么单开一条源：en 与 society / campus 两份列表交集为 0（2026-10-12 全集，背景见文件头），这批岗的官方页面
+    只有 `joinbytedance.com/search/{id}`（30 个真渲染 30 个在招，同一批岗的中文站链接 30 个已下线）。
+    门户不分社招 / 校招，类型按每岗自报的 recruit_type。
+    """
+
+    name = "bytedance_global"
+    recruitment_id = ""
+    recruit_type = ""
+    board = "en"
+    website_path = "en"
+    official_hosts = ("joinbytedance.com",)
+    detail_template = "https://joinbytedance.com/search/{id}"
+    list_urls = ["https://joinbytedance.com/search"]
+
+    def _city_name(self, city: dict) -> str:
+        # 用英文名：中文名「圣地亚哥」会被判成智利（这个岗在 San Diego），英文名判国家更准。
+        return str(city.get("en_name") or city.get("name") or "").strip()
+
+    def _map(self, post: dict) -> Optional[RawJob]:
+        # 全球站什么国家都有：只收 source.regions 白名单内的地点。中文站两个门户本身就是国内口径，不过滤。
+        job = super()._map(post)
+        if job is None or not normalizer.location_in_source_regions(job.location, getattr(self, "regions", None)):
+            return None
+        return job

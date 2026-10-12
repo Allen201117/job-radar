@@ -1,0 +1,47 @@
+name: bytedance-global-rehome
+
+# 字节「中文站链接已下线、全球站在招」的存量岗：原地换成全球站链接并挪到全球站那条源（一次性，2026-10-12）。
+# 为什么不让它们自然下架再重进：上千个岗的首见时间会被刷成当天，在海外用户那里全显示成本周新岗。
+# 手动触发、默认 dry-run；处置规则与三道安全闸见 crawler/bytedance_global_rehome.py 的模块注释。
+# 顺序：全球站那条源先以 enabled=false 入库（迁移 322）→ 跑这条（先 dry-run 再 apply）→ 再启用那条源。
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "true = 真的写库；留空/false = 只 dry-run 报数"
+        required: false
+        default: "false"
+
+jobs:
+  rehome:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: crawler/requirements.txt
+      - run: pip install -r crawler/requirements.txt
+
+      - name: Rehome bytedance global-site jobs
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+          JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+          JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
+        run: |
+          set -euo pipefail
+          args=(--out rehome-report.json)
+          if [ "${{ github.event.inputs.apply }}" = "true" ]; then args+=(--apply); fi
+          python3 crawler/bytedance_global_rehome.py "${args[@]}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bytedance-global-rehome-report
+          path: rehome-report.json
+          if-no-files-found: ignore

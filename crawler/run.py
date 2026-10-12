@@ -36,7 +36,7 @@ from adapters.netease_campus import NeteaseCampusAdapter
 from adapters.huawei_campus import HuaweiCampusAdapter
 from adapters.lixiang_campus import LixiangCampusAdapter
 from adapters.tencent_campus import TencentCampusAdapter
-from adapters.bytedance import BytedanceAdapter, BytedanceCampusAdapter
+from adapters.bytedance import BytedanceAdapter, BytedanceCampusAdapter, BytedanceGlobalAdapter
 from adapters.feishu import NioAdapter, XpengAdapter, HorizonAdapter, XiaomiAdapter, FeishuGenericAdapter
 from adapters.greenhouse import GreenhouseAdapter
 from adapters.lever import LeverAdapter
@@ -96,7 +96,9 @@ from adapters.gree import GreeAdapter
 SUMMARY_STORAGE_LIMIT = int(os.environ.get("JOB_SUMMARY_STORAGE_LIMIT", "500") or "500")
 # 声明了 supports_absence_liveness、但按缺席下架还只许 dry-run 的 adapter（env LIVENESS_ABSENCE_OBSERVE 可整体覆盖）。
 # byd_campus 2026-10-11 新接：还没见过「列表里消失的岗在官网上是什么样」，先看几晚 dry-run 数字。
-ABSENCE_OBSERVE_DEFAULT = "beisen,byd_campus"
+# 字节三条源 2026-10-12 改成按公开门户取列表：第一轮只看 dry-run 数字（预期：社招约 900、校招约 280、
+# 全球站约 0——全球站在招且在地区白名单内的存量行已先挪走），对上了再从这里拿掉。
+ABSENCE_OBSERVE_DEFAULT = "beisen,byd_campus,bytedance,bytedance_campus,bytedance_global"
 
 
 def cap_summary_for_storage(summary):
@@ -157,6 +159,7 @@ ADAPTERS = {
     "alibaba_campus_portal": AlibabaCampusPortalAdapter(),
     "bytedance": BytedanceAdapter(),
     "bytedance_campus": BytedanceCampusAdapter(),  # 字节校招/实习（与社招同平台）
+    "bytedance_global": BytedanceGlobalAdapter(),  # 字节全球站 joinbytedance.com（同租户 en 门户，海外岗）
     "nio_feishu": NioAdapter(),
     "xpeng_feishu": XpengAdapter(),
     "horizon_feishu": HorizonAdapter(),
@@ -282,7 +285,7 @@ _HTTPX_SAFE_ADAPTERS = {
     "citicbank",  # 中信银行：POST 列表 + GET 静态详情，纯 httpx、无共享状态（2026-09-23 live）
     # 字节：jobs.bytedance.com posts API 已改为纯 httpx offset/limit 全量翻页；
     # sources.crawl_method 仍由运维侧改库，本白名单只控制代码侧并发档。
-    "bytedance", "bytedance_campus",
+    "bytedance", "bytedance_campus", "bytedance_global",
     # feishu 家族：posts API 冷 httpx 直出岗位+正文（2026-06-28 实测 generic/nio/xpeng/xiaomi/zhipu/xtool
     # 全可达），httpx-first + 浏览器回退见 adapters/feishu.py；进 daily-crawl 4×/天（原仅 enrich-crawl 1×/天）。
     "feishu", "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu",

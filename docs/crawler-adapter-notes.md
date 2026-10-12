@@ -12,6 +12,20 @@
 ```
 crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd,haier,tencent,bytedance,feishu,greenhouse,lever,china_ats,
                          #   meituan,kuaishou,bilibili,pinduoduo,vivo,byd,tencent_music,antgroup,mihoyo}.py
+                         #   bytedance.py = 字节跳动三条源：社招官网 `bytedance` / 校招官网 `bytedance_campus` / 全球站 `bytedance_global`
+                         #   （joinbytedance.com）。同一个招聘租户的三个公开门户，同一个 posts 接口，靠请求头 `website-path` 区分
+                         #   （society / campus / en；另有 jp，以及 robots 明写 Disallow 的 referral——**内推门户不许碰**）。
+                         #   ⚠️ 列表必须带头按门户取（2026-10-12 改）。不带头取到的不是任何一个公开门户的列表：全集对拍，
+                         #     官网在招而我们从没抓到 368 个；我们挂着在招、中文站链接打开是「该职位已下线」2,148 个（其中 1,302 个
+                         #     只挂全球站）。巡检见「已下线」判死 → 清除 → 列表又插回来，墓碑复活 437 行里 346 行是这个循环。
+                         #   ⚠️ 判一个岗在不在招：详情接口带**链接所在门户**的头读 `channel_online_status`（按门户算，不带头读出来的不算数）。
+                         #   ⚠️ 海外岗的官方页面是 `joinbytedance.com/search/{编号}`，不是中文站。全球站地点用接口的英文名
+                         #     （中文名「圣地亚哥」会判成智利，实为 San Diego），并按 sources.regions 逐岗过滤。
+                         #   ⚠️ 社招根列表 count 封顶 10,000 → 按一级职类切；职类清单取 `/api/v1/config/job/filters/2` 的 job_type_list
+                         #     （只靠前 2,000 条采样，漏掉小职类发现不了）。同一返回体的 job_type_count_map 和列表对不上，别当总数。
+                         #   ⚠️ 每轮先带一个不存在的门户名问一次：必须回 site not exist；照样回了岗位（头被无视）或两次都没问到
+                         #     → 整轮抛错不写。叶子实取少于自报 / 封顶却没拿到职类清单 / 采样到清单外的职类 → 照常收，
+                         #     但不标抓全（不触发缺席撤岗）。
                          #   china_ats.py = 本土通用 ATS（moka / beisen / company_spa；host 从 source_url 动态解析，浏览器拦截 SPA）
                          #   ⚠️ moka 岗位卡的地点与标题（`_parse_moka_card`，2026-10-11 重写；判据是拿 397 个在招门户、38,789 张卡片
                          #     innerText 原文量出来的）：列表接口是密文，地点只能从卡片文字里认。卡片字段区是
