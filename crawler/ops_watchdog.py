@@ -196,7 +196,10 @@ NO_OUTPUT_MODULES = ("insight_staleness", "purge_expired", "ops_watchdog",
                      # auto_repair（2026-09-19 新增，跑在创始人电脑上的 Claude 桌面 App 定时任务，
                      # 不是本仓库的 GitHub workflow）：items 为空是正常的「今天没有要处理的问题」，
                      # 不是零产出；它「今天有没有跑过」由 pipeline.auto_repair_ran 单独覆盖。
-                     "auto_repair")
+                     "auto_repair",
+                     # byd_liveness（2026-10-11）：expired=0 = 这一轮比亚迪没有撤岗（国庆 10-01~10-07 每轮抓到的
+                     # 官网列表都是 2,188~2,189 行）。被安全闸拦下的轮次进程退出码 2，信号是 workflow 变红。
+                     "byd_liveness")
 
 # 规则 D：已落库的账户级错误信号。lib/track.ts 把 402/余额不足归一成 llm_insufficient_balance、
 # 把 401/403 归一成 llm_auth_error，写进 events.payload.diagnostics.error_code——用户侧真实踩到的欠费。

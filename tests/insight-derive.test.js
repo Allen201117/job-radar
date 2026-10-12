@@ -223,12 +223,13 @@ test("deriveTiming 与占比用同一个三桶：认列，兜底社招的月份�
 
 test("占比与招聘节奏都经 recruitBucket，没有哪一处还直接用关键词判法", () => {
   const src = fs.readFileSync(DERIVE_PATH, "utf8");
+  // 真正的计算在 hiringOf / timingOf 里（deriveHiring / deriveTiming 只是把岗位行转成分面再交给它们）
   const body = (name) => {
-    const start = src.indexOf(`export function ${name}(`);
+    const start = src.indexOf(`\nfunction ${name}(`);
     assert.ok(start >= 0, "找不到 " + name);
     return src.slice(start, src.indexOf("\n}\n", start));
   };
-  for (const name of ["deriveHiring", "deriveTiming"]) {
+  for (const name of ["hiringOf", "timingOf"]) {
     assert.match(body(name), /recruitBucket\(jb\)/, name);
     assert.equal(body(name).includes("classifyRecruitment("), false, name + " 里还在直接调关键词判法");
   }
@@ -386,9 +387,11 @@ test("招聘节奏：整张卡的最低样本数的是带发布日的岗", () =>
 
 test("招聘节奏的实现里不再读 first_seen_at，也不再有社招 / 实习的「集中在」", () => {
   const src = fs.readFileSync(DERIVE_PATH, "utf8");
-  const start = src.indexOf("export function deriveTiming(");
+  const start = src.indexOf("\nfunction timingOf(");
+  assert.ok(start >= 0, "找不到 timingOf");
   const body = src.slice(start, src.indexOf("\n}\n", start));
   assert.equal(body.includes("first_seen_at"), false, "招聘节奏又在用首次抓取日了");
+  assert.equal(body.includes("byFirstSeen"), false, "招聘节奏又在用首次抓取日了");
   assert.equal(/\$\{[^}]*\}集中在/.test(body), false, "「集中在」只许校招一段写死，不许按桶名拼");
   assert.equal((body.match(/集中在/g) || []).length, 1);
 });
@@ -619,4 +622,251 @@ test("趋势只接受外部快照注入（F4 回归）", () => {
   assert.equal(injected.payload.hiring_signal.momentum, "expanding");
   // 措辞必须限定在「本平台收录」范围内，不能说成企业行为
   assert.match(injected.content, /本平台收录的在招岗位数近月明显增加/);
+});
+
+// ---- 取数从「取前 3000 行」改成「库里按全部在招岗数好再回传」（2026-10-11）----
+// 现象：在招超过 3,000 的公司，抽屉里的数字是按磁盘位置最靠前的 3,000 行算的（字节跳动写「社招 14%」，全部在招岗是 72%）。
+// 逐家对比的数字在 lib/jobs-store/read.ts 的 INSIGHT_FACETS_SQL 上方。
+const READ = loadTs(path.join(__dirname, "..", "lib", "jobs-store", "read.ts"));
+
+// 照 INSIGHT_FACETS_SQL 的写法把在招岗位行聚成结果行，只在测试里替库干这一步。
+// 真 SQL 的形状由 tests/insight-derive-columns.test.js 钉着；真 SQL 在真库上跑出来的结果与逐行算的是否相同，
+// 单测管不到 —— 那是上线前拿新旧两套代码对全部公司逐家比的（数字在引入这条 SQL 的提交说明里）。
+function groupLikeSql(jobs) {
+  const active = jobs.filter((x) => x.status === "active");
+  const rows = [];
+  const group = (facet, valuesOf) => {
+    const groups = new Map();
+    for (const jb of active) {
+      const vals = valuesOf(jb).map((v) => (v === undefined ? null : v));
+      const key = JSON.stringify(vals);
+      if (!groups.has(key)) groups.set(key, { vals, n: 0 });
+      groups.get(key).n++;
+    }
+    for (const { vals, n } of groups.values()) {
+      rows.push({ facet, v1: vals[0] ?? null, v2: vals[1] ?? null, v3: vals[2] ?? null, v4: vals[3] ?? null, v5: vals[4] ?? null, n });
+    }
+  };
+  group("title", (jb) => [jb.title]);
+  group("location", (jb) => [jb.location]);
+  group("experience", (jb) => [jb.experience]);
+  group("education", (jb) => [jb.education]);
+  group("salary_text", (jb) => [jb.salary_text]);
+  group("first_seen_at", (jb) => [jb.first_seen_at]);
+  group("type", (jb) => {
+    const rc = jb.recruitment_category ?? null;
+    const explicit = jb.recruitment_explicit ?? null;
+    // SQL：case when recruitment_category in ('校招', '实习', '社招') then null else job_type / title end
+    const decided = ["校招", "实习", "社招"].includes(rc);
+    return [rc, explicit === null ? null : String(explicit), decided ? null : jb.job_type, decided ? null : jb.title, jb.posted_at];
+  });
+  return rows;
+}
+
+// 一家「什么情况都有」的公司：四种招聘类型 + 列还没算出来的、带 / 不带发布日、窗内 / 窗外、重复标题、空值。
+function mixedCompany() {
+  const jobs = [];
+  const push = (n, over) => {
+    for (let i = 0; i < n; i++) jobs.push(j(over));
+  };
+  const campus = { job_type: "校招", recruitment_category: "校招", recruitment_explicit: true };
+  push(7, { ...campus, title: "管培生", location: "上海", posted_at: "2025-09-01T00:00:00+08:00",
+    first_seen_at: "2026-03-01T00:00:00.000Z", experience: "应届", education: "本科", salary_text: "10-15K" });
+  push(4, { ...campus, title: "算法工程师（校招）", location: "上海市-浦东新区", posted_at: "2025-10-08T00:00:00+08:00",
+    first_seen_at: "2026-04-10T08:00:00.000Z", experience: "应届毕业生", education: "硕士", salary_text: "20-30K" });
+  push(2, { ...campus, title: "硬件工程师", location: null, posted_at: null, first_seen_at: "2026-05-20T00:00:00.000Z" });
+  push(5, { job_type: "实习", recruitment_category: "实习", recruitment_explicit: true, title: "产品运营实习生",
+    location: "北京·海淀", posted_at: "2026-03-15T00:00:00+08:00", first_seen_at: "2026-03-16T00:00:00.000Z",
+    experience: "不限", education: "本科", salary_text: "200-300元/天" });
+  // 有依据的社招：6 个不同月份各放一批（每批岗位数不同）
+  ["2025-07", "2025-11", "2026-01", "2026-02", "2026-04", "2026-06"].forEach((ym, i) => {
+    push(i + 2, { job_type: "社招", recruitment_category: "社招", recruitment_explicit: true,
+      title: i % 2 ? "后端开发工程师" : "销售经理", location: i % 3 ? "深圳" : "北京",
+      posted_at: `${ym}-03T00:00:00+08:00`, first_seen_at: `2026-0${(i % 5) + 1}-11T00:00:00.000Z`,
+      experience: i % 2 ? "3-5年" : "5年以上", education: i % 2 ? "本科及以上" : "大专",
+      salary_text: i % 2 ? "25-40K" : "15000-25000" });
+  });
+  // 兜底社招：不进占比
+  push(6, { job_type: null, recruitment_category: "社招", recruitment_explicit: false, title: "Store Associate",
+    location: "Minneapolis, MN", posted_at: "2026-05-01T00:00:00Z", first_seen_at: "2026-05-02T00:00:00.000Z" });
+  // 招聘类型列还没算出来：这时才看 job_type / 标题
+  push(3, { job_type: null, recruitment_category: null, recruitment_explicit: null, title: "2026届校园招聘-测试工程师",
+    location: "杭州", posted_at: "2025-09-20T00:00:00+08:00", first_seen_at: "2026-06-10T00:00:00.000Z" });
+  push(2, { job_type: "实习", recruitment_category: null, recruitment_explicit: null, title: "运营专员",
+    location: "杭州", posted_at: null, first_seen_at: "2026-06-12T00:00:00.000Z" });
+  // 发布日在 12 个月之前
+  push(2, { job_type: "社招", recruitment_category: "社招", recruitment_explicit: true, title: "老岗",
+    location: "成都", posted_at: "2023-01-01T00:00:00+08:00", first_seen_at: "2026-01-01T00:00:00.000Z" });
+  return jobs;
+}
+
+test("分面取数：库里聚好的计数算出来的，与逐行算出来的逐字段相同", () => {
+  const jobs = mixedCompany();
+  const rows = groupLikeSql(jobs);
+  // 夹具得真的用到「一组多个岗」，否则权重那条路没被测到
+  for (const facet of ["title", "location", "experience", "education", "salary_text", "first_seen_at", "type"]) {
+    assert.ok(rows.some((r) => r.facet === facet && r.n > 1), facet + " 分面里没有一组是多个岗");
+  }
+  const opts = { headcountBand: "1000-5000" };
+  const fromFacets = D.deriveCompanyInsightsFromFacets(READ.facetsFromGroupedRows(rows), NOW, opts);
+  const fromRows = D.deriveCompanyInsights(jobs, NOW, opts);
+  assert.deepEqual(fromFacets, fromRows);
+  // 三张卡、每个指标都真的算出来了（否则上面那条相等是空对空）
+  const p = fromFacets.hiring[0].payload;
+  assert.equal(p.active_count, jobs.length);
+  assert.deepEqual(p.top_cities.map((c) => c.key), ["深圳", "北京", "上海"]);
+  assert.ok(p.top_functions.length > 0);
+  assert.ok(p.experience_dist && p.education_dist && p.bucket_share);
+  assert.equal(typeof p.open_age_days_median, "number");
+  assert.equal(p.mix.unknown, 6, "兜底社招 6 个记未知");
+  assert.equal(p.mix.campus, 16, "列判校招 13 个 + 列为空时靠标题判出的 3 个");
+  assert.equal(p.mix.intern, 7, "列判实习 5 个 + 列为空时靠 job_type 判出的 2 个");
+  assert.match(fromFacets.timing[0].content, /校招集中在 9、10 月；社招全年滚动/);
+  assert.equal(fromFacets.compensation_intensity[0].payload.sample, 38, "偶数个明示薪资：中位数走「中间两个取平均」那一支");
+});
+
+test("分面取数：在招超过 3000 的公司按全部岗位算，不再是「磁盘上靠前的那 3000 行」", () => {
+  // 复刻线上的样子：最先写进库的 3,000 行全是实习，后面 9,000 行是有依据的社招。
+  const jobs = [];
+  for (let i = 0; i < 3000; i++) {
+    jobs.push(j({ title: "运营实习生", job_type: "实习", recruitment_category: "实习", recruitment_explicit: true, location: "北京" }));
+  }
+  for (let i = 0; i < 9000; i++) {
+    jobs.push(j({ title: "后端开发工程师", job_type: "社招", recruitment_category: "社招", recruitment_explicit: true, location: "上海" }));
+  }
+  // 改之前：只拿到前 3,000 行
+  const before = D.deriveCompanyInsights(jobs.slice(0, 3000), NOW, { sampleCapped: true }).hiring[0];
+  assert.match(before.content, /3000\+ 个在招岗位（以下按其中 3000 个统计）/);
+  assert.deepEqual(before.payload.bucket_share, { campus: 0, intern: 100, social: 0 });
+  assert.equal(before.payload.top_cities[0].key, "北京");
+  // 现在：库里按 12,000 行数好回传（聚合后只有十几行结果）
+  const rows = groupLikeSql(jobs);
+  assert.ok(rows.length < 20);
+  const now = D.deriveCompanyInsightsFromFacets(READ.facetsFromGroupedRows(rows), NOW).hiring[0];
+  assert.match(now.content, /本平台当前收录 12000 个在招岗位，/);
+  assert.equal(/\+ 个在招岗位|按其中/.test(now.content), false);
+  assert.equal(now.payload.active_count, 12000);
+  assert.equal(now.payload.sample_n, 12000);
+  assert.deepEqual(now.payload.bucket_share, { campus: 0, intern: 25, social: 75 });
+  assert.deepEqual(now.payload.mix, { campus: 0, intern: 3000, social: 9000, unknown: 0 });
+  assert.deepEqual(now.payload.top_cities, [{ key: "上海", count: 9000 }, { key: "北京", count: 3000 }]);
+});
+
+test("分面取数：结果行回来的先后不影响任何一个数字（库里 group by 不保证顺序）", () => {
+  const rows = groupLikeSql(mixedCompany());
+  const base = D.deriveCompanyInsightsFromFacets(READ.facetsFromGroupedRows(rows), NOW);
+  const reversed = D.deriveCompanyInsightsFromFacets(READ.facetsFromGroupedRows([...rows].reverse()), NOW);
+  assert.deepEqual(reversed, base);
+  // 再换一种：按计数升序、同计数按取值倒序
+  const shuffled = [...rows].sort((a, b) => a.n - b.n || String(b.v1).localeCompare(String(a.v1)));
+  assert.deepEqual(D.deriveCompanyInsightsFromFacets(READ.facetsFromGroupedRows(shuffled), NOW), base);
+});
+
+test("分面取数：少了一个分面 / 多了不认识的分面就报错，不许静默算少", () => {
+  const rows = groupLikeSql(mixedCompany());
+  assert.throws(() => READ.facetsFromGroupedRows(rows.filter((r) => r.facet !== "location")), /location 合计 0/);
+  assert.throws(() => READ.facetsFromGroupedRows(rows.filter((r) => r.facet !== "type")), /对不上/);
+  assert.throws(
+    () => READ.facetsFromGroupedRows([...rows, { facet: "summary", v1: "x", v2: null, v3: null, v4: null, v5: null, n: 1 }]),
+    /不认识的分面/,
+  );
+  // 一个在招岗都没有：空分面，三张卡都不出
+  const empty = READ.facetsFromGroupedRows([]);
+  assert.equal(empty.total, 0);
+  assert.deepEqual(D.deriveCompanyInsightsFromFacets(empty, NOW), {});
+  // 布尔列是按文本回传的：'true' / 'false' / 空 要还原成 true / false / null
+  const typed = READ.facetsFromGroupedRows(groupLikeSql([
+    j({ recruitment_category: "社招", recruitment_explicit: true }),
+    j({ recruitment_category: "社招", recruitment_explicit: false }),
+    j({ recruitment_category: null, recruitment_explicit: null, job_type: "校招" }),
+  ])).byTypeDate.map(([jb]) => jb.recruitment_explicit);
+  assert.deepEqual(typed, [true, false, null]);
+});
+
+// 取数 SQL 的 type 分面在招聘类型列是 校招 / 实习 / 社招 时不带回 job_type / 标题。recruitBucket 要是在这三种情况下
+// 还去读它们，线上拿到的是空值，判出来的桶会和逐行算的不一样、而且不报错。
+test("recruitBucket：招聘类型列是 校招 / 实习 / 社招 时不看 job_type / 标题（取数 SQL 依赖这一条）", () => {
+  for (const category of ["校招", "实习", "社招"]) {
+    for (const explicit of [true, false, null]) {
+      const col = { recruitment_category: category, recruitment_explicit: explicit };
+      const bare = D.recruitBucket({ ...col, job_type: null, title: null });
+      for (const noise of [
+        { job_type: "实习", title: "Software Engineer Intern" },
+        { job_type: "校招", title: "2026届校园招聘" },
+        { job_type: "社招", title: "资深专家（社会招聘）" },
+      ]) {
+        assert.equal(D.recruitBucket({ ...col, ...noise }), bare, `${category}/${explicit} 被 ${noise.title} 带偏了`);
+      }
+    }
+  }
+});
+
+// 列里出现三个值以外的东西（空；或别的取值 —— 现在库里没有，但没有约束拦着）：recruitBucket 退回看 job_type / 标题，
+// SQL 也得照样把两列带回来。条件写的是「不是这三个值」，不是「为空」。
+test("招聘类型列不是 校招 / 实习 / 社招 时：退回看 job_type / 标题，取数也把这两列带回来", () => {
+  assert.equal(D.recruitBucket({ recruitment_category: null, recruitment_explicit: null, job_type: "实习", title: "运营" }), "intern");
+  for (const odd of [null, "", "全职", "校园招聘"]) {
+    const col = { recruitment_category: odd, recruitment_explicit: odd === null ? null : true };
+    const jobs = [
+      j({ ...col, job_type: "校招", title: "管培生" }),
+      j({ ...col, job_type: null, title: "数据分析实习生" }),
+      j({ ...col, job_type: null, title: "数据分析实习生" }),
+    ];
+    const rows = groupLikeSql(jobs);
+    assert.ok(rows.filter((r) => r.facet === "type").every((r) => r.v4 !== null), JSON.stringify(odd) + "：标题没带回来");
+    assert.deepEqual(
+      D.deriveCompanyInsightsFromFacets(READ.facetsFromGroupedRows(rows), NOW).hiring[0].payload.mix,
+      { campus: 1, intern: 2, social: 0, unknown: 0 },
+      JSON.stringify(odd),
+    );
+  }
+});
+
+test("取数 SQL 里的三个招聘类型取值与 recruitBucket 认的是同一批", () => {
+  const sql = READ.INSIGHT_FACETS_SQL;
+  const inLists = Array.from(sql.matchAll(/recruitment_category in \(([^)]+)\)/g), (m) => m[1].replace(/['\s]/g, ""));
+  assert.deepEqual(inLists, ["校招,实习,社招", "校招,实习,社招"]);
+  assert.equal(/recruitment_category is null/.test(sql), false, "条件不能写成「为空」");
+  const src = fs.readFileSync(DERIVE_PATH, "utf8");
+  const start = src.indexOf("export function recruitBucket(");
+  const body = src.slice(start, src.indexOf("\n}\n", start));
+  assert.deepEqual(Array.from(body.matchAll(/recruitment_category === "([^"]+)"/g), (m) => m[1]), ["校招", "实习", "社招"]);
+});
+
+// 库里回来的时间是 PG 的文本写法（空格分隔、时区写成 +08 / +00、可能带微秒），不是 ISO。
+// 分面那条路把时间列 ::text 回传，和原来连接直接返回的字符串是同一种写法；这里钉住派生解析得了它。
+test("分面取数：时间列是 PG 文本写法时，算出来的与 ISO 写法逐字段相同", () => {
+  const PAIRS = [
+    ["2025-09-01 00:00:00+08", "2025-09-01T00:00:00+08:00"], // 北京零点
+    ["2025-08-31 16:00:00+00", "2025-08-31T16:00:00Z"], // 同一时刻的 UTC 写法
+    ["2026-03-01 08:30:15.123456+00", "2026-03-01T08:30:15.123Z"], // 带微秒
+  ];
+  const build = (side) =>
+    PAIRS.flatMap((pair) =>
+      [1, 2].map(() => j({ job_type: "校招", recruitment_category: "校招", recruitment_explicit: true, posted_at: pair[side], first_seen_at: pair[side] })),
+    );
+  for (const [pg, iso] of PAIRS) assert.equal(new Date(pg).getTime(), new Date(iso).getTime(), pg);
+  const fromPg = D.deriveCompanyInsightsFromFacets(READ.facetsFromGroupedRows(groupLikeSql(build(0))), NOW);
+  const fromIso = D.deriveCompanyInsightsFromFacets(READ.facetsFromGroupedRows(groupLikeSql(build(1))), NOW);
+  assert.deepEqual(fromPg, fromIso);
+  // 9 月 1 日北京零点 = 8 月 31 日 UTC 16 点：两种写法都得算成 9 月（4 个），3 月 2 个
+  assert.match(fromPg.timing[0].content, /校招集中在 3、9 月/);
+  assert.ok(fromPg.hiring[0].payload.open_age_days_median > 0);
+});
+
+test("带权中位数 = 把每个值重复写够遍数再取中位数（在架天数 / 薪资带）", () => {
+  // 在架天数：1 天 ×3、10 天 ×2、30 天 ×1 → 排开是 1,1,1,10,10,30，中间两个 1 和 10 取平均 5.5、四舍五入 6
+  const nowMs = NOW.getTime();
+  const at = (days) => new Date(nowMs - days * 86400000).toISOString();
+  const spec = [[1, 3], [10, 2], [30, 1]];
+  const jobs = spec.flatMap(([days, n]) =>
+    Array.from({ length: n }, () => j({ first_seen_at: at(days), salary_text: `${days + 10}-${days + 20}K` })),
+  );
+  const fromRows = D.deriveCompanyInsights(jobs, NOW);
+  const fromFacets = D.deriveCompanyInsightsFromFacets(READ.facetsFromGroupedRows(groupLikeSql(jobs)), NOW);
+  assert.equal(fromRows.hiring[0].payload.open_age_days_median, 6);
+  assert.equal(fromFacets.hiring[0].payload.open_age_days_median, 6);
+  assert.deepEqual(fromFacets.compensation_intensity[0].payload, fromRows.compensation_intensity[0].payload);
+  // 薪资下限排开是 11,11,11,20,20,40 → (11 + 20) / 2 = 15.5 → 16；上限同理 26
+  assert.deepEqual(fromFacets.compensation_intensity[0].payload, { sample_n: 6, min_k: 16, max_k: 26, sample: 6 });
 });

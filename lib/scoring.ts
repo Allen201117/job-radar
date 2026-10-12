@@ -6,8 +6,9 @@ import type {
 } from "./types";
 import {
   keywordMatchTier,
+  cityMatchTokens,
   classifyJobFunction,
-  normalizeChinaCity,
+  expandChinaCityTargets,
   normalizeRolePhrases,
 } from "./china-keyword-expansion";
 import { jobIndustryAllowed } from "./company-industry";
@@ -395,11 +396,28 @@ function locationMatchesTarget(jobLocation: string | null | undefined, target: s
   // 比「深圳」多拿 20 分、整页排在前面；「天津-河北区」也不该算河北。
   const province = provinceOfTarget(rawTarget);
   if (province) return (locationProvinces(rawLocation) as string[]).includes(province);
-  if (rawLocation.toLowerCase().includes(rawTarget.toLowerCase())) return true;
+  const hay = rawLocation.toLowerCase().replace(/\s+/g, " ");
+  if (hay.includes(rawTarget.toLowerCase())) return true;
 
-  const normalizedLocation = (normalizeChinaCity(rawLocation) || "").toLowerCase();
-  const normalizedTarget = (normalizeChinaCity(rawTarget) || "").toLowerCase();
-  return Boolean(normalizedLocation && normalizedTarget && normalizedLocation === normalizedTarget);
+  // 目标与 location 写法不同（「深圳市」/「Shenzhen」对「深圳」）时按规范名的全部别名找，与 /jobs 城市筛选同一份词
+  // （cityMatchTokens）。2026-10-11 前这里比的是 normalizeChinaCity(location) === normalizeChinaCity(target)：
+  // location 列了多个城市（「北京/深圳/上海」）时 normalizeChinaCity 只挑别名表里最靠前的那个，其余城市拿不到这 20 分。
+  // 城市群目标（长三角…）维持改前口径，只认上面的字面命中。
+  const tokens = cityTargetTokens(rawTarget);
+  return tokens ? tokens.some((token) => hay.includes(token)) : false;
+}
+
+// 目标城市 → 它的全部别名词（城市群目标是 null）。纯函数、按原词缓存：scoreJob 对每个岗位的每个目标都要问一遍，
+// 而 cityMatchTokens 每次都扫整张别名表。
+const cityTokenCache = new Map<string, string[] | null>();
+function cityTargetTokens(rawTarget: string): string[] | null {
+  let tokens = cityTokenCache.get(rawTarget);
+  if (tokens === undefined) {
+    tokens = (expandChinaCityTargets(rawTarget) as string[]).length === 1 ? (cityMatchTokens(rawTarget) as string[]) : null;
+    if (cityTokenCache.size > 500) cityTokenCache.clear();
+    cityTokenCache.set(rawTarget, tokens);
+  }
+  return tokens;
 }
 
 function uniqueStrings(values: string[]): string[] {
