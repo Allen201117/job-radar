@@ -34,7 +34,7 @@ class IsHttpxSafeTest(unittest.TestCase):
                   "tencent", "baidu", "jd", "apple", "amazon", "microsoft",
                   "netease", "oppo",  # netease/oppo: PlaywrightAdapter 子类但自带 httpx fetch（同 hotjob/wt）
                   "bytedance", "bytedance_campus", "bytedance_global",  # 字节 posts API 纯 httpx 全量分页，浏览器仅留给撤岗审计
-                  # feishu 家族（2026-06-28）：httpx-first（posts API 冷可达），浏览器仅做回退 → 进并发档
+                  # feishu 家族（2026-06-28）：posts API 冷 httpx 可达（浏览器回退 2026-10-14 已拆）→ 进并发档
                   "feishu", "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu"):
             self.assertTrue(run._is_httpx_safe(a), a)
 

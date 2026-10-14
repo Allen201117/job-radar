@@ -47,8 +47,8 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import jobs_db  # noqa: E402
-from adapters.china_ats import (moka_portal_key, moka_shared_portal,  # noqa: E402
-                                moka_shared_portal_verdict)
+from adapters.china_ats import (moka_dept_shared_portal, moka_portal_key,  # noqa: E402
+                                moka_shared_portal, moka_shared_portal_verdict)
 from rename_job_company import RENAME_LOG_DDL, like_prefix  # noqa: E402
 
 _SELECT_SQL = "select id, jd_url, company, status, title from jobs where jd_url like %s"
@@ -270,6 +270,9 @@ def parse_args(argv=None):
     args.url_prefix = args.url_prefix.rstrip("/")
     if not _PORTAL_PREFIX_RE.fullmatch(args.url_prefix):
         ap.error("--url-prefix 必须是 https://<主机>/<板块>/<租户>/<门户号>，不带 # ? 和多余的路径")
+    if moka_dept_shared_portal(args.url_prefix) is not None:
+        ap.error(f"{args.url_prefix} 是按卡上部门归属的门户（_MOKA_DEPT_SHARED_PORTALS）：库里没存部门、离线判不了，"
+                 "存量由下一轮重抓按链接改过来，不走这个脚本")
     if moka_shared_portal(args.url_prefix) is None:
         ap.error(f"{args.url_prefix} 没登记在 _MOKA_SHARED_PORTALS，不是共享门户")
     return args
