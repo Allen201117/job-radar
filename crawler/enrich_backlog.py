@@ -15,17 +15,19 @@ import os
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from itertools import zip_longest
 
 from urllib.parse import urlparse
 
 import db
 import enrich
+import geo
 import jobs_db
 import must_apply
 import normalizer
 import ops_runs
+from adapters.base import RawJob
 
 # P1 = httpx 类（无浏览器、可高并发）。browser 类（beisen/moka/feishu）P2 单独 shard。
 HTTPX_ADAPTERS = tuple(a for a in enrich.ENRICH_REGISTRY)
@@ -75,13 +77,13 @@ def fetch_queue(sb, adapters, limit=0, jobs_conn=None):
     返回 (rows, smap)。sources 永远走 Supabase；jobs 在 jobs_conn(香港库) 给定时直连查，否则 Supabase。"""
     # 分页拉全量：本过滤当前 403 行未触顶 PostgREST 的 1000 行硬顶，但 sources 每日扩源持续涨 → 走统一 helper。
     srcs = db.fetch_all_rows(
-        lambda: sb.table("sources").select("id,company,source_url,adapter_name")
+        lambda: sb.table("sources").select("id,company,source_url,adapter_name,regions")
         .in_("adapter_name", list(adapters)))
     smap = {s["id"]: s for s in srcs}
     if not smap:
         return [], smap
     if jobs_conn is not None:
-        sql = ("select id, source_id, title, jd_url, job_type, enrich_fail_count from jobs "
+        sql = ("select id, source_id, title, jd_url, job_type, enrich_fail_count, last_seen_at from jobs "
                "where source_id = any(%s::uuid[]) and summary is null and status='active' and enrich_fail_count < %s "
                "order by source_id, first_seen_at desc" + (f" limit {int(limit)}" if limit else ""))
         return jobs_db.fetch_all(jobs_conn, sql, (list(smap.keys()), MAX_FAIL)), smap
@@ -131,19 +133,18 @@ def fetch_liveness_queue(sb, adapters, limit=0, jobs_conn=None, cooldown_hours=N
     （enrich_checked_at 轮转封顶单轮成本），死岗一旦 expired 即离开 active 集，集合自清。"""
     # 分页拉全量：本过滤当前 403 行未触顶 PostgREST 的 1000 行硬顶，但 sources 每日扩源持续涨 → 走统一 helper。
     srcs = db.fetch_all_rows(
-        lambda: sb.table("sources").select("id,company,source_url,adapter_name")
+        lambda: sb.table("sources").select("id,company,source_url,adapter_name,regions")
         .in_("adapter_name", list(adapters)))
     smap = {s["id"]: s for s in srcs}
     if not smap:
         return [], smap
     hours = LIVENESS_COOLDOWN_HOURS if cooldown_hours is None else cooldown_hours
     if jobs_conn is not None:
-        sql = ("select id, source_id, title, jd_url, job_type, summary, enrich_fail_count from jobs "
+        sql = ("select id, source_id, title, jd_url, job_type, summary, enrich_fail_count, last_seen_at from jobs "
                "where source_id = any(%s::uuid[]) and status='active' "
                "and (enrich_checked_at is null or enrich_checked_at < now() - make_interval(hours => %s)) "
                "order by source_id, enrich_checked_at asc nulls first" + (f" limit {int(limit)}" if limit else ""))
         return jobs_db.fetch_all(jobs_conn, sql, (list(smap.keys()), hours)), smap
-    from datetime import timedelta
     cutoff_iso = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     rows = []
     page = 0
@@ -168,8 +169,131 @@ def fetch_liveness_queue(sb, adapters, limit=0, jobs_conn=None, cooldown_hours=N
     return rows, smap
 
 
+# 帖子挪了（enrich.PostingMovedError）由探活端处置的门槛：旧链接这么久没被列表看到。
+# 与「能点开」判据同一个窗口（lib/jobs-store/popular.ts 的 LAST_SEEN_WINDOW，给日更 CI 抖动留余量）。
+MOVED_STALE_HOURS = 30
+
+
+def _as_utc(value):
+    """last_seen_at（香港库给带时区的 datetime）；不是 datetime 返回 None。"""
+    if not isinstance(value, datetime):
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _code_in_regions(code, regions):
+    return code in regions or ("CN" in regions and code in geo._GREATER_CHINA)  # 同 geo.location_in_scope
+
+
+def _moved_scope(moved, src):
+    """挪过去的地方在不在这个源的抓取范围里：'in' | 'out' | None（判不清，不动）。
+
+    宁可漏判不可错杀：只有地点说得清国家、且对方自报的国家也不在范围里，才算 'out'。
+      · 地点文本在范围内 → 'in'；
+      · 地点文本说得清国家、不在范围内 → 'out'；但对方自报的国家（含附加地点，沾大中华即判大中华，
+        见 adapters.workday._declared_country）在范围内 → 两边打架，None；
+      · 地点文本说不清（光写城市名、门牌地址）→ 看自报国家；自报也没有 → None。
+        geo 只认得少数国家（「Paris, France」「Kuala Lumpur, Malaysia」它都说不清），境外岗多半走自报国家这一支。
+      · 对方没给主地点（空）→ None：换链接会把库里的地点写空。
+    腾讯那条源不按地区筛（列表给什么收什么）：挪了且两个链接都不在它的列表里 = 已不在腾讯的公开列表上 → 'out'。"""
+    src = src or {}
+    if src.get("adapter_name") != "workday":
+        return "out"
+    regions = normalizer.source_regions(src.get("regions"))
+    loc = moved.location
+    if not loc:
+        return None
+    if geo.is_rejected_location(loc):
+        return "out"
+    if normalizer.location_in_source_regions(loc, regions):
+        return "in"
+    declared = moved.country_code
+    declared_in = _code_in_regions(declared, regions)
+    if geo.derive_country_code(loc) or geo.is_remote_location(loc):
+        return None if declared_in else "out"
+    if declared:
+        return "in" if declared_in else "out"
+    return None
+
+
+def _settle_moved(row, src, moved, jobs_conn, dry_run=False):
+    """帖子还在招、链接换了：返回 'relinked' | 'removed'，或 None = 不归探活端管 / 判不清 / 没做成（照常当在招处理）。
+
+    只在「旧链接超过 30 小时没被列表看到」且「库里没有新链接的在招行」时处置——两条都成立 = 这段时间列表
+    两个链接都没给，这个帖子已不在我们现在的抓取范围里（被挪去本源不抓的地区，或列表分组没覆盖到它）。
+    新链接已有在招行（= 列表给了新链接）是写库端认旧链接的活（jobs_db.plan_moved_postings），这里不抢：
+    它会把最早的首见时间记到留下的那一行上，这里先下架了就记不上了。
+
+      · 新主地点在本源地区内 → 原地换成新链接和新地点，继续在招（'relinked'）。id / 首见 / 用户操作都在。
+      · 不在 → 下架成 removed（'removed'）：岗还在，只是我们现在不收它。顺手把链接换成新的（库里没有任何行
+        占着新链接时）——日后列表又给出它，写库按 canonical 认到的就是这一行，原 id 复活，不算新岗。
+      · 判不清在不在（见 _moved_scope）→ 不动。
+
+    2026-10-14 全量（启用 workday 源 + 腾讯，旧链接 30 小时没被看到的在招行 3,081 行逐行打详情）：两条都成立的
+    45 行（全在 Target 以外）→ 换链接 14 / 下架 27 / 没给主地点不动 4；新链接已有在招行的 568 行留给写库端。
+    同时跑了一遍当下列表当尺子：这 45 行列表两个链接都不给（其中 5 行所在的源那轮没抓全）。"""
+    src = src or {}
+    last_seen = _as_utc(row.get("last_seen_at"))
+    if jobs_conn is None or last_seen is None:
+        return None
+    if datetime.now(timezone.utc) - last_seen < timedelta(hours=MOVED_STALE_HOURS):
+        return None
+    scope = _moved_scope(moved, src)
+    if scope is None:
+        return None
+    new_url = moved.new_url
+    try:
+        statuses = {r["status"] for r in jobs_db.fetch_all(
+            jobs_conn, "select status from jobs where canonical_jd_url = %s",
+            (normalizer.canonicalize_jd_url(new_url),))}
+    except Exception as e:  # noqa: BLE001 —— 查不到就退回老路（照常当在招），下一轮再说
+        print(f"::warning::[posting-moved] 查新链接失败，本轮不处置：{type(e).__name__}: {str(e)[:120]}")
+        return None
+    if "active" in statuses:
+        return None
+    now = _now()
+    if scope == "in":
+        if statuses:
+            # 新链接上已有一行（下架 / 撤岗过的）：换过去会撞「公司+标题+地点+链接」那条不分状态的唯一约束，
+            # 每轮报错、永远盖不上戳。留着不动，等列表。
+            return None
+        company = src.get("company") or ""
+        job = normalizer.normalize(
+            RawJob(company=company, title=row.get("title") or "", location=moved.location,
+                   jd_url=new_url, apply_url=new_url, country_code=moved.country_code),
+            source_id=row.get("source_id"), company=company, regions=src.get("regions"))
+        patch = {"jd_url": new_url, "apply_url": new_url, "location": job["location"],
+                 "country_code": job["country_code"], "job_scope": job["job_scope"], "enrich_checked_at": now}
+        summary = normalizer.clean_summary(moved.body) if moved.body else None
+        if summary and not row.get("summary"):
+            patch["summary"] = summary
+        result = "relinked"
+    else:
+        patch = {"status": "removed", "enrich_checked_at": now}
+        if not statuses:
+            patch.update({"jd_url": new_url, "apply_url": new_url})
+        result = "removed"
+    if dry_run:
+        print(f"[dry-run {result}] {src.get('adapter_name')} {row['id']} {row['jd_url']} -> {new_url}")
+        return result
+    cols = list(patch.keys())
+    try:
+        # 条件里再卡一遍「还在招、还是旧链接、库里此刻仍 30 小时没被看到」：队列是本轮开头取的，
+        # 跑到这一行时列表可能刚又看到了它。
+        n = jobs_db.execute(
+            jobs_conn,
+            f"update jobs set {', '.join(f'{c} = %s' for c in cols)} where id = %s and status = 'active' "
+            "and jd_url = %s and last_seen_at < now() - make_interval(hours => %s)",
+            [patch[c] for c in cols] + [row["id"], row["jd_url"], MOVED_STALE_HOURS])
+    except Exception as e:  # noqa: BLE001
+        # 典型是另一轮抓取刚把新链接插成在招行（撞唯一索引）：这一行本轮按老路盖戳，下一轮它就归写库端管了。
+        print(f"::warning::[posting-moved] {row['id']} 写库失败，本轮按在招处理：{type(e).__name__}: {str(e)[:120]}")
+        return None
+    return result if n else None
+
+
 def enrich_row(sb, row, src, dry_run=False, jobs_conn=None):
-    """富化单行并回写。返回 'filled' | 'alive' | 'miss' | 'expired' | 'err'。永不抛。
+    """富化单行并回写。返回 'filled' | 'alive' | 'miss' | 'expired' | 'relinked' | 'removed' | 'err'。永不抛。
     jobs_conn 给定时写库走香港 PG（jobs_db），否则走 Supabase（sb）。
     - 'expired'：fetcher 报源站已撤岗（JobClosedError，如 hotjob state=1017）→ 置 status='expired'，
       不再当死信富化（这类「假 active」岗永远补不到 summary 且污染岗位库）。
@@ -185,6 +309,16 @@ def enrich_row(sb, row, src, dry_run=False, jobs_conn=None):
     except enrich.JobClosedError:
         closed = True
         body = ""
+    except enrich.PostingMovedError as moved:
+        # 还在招、链接换了：够条件就由 _settle_moved 换链接 / 下架；不够条件照常当在招（正文照补）。
+        try:
+            settled = _settle_moved(row, src, moved, jobs_conn, dry_run)
+        except Exception as e:  # noqa: BLE001 —— 本函数永不抛
+            print(f"::warning::[posting-moved] {row.get('id')} 处置出错，本轮按在招处理：{type(e).__name__}: {str(e)[:120]}")
+            settled = None
+        if settled:
+            return settled
+        body = moved.body
     except Exception:
         body = ""
         fetch_err = True
@@ -258,7 +392,9 @@ def should_trip_adapter(checked, miss, min_sample=ADAPTIVE_MIN_SAMPLE, miss_rati
 # OPPO 的状态位含义是按全集推的——对方一改接口就可能整源判死，所以都登记。接入时各有 18%~61% 的
 # 已撤存量（携程最高），0.5 会让存量永远清不掉 → 清存量那一次由人用 LIVENESS_EXPIRE_GUARD_OVERRIDE
 # 显式放宽（见 _expire_guard_ratio），定时任务不带这个变量、一直是 0.5。
-EXPIRE_RATIO_GUARD = {"beisen": 0.5, "workday": 0.8,
+# tencent（2026-10-14 随「Workday 链接改问 Workday 详情」加）：这条源 2,993 行在招里 630 行是 Workday 链接，
+# 接上那天有 310 行已撤（S22）的存量，按整源算一次性约 10%；Workday 那边的判死语义一变，整源能一轮判死，所以登记。
+EXPIRE_RATIO_GUARD = {"beisen": 0.5, "workday": 0.8, "tencent": 0.5,
                       "netease": 0.5, "ctrip": 0.5, "baidu": 0.5, "bilibili": 0.5, "xiaohongshu": 0.5, "oppo": 0.5}
 EXPIRE_GUARD_MIN_SAMPLE = 200
 EXPIRE_GUARD_OVERRIDE_ENV = "LIVENESS_EXPIRE_GUARD_OVERRIDE"
@@ -332,7 +468,7 @@ def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, pe
     rows, smap = (fetch_liveness_queue if sweep else fetch_queue)(sb, adapters, limit, jobs_conn=fetch_conn)
     print(f"{'死活巡检' if sweep else '富化队列'}（httpx 类，adapter={adapter or '全部'}）：{len(rows)}")
     if not rows:
-        return {"filled": 0, "alive": 0, "miss": 0, "expired": 0, "err": 0, "skipped": 0}
+        return {"filled": 0, "alive": 0, "miss": 0, "expired": 0, "relinked": 0, "removed": 0, "err": 0, "skipped": 0}
     # 按 source 轮转交错，避免并发线程集中打同一租户
     by_src = {}
     for r in rows:
@@ -350,7 +486,7 @@ def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, pe
         print(f"::warning::[撤岗熔断] adapter={adp} 本轮阈值被 {EXPIRE_GUARD_OVERRIDE_ENV} 改写为 {shown}"
               f"（登记值 {EXPIRE_RATIO_GUARD[adp]:.0%}）")
 
-    stat = {"filled": 0, "alive": 0, "miss": 0, "expired": 0, "err": 0, "skipped": 0}
+    stat = {"filled": 0, "alive": 0, "miss": 0, "expired": 0, "relinked": 0, "removed": 0, "err": 0, "skipped": 0}
     lock = threading.Lock()
     per_adapter = {}          # adapter -> {"checked", "miss"}（源级自适应统计）
     tripped = set()           # 已熔断（本轮跳过剩余）的 adapter
@@ -378,7 +514,7 @@ def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, pe
             res = "err"  # 兜底：任何意外都不许炸穿 ex.map（否则掀翻整批，本 drain 实锤过）
         with lock:
             stat[res] += 1
-            a = per_adapter.setdefault(adp, {"checked": 0, "miss": 0, "err": 0, "expired": 0})
+            a = per_adapter.setdefault(adp, {"checked": 0, "miss": 0, "err": 0, "expired": 0, "removed": 0, "relinked": 0})
             a["checked"] += 1
             if res == "miss":
                 a["miss"] += 1
@@ -386,6 +522,8 @@ def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, pe
                 # 网络异常改走 err 后（不再混进 miss），限流特征（429/超时抛异常）也计入熔断分子，
                 # 否则被限流的 adapter 永远凑不够 miss 率、熔断失效。
                 a["err"] += 1
+            if res in ("removed", "relinked"):
+                a[res] += 1
             if res == "expired":  # 巡检确认撤岗 → 收集 CLOSED（批量末尾一次性落库，避免每岗一次往返）
                 a["expired"] += 1
                 if dry_run:
@@ -398,16 +536,20 @@ def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, pe
                 tripped.add(adp)
                 print(f"⚠️ [自适应] adapter={adp} 本轮 miss+err {a['miss'] + a['err']}/{a['checked']} 过高（疑似被限流），"
                       f"跳过本轮剩余 {adp} 岗（不盖时间戳，下轮重试）")
-            if adp not in tripped and should_trip_expire_guard(adp, a["checked"], a["expired"]):
+            # 帖子挪了的下架 / 换链接也算进分子：哪天对方 externalUrl 的写法变了，每个岗都会被认成「挪了」。
+            if adp not in tripped and should_trip_expire_guard(
+                    adp, a["checked"], a["expired"] + a["removed"] + a["relinked"]):
                 tripped.add(adp)
                 guard_ratio = _expire_guard_ratio(adp)
-                print(f"::warning::[撤岗熔断] adapter={adp} 本轮判死 {a['expired']}/{a['checked']} "
+                print(f"::warning::[撤岗熔断] adapter={adp} 本轮判死 {a['expired']} + 挪了下架 {a['removed']} "
+                      f"+ 挪了换链接 {a['relinked']} / {a['checked']} "
                       f"≥ {guard_ratio:.0%}，远高于该源常态 → 疑似判死信号语义变了，"
                       f"跳过本轮剩余 {adp} 岗（已判的留着，下轮重试）。先人工核对再放开。")
-            done = stat["filled"] + stat["alive"] + stat["miss"] + stat["expired"] + stat["err"] + stat["skipped"]
+            done = sum(stat.values())
             if done % 200 == 0:
                 print(f"  …{done}/{len(rows)}  filled={stat['filled']} alive={stat['alive']} "
-                      f"miss={stat['miss']} expired={stat['expired']} err={stat['err']} skipped={stat['skipped']}")
+                      f"miss={stat['miss']} expired={stat['expired']} relinked={stat['relinked']} "
+                      f"removed={stat['removed']} err={stat['err']} skipped={stat['skipped']}")
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         list(ex.map(work, rows))
@@ -419,7 +561,8 @@ def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, pe
         jobs_db.record_job_events(rec_conn, close_events)
 
     print(f"完成：填充 {stat['filled']}，仍在招 {stat['alive']}，无果/死信+1 {stat['miss']}，"
-          f"源站撤岗→expired {stat['expired']}，网络/写库错(留队列重试) {stat['err']}，"
+          f"源站撤岗→expired {stat['expired']}，帖子挪了→换链接 {stat['relinked']} / 下架 removed {stat['removed']}，"
+          f"网络/写库错(留队列重试) {stat['err']}，"
           f"限流跳过(下轮重试) {stat['skipped']}"
           f"{'（dry-run 未写库）' if dry_run else ''}")
     if tripped:
@@ -473,7 +616,7 @@ def main():
         return
     if not args.dry_run:
         # checked = 真正探了的（不含限流跳过的 skipped）
-        checked = stat["filled"] + stat["alive"] + stat["miss"] + stat["expired"] + stat["err"]
+        checked = sum(v for k, v in stat.items() if k != "skipped")
         ops_runs.record_ops_run(
             sb,
             module,
@@ -482,6 +625,8 @@ def main():
                 "enriched": stat["filled"],
                 "alive": stat["alive"],
                 "expired": stat["expired"],
+                "relinked": stat["relinked"],
+                "removed": stat["removed"],
                 "miss": stat["miss"],
                 "failed": stat["err"],
                 "skipped": stat.get("skipped", 0),

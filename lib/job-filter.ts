@@ -16,6 +16,7 @@ import { classifyCompanyTier } from "@/lib/company-tiers";
 import { educationMatch } from "@/lib/education-rank";
 import { chinaProvincePlaceNames, locationProvinces } from "@/lib/cn-location-provinces";
 import { jobMatchesRegion } from "@/lib/job-scope";
+import { NEW_BADGE_DAYS, isNewWithinDays } from "@/lib/job-novelty";
 import { provinceOfTarget } from "@/lib/opportunities/location-targets";
 import type { ScoredJob } from "@/lib/types";
 
@@ -375,11 +376,8 @@ export function jobFilterMatch(
     if (verdict === "reject") return null;
     if (verdict === "degrade") degradedFields.push("education");
   }
-  if (filters.showNewOnly) {
-    if (!job.first_seen_at) return null;
-    const days = (Date.now() - new Date(job.first_seen_at).getTime()) / 86400000;
-    if (days > 3) return null;
-  }
+  // 「仅新岗位」与卡片「新发现」徽标同一个判据（lib/job-novelty）：首见 3 天内，且不是进来时就已经发布很久的老岗。
+  if (filters.showNewOnly && !isNewWithinDays(job, NEW_BADGE_DAYS)) return null;
   if (!filters.showIgnored && job.hidden_reason === "ignored") return null;
   if (!filters.showApplied && job.hidden_reason === "applied_by_default") return null;
   if (filters.capitalOrigin) {
