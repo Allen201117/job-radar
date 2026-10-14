@@ -448,19 +448,26 @@ _MOKA_INIT_DATA_RES = (
 )
 
 
-def _moka_portal_total(document_html: str) -> Optional[int]:
-    """Moka 门户页自报的岗位总数（内嵌数据的 jobStats.total）。读不到 / 不是非负整数一律返回 None。"""
+def _moka_init_data(document_html: str) -> Optional[dict]:
+    """门户主文档里 <input id="init-data"> 的内嵌数据；没有 / 解析不了返回 None。"""
     for pattern in _MOKA_INIT_DATA_RES:
         m = pattern.search(document_html or "")
         if not m:
             continue
         try:
-            total = (json.loads(_html.unescape(m.group(1))).get("jobStats") or {}).get("total")
-        except (ValueError, TypeError, AttributeError):
+            data = json.loads(_html.unescape(m.group(1)))
+        except (ValueError, TypeError):
             return None
-        if isinstance(total, int) and not isinstance(total, bool) and total >= 0:
-            return total
-        return None
+        return data if isinstance(data, dict) else None
+    return None
+
+
+def _moka_portal_total(document_html: str) -> Optional[int]:
+    """Moka 门户页自报的岗位总数（内嵌数据的 jobStats.total）。读不到 / 不是非负整数一律返回 None。"""
+    stats = (_moka_init_data(document_html) or {}).get("jobStats")
+    total = stats.get("total") if isinstance(stats, dict) else None
+    if isinstance(total, int) and not isinstance(total, bool) and total >= 0:
+        return total
     return None
 
 
@@ -550,6 +557,113 @@ def moka_shared_portal_verdict(portal_url: str, title: str):
     return None, segment in portal["home_segments"]
 
 
+# ── 同一种情况的另一种判法：按岗位卡上写的部门（2026-10-14，万科 / 万物云）──────────────────────
+# 租户 vanke 是万科集团的，默认社招门户 36266（万科官网「社会招聘」链的就是它，页面标题「万科集团招聘官网」）
+# 自报 1,313 个岗（列表 1,308），534 个的部门挂在「物业事业部」（部门编号 671608）下——那是万物云（必投清单里是另一家公司）：
+# 万物云自己的门户（官网「社会招聘」37205、「校园招聘」150278、2027 届校招 147055）的岗都挂在这个节点下，
+# 37205 页脚自报「万物云空间科技服务股份有限公司」。旧代码每条都贴 sources.company=万科企业 →
+# 库里「万科企业」在招 443 行里 299 行是万物云的，缺口台账记万物云社招 0。
+#
+# 判据 = 岗位卡上写的部门。这个门户是老版（websiteVersion=1），卡片第二行是两个 status-item：部门 + 职能
+# （innerText 会把两段粘成一行「万物云本部-50907939安全」，所以单独读元素，不从文字里切）。
+#   · 卡上的部门不是岗位的直属部门，是门户内嵌数据 jobsGroupedByDepartment 的分组名（部门树第三层，
+#     如「万科集团 → 物业事业部 → 万科物业-50942330」）。2026-10-14 全集对拍：88 页 1,308 张卡，卡上第一个 status-item
+#     全部对得上 36 个分组之一、36 个分组名互不相同、每组张数等于门户自报的 jobCount，挂在 671608 下的 13 组合计 534；
+#     另用页面自己的部门筛选（老版写法 #/jobs?department=[…] 只认直属部门，要把 departmentsStructure 里 671608 的
+#     ids 全传）取回物业事业部的全部岗当真值，逐个比：两个方向的错都是 0。真值在 fixtures/moka_vanke_social_departments.json。
+#   · 归属看「分组沿部门树往上走能不能走到登记的节点」，部门树每轮从同一份主文档里现读：物业事业部下新开的分组
+#     自动归万物云，不靠一份分组名单。
+#   · 标题不是判据：「华中公司（武汉）-建筑设计岗」这种标题以另一个分组名开头。
+# 守门（同按标题那一种）：卡上的部门认不出（第一个 status-item 不是分组名 / 后面的 status-item 也是分组名 /
+# 同名分组归属不一致 / 分组挂不到部门树上）→ 留在本家、日志点名；过半认不出 → 记失败、这一轮不写。
+# 登记的部门节点不在这一轮读到的部门树里、或部门树没读到 → 记失败（照常入库会把万物云的岗整批贴回万科）；
+# 节点在树里、却没有一个分组挂在它下面 → 照常入库但打告警（树被改平了也会是这个样子）。
+# ⚠️ departmentsStructure 只列有岗的那几条路径（这个租户的部门远不止 40 个）：哪天物业事业部一个岗都没有了，
+#    节点会从树里消失、这条源记失败——那时去页面上看一眼，是真没岗还是改了树。
+# ⚠️ 只在老版门户的卡片上验过（读的是 class 带 status-item- 的元素）；新版卡片上写的是直属部门，要另行对拍再登记。
+# ⚠️ 存量：库里没存部门，离线判不了，reattribute_moka_shared_portal 不处理这一种；登记后下一轮重抓按链接把
+#    列表里还挂着的行改过来（company 在 jobs_db._UPDATE_COLS 里）。
+# 「租户/门户号」→ {"owners": {部门节点编号: 归属公司}, "home_company": 门户本家}。本家的行照旧由 sources.company 兜底，
+# home_company 只给人核对。
+_MOKA_DEPT_SHARED_PORTALS = {
+    "vanke/36266": {"owners": {671608: "万物云"}, "home_company": "万科企业"},
+}
+
+
+def moka_dept_shared_portal(url: str) -> Optional[dict]:
+    """门户页地址或岗位链接所在的门户若登记为「按卡上部门逐行归属」，返回它的登记项；否则 None。"""
+    return _MOKA_DEPT_SHARED_PORTALS.get(moka_portal_key(url))
+
+
+def _is_dept_id(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def moka_department_tree(document_html: str) -> Optional[dict]:
+    """门户自报的部门分组与部门树 → {"groups": [[分组编号, 分组名], …], "parents": [[部门编号, 上级编号 | None], …]}。
+
+    两样缺一样、或形状不对，返回 None（调用方按「没读到部门树」处理，不猜）。"""
+    data = _moka_init_data(document_html)
+    if not data:
+        return None
+    groups, nodes = data.get("jobsGroupedByDepartment"), data.get("departmentsStructure")
+    if not isinstance(groups, list) or not isinstance(nodes, list):
+        return None
+    out_groups, out_parents = [], []
+    for g in groups:
+        if not isinstance(g, dict) or not _is_dept_id(g.get("id")) or not isinstance(g.get("label"), str):
+            return None
+        out_groups.append([g["id"], g["label"].strip()])
+    for n in nodes:
+        parent = n.get("parentId") if isinstance(n, dict) else None
+        if not isinstance(n, dict) or not _is_dept_id(n.get("id")) or not (parent is None or _is_dept_id(parent)):
+            return None
+        out_parents.append([n["id"], parent])
+    return {"groups": out_groups, "parents": out_parents}
+
+
+def moka_department_owners(portal: dict, tree: dict) -> dict:
+    """分组名 → 归属（登记的别家公司名；"" = 门户本家）。认不出的分组名不在结果里：
+    沿部门树走不到根（分组或某一级上级不在树里、成环），或两个同名分组归属不一致。
+
+    登记的部门节点不在树里 → ValueError（部门树改了，这时按「都归本家」入库就是把别家的岗整批贴回本家）。"""
+    parents = {node: parent for node, parent in tree.get("parents") or []}
+    owners = portal["owners"]
+    missing = [node for node in owners if node not in parents]
+    if missing:
+        raise ValueError(f"登记的部门节点 {missing} 不在门户这一轮的部门树里")
+
+    def owner_of(group_id):
+        node, seen = group_id, set()
+        while node is not None:
+            if node in owners:
+                return owners[node]
+            if node in seen or node not in parents:
+                return None
+            seen.add(node)
+            node = parents[node]
+        return ""
+
+    by_label, clash = {}, set()
+    for group_id, label in tree.get("groups") or []:
+        owner = owner_of(group_id)
+        if owner is None or by_label.get(label, owner) != owner:
+            clash.add(label)
+        by_label.setdefault(label, owner)
+    for label in clash:
+        by_label.pop(label, None)
+    return by_label
+
+
+def moka_card_department_verdict(by_label: dict, tags) -> tuple:
+    """一张卡归谁 → (归属公司 | None, 判得了没有)，口径同 moka_shared_portal_verdict。
+    卡上第一个 status-item 是认得的分组名、后面的 status-item（职能）都不是别的分组名才判，否则判不了。"""
+    tags = [t.strip() for t in tags or () if isinstance(t, str)]
+    if not tags or tags[0] not in by_label or any(t in by_label and t != tags[0] for t in tags[1:]):
+        return None, False
+    return by_label[tags[0]] or None, True
+
+
 class MokaAdapter(PlaywrightAdapter):
     """Moka 招聘（{tenant}.mokahr.com / app.mokahr.com）—— 大量消费/互联网/游戏私企在用。
 
@@ -627,6 +741,14 @@ class MokaAdapter(PlaywrightAdapter):
     _legacy_pager_sel = ".theme-pagination"
     _cards_js = ("els => els.map(e => ({href: e.getAttribute('href'),"
                  " text: (e.innerText || '').trim()}))")
+    # 登记为「按卡上部门逐行归属」的门户（_MOKA_DEPT_SHARED_PORTALS）另读老版卡片上的 status-item（部门 / 职能各一个元素）。
+    # 只有这种门户用它，别的源的抓取结果一个字节都不变。
+    _CARDS_WITH_TAGS_JS = ("els => els.map(e => ({href: e.getAttribute('href'),"
+                           " text: (e.innerText || '').trim(),"
+                           " tags: [...e.querySelectorAll(\"[class*='status-item-']\")]"
+                           ".map(t => (t.innerText || '').trim())}))")
+    _dept_portal = None   # 这条源的 _MOKA_DEPT_SHARED_PORTALS 登记项（没登记为 None），fetch 开头定
+    _dept_tree = None     # 这条源主文档里读到的部门树（moka_department_tree），只有 _dept_portal 时才读
     _PAGE_ROWS = 30          # 新版门户「30 行/页」，分页器上写着
     _PAGE_ROWS_LEGACY = 15   # 老版门户每页 15 行（祖龙 6 页 = 15×5 + 11）
     _rows_per_page = _PAGE_ROWS   # 当前这条源按哪套翻页器算（_collect_all_pages 开头判定）
@@ -980,18 +1102,25 @@ class MokaAdapter(PlaywrightAdapter):
 
         只认本源自己的地址：校招换期检查会在同一个浏览器里打开别的门户，那边的总数不是这条源的分母。
         只换 hash 的跳转是同文档导航，goto 返回 None，沿用第一次读到的值。
-        带筛选的源不记：门户自报的是整站总数（麦当劳 58,187），不是筛选后那个列表的；分母退回翻页器的总页数。"""
-        if self._list_filter:
+        带筛选的源不记：门户自报的是整站总数（麦当劳 58,187），不是筛选后那个列表的；分母退回翻页器的总页数。
+        登记为「按卡上部门逐行归属」的门户顺带记下同一份文档里的部门树（读不到由 parse 记失败）。"""
+        if self._list_filter and not self._dept_portal:
             return
         if response is None or not self._own_base or url.split("#")[0] != self._own_base:
             return
         try:
-            total = _moka_portal_total(response.text())
+            document = response.text()
         except Exception as e:  # noqa: BLE001 —— 分母读不到只是退回旧口径，不能影响抓取
             _log.warning("moka: 读门户自报总数失败 %s url=%s", exc_brief(e), url)
             return
-        if total is not None:
-            self._portal_total = total
+        if not self._list_filter:
+            total = _moka_portal_total(document)
+            if total is not None:
+                self._portal_total = total
+        if self._dept_portal:
+            tree = moka_department_tree(document)
+            if tree is not None:
+                self._dept_tree = tree
 
     def _open_route(self, page, url: str):
         """打开一个列表路由并等它渲染完，返回 (状态, 岗位卡列表)，状态 ∈ {"cards", "empty", "closed"}。
@@ -1008,6 +1137,12 @@ class MokaAdapter(PlaywrightAdapter):
         page.wait_for_timeout(self.wait_ms)
         cards = page.eval_on_selector_all(self._card_sel, self._cards_js)
         return ("cards" if cards else "empty"), cards
+
+    def _plan_dept_portal(self, base: str) -> None:
+        """这条源是不是「按卡上部门逐行归属」的门户：是的话读卡时带上 status-item、读主文档时带上部门树。"""
+        self._dept_portal = moka_dept_shared_portal(base)
+        self._dept_tree = None
+        self._cards_js = self._CARDS_WITH_TAGS_JS if self._dept_portal else MokaAdapter._cards_js
 
     def _plan_routes(self, source_url: str) -> tuple:
         """这条源要试哪些列表路由，并定下读哪里的岗位卡。
@@ -1030,6 +1165,7 @@ class MokaAdapter(PlaywrightAdapter):
         self._portal_total = None
         base = source_url.split("#")[0]
         self._own_base = base
+        self._plan_dept_portal(base)
         routes = self._plan_routes(source_url)
         best: List[dict] = []
         with sync_playwright() as p:
@@ -1082,7 +1218,10 @@ class MokaAdapter(PlaywrightAdapter):
                 browser.close()
         # 宁可分母偏大被告警盯上，也不要像过去那样 reported_total=None、190 个源集体「不可判定」。
         self._finalize_coverage(best, source_url)
-        return json.dumps({"_base": base, "cards": best}, ensure_ascii=False)
+        payload = {"_base": base, "cards": best}
+        if self._dept_portal:
+            payload["_departments"] = self._dept_tree
+        return json.dumps(payload, ensure_ascii=False)
 
     @staticmethod
     def _today() -> date:
@@ -1102,6 +1241,23 @@ class MokaAdapter(PlaywrightAdapter):
         today = self._today()
         oldest_kept = today - timedelta(days=self._MAX_AGE_DAYS) if self._MAX_AGE_DAYS else None
         shared = moka_shared_portal(base) is not None   # 一个门户发多家公司的岗：逐行归属
+        # 同上，按卡上写的部门判（_MOKA_DEPT_SHARED_PORTALS）。部门树读不到 / 登记的节点不在树里 → 整轮不写。
+        dept_portal = moka_dept_shared_portal(base)
+        by_label = None
+        if dept_portal and data.get("cards"):
+            tree = data.get("_departments")
+            if not tree:
+                raise RuntimeError(f"moka: shared portal {moka_portal_key(base)} 没读到门户自报的部门树，"
+                                   "判不了哪些岗归别家；拒绝把它们贴给 sources.company")
+            try:
+                by_label = moka_department_owners(dept_portal, tree)
+            except ValueError as e:
+                raise RuntimeError(f"moka: shared portal {moka_portal_key(base)}：{e}；部门树改了，"
+                                   "先重新核对再改登记") from None
+            if not any(by_label.values()):
+                _log.warning("moka: shared portal %s 的部门树里没有一个分组挂在登记的节点下，这一轮全部留在门户本家",
+                             moka_portal_key(base))
+        what = "部门" if dept_portal else "业务段"
         unknown_titles = []
         for c in data.get("cards", []):
             m = re.search(r"#/job/([\w-]+)", c.get("href") or "")
@@ -1123,6 +1279,10 @@ class MokaAdapter(PlaywrightAdapter):
                 owner, known = moka_shared_portal_verdict(base, title)
                 if not known:
                     unknown_titles.append(title)
+            elif by_label is not None:
+                owner, known = moka_card_department_verdict(by_label, c.get("tags"))
+                if not known:
+                    unknown_titles.append(f"{title}（卡上：{'/'.join(c.get('tags') or []) or '无'}）")
             out.append(RawJob(
                 company=owner or self.company_name or "",
                 title=title,
@@ -1138,11 +1298,12 @@ class MokaAdapter(PlaywrightAdapter):
             # 归到别家的）悄悄贴回 sources.company，正是要修的错（同北森共享租户「整批没有招聘机构」那条）：
             # 记失败、这一轮不写，让人来重新对拍。个别认不出的不在此列，走下面的日志。
             raise RuntimeError(
-                f"moka: shared portal {moka_portal_key(base)} 的 {len(out)} 个岗里 {len(unknown_titles)} 个认不出业务段"
-                f"（例：{unknown_titles[0]}）；拒绝把它们贴给 sources.company，先重新核对标题写法")
+                f"moka: shared portal {moka_portal_key(base)} 的 {len(out)} 个岗里 {len(unknown_titles)} 个认不出{what}"
+                f"（例：{unknown_titles[0]}）；拒绝把它们贴给 sources.company，先重新核对"
+                + ("卡片上的部门" if dept_portal else "标题写法"))
         if unknown_titles:
-            _log.warning("moka: shared portal %s 有 %d/%d 个岗的业务段认不出，留在门户本家：%s",
-                         moka_portal_key(base), len(unknown_titles), len(out),
+            _log.warning("moka: shared portal %s 有 %d/%d 个岗的%s认不出，留在门户本家：%s",
+                         moka_portal_key(base), len(unknown_titles), len(out), what,
                          "；".join(dict.fromkeys(unknown_titles[:8])))
         if too_old:
             # 同一个岗万一有两张卡（一张写着旧日期、一张没日期），以写了日期的为准：不能一边点名下架、一边又收进来，
