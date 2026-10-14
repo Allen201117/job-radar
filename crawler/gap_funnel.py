@@ -229,6 +229,8 @@ def _sample_validation(sample, *, adapter, source_url, validate_jd, company):
                 "adapter_name": adapter,
             })
             return "pass"
+        except enrich.PostingMovedError:
+            return "pass"  # 对方说还在招，只是链接换了（Workday 改了主地点）
         except enrich.JobClosedError:
             return "fail"
         except Exception:
