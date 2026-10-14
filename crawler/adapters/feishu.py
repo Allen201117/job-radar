@@ -89,16 +89,26 @@ def compose_job_type(category: str, label: str) -> str:
     return label
 
 
-# ── 共享租户：同一个岗挂在两家公司的门户上，只归一家 ─────────────────────────────────────────
-# host → {让出的门户: 归属门户}。「让出的门户」那条源抓的时候剔掉也挂在「归属门户」上的岗，库里已有的由
-# run.py 按 retire_jd_urls 下架成 removed（可逆）。不剔 = 同一个岗两张卡、两个公司名（同北森孪生门户）。
+# ── 同一个岗挂在同一租户的两个门户上（各有一条源），只留一行 ──────────────────────────────────
+# host → {让出的门户: 归属门户 / None}。「让出的门户」那条源抓的时候剔掉也挂在「归属门户」上的岗，库里已有的由
+# run.py 按 retire_jd_urls 下架成 removed（可逆）。不剔 = 同一个岗两张卡（链接前缀不同，唯一索引拦不住），
+# 两家公司共用租户时还是两个公司名（同北森孪生门户）。
+# 值为 None = 登记过、自己留着：主门户源取的门户（自报 ∪ index）必须全部登记，否则整轮不写（见 _yield_to_owner_portal）。
 #   · global-intco（租户名只写「英科」，集团共用；2026-10-12 三个门户翻全、逐岗带头读状态）：
 #       index  = 英科再生社会招聘官网 87 岗      757263 = 英科医疗社会招聘官网 326 岗（英科医疗官网「社会招聘」链到这里）
 #     两边都挂、两边都在线的 17 个：14 个淮北「-凯泽」（安徽凯泽新材料，英科医疗持股 65%，公告 2026-051）、
 #     九江安环主管（江西英科医疗厂址）、国毅 / 公益基金会运营各 1 → 归英科医疗。index ∩ 840753（英科医疗校招）= 0。
+#   · asiainfo-sec（亚信安全；2026-10-15 各门户翻全、逐岗带头读状态）：首页自报 campus（校园招聘 12 岗），
+#       index = 「社招官网（旧版）」12 岗，全部也挂在新社招门户 social（「亚信安全社招」71 岗）上、两边都在线 → 归 social。
+#       主门户源与 campus 子门户源取的是同一批 campus 岗、同一个链接（库里是同一行），不算一岗两行。
+#   · iq（爱奇艺；同日）：主门户自报 job（社招）∪ index；新接的 intern（「实习生官网」97 岗）与已有两条子门户源各重 1 个
+#       （campus「数据标注实习生」、internship「Social Media & Content Intern」），两边都在线 → 归 intern。
+#       campus ∩ index 那 1 个是接入前就有的重复，没登记（index 是主门户源取的，让出要另核）。
 # ⚠️ 登记在代码里、源的启停在库里：停用归属门户那条源之前先撤掉这里的登记，否则让出的岗两边都没人接。
 _SHARED_TENANT_PORTAL_OWNER = {
     "global-intco.jobs.feishu.cn": {"index": "757263"},
+    "asiainfo-sec.jobs.feishu.cn": {"index": "social", "campus": None},
+    "iq.jobs.feishu.cn": {"campus": "intern", "internship": "intern", "job": None, "index": None},
 }
 
 
@@ -259,17 +269,18 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
         """见 _SHARED_TENANT_PORTAL_OWNER：剔掉也挂在归属门户上的岗，把它们的链接记进 retire_jd_urls。
 
         归属门户的列表没取全 → 抛错、本轮不写。静默全收就是一岗两行；按半截列表剔，漏掉的那些同样是一岗两行。
-        不在登记表里的门户（含归属门户自己那条源）零额外请求、原样返回。"""
+        子门户源：不在登记表里、或登记为 None 的门户（含归属门户自己那条源）零额外请求、原样返回。
+        主门户源：取到登记表里没有的门户 → 抛错、本轮不写（见下）。"""
         owners = _SHARED_TENANT_PORTAL_OWNER.get(host) or {}
         if getattr(self, "_main_portal", False):
-            # 主门户源取的是「租户首页自报的门户 ∪ index」。登记时自报的就是让出的那个门户；对方哪天把首页换成
+            # 主门户源取的是「租户首页自报的门户 ∪ index」，登记时这两个门户都核过（让出或留着）；对方哪天把首页换成
             # 别的门户（最坏是归属门户本身），这条源会把别家的岗整批收进来 → 认不出的门户一律不写，等人重新核。
             stray = sorted({self._row_portal(p) for p in rows} - set(owners))
             if stray:
                 raise RuntimeError(
                     f"feishu shared tenant {host}: main source now lists portal(s) {stray} that are not "
-                    "registered as yielding; re-verify the tenant's portal layout before writing")
-        needed = sorted({owners[self._row_portal(p)] for p in rows if self._row_portal(p) in owners})
+                    "registered; re-verify the tenant's portal layout before writing")
+        needed = sorted({o for o in (owners.get(self._row_portal(p)) for p in rows) if o})
         if not needed:
             return rows, total
         owned = {}

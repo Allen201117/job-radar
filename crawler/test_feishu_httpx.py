@@ -704,7 +704,9 @@ class SharedTenantPortalTest(unittest.TestCase):
 
     def test_registry_has_no_chains_and_other_tenants_are_untouched(self):
         for host, owners in feishu._SHARED_TENANT_PORTAL_OWNER.items():
-            self.assertFalse(set(owners) & set(owners.values()), host)   # 归属门户自己不再让给别人
+            yielding = {portal for portal, owner in owners.items() if owner}
+            self.assertTrue(yielding, host)                               # 全是 None 的登记什么也不剔，只多一道门
+            self.assertFalse(yielding & set(owners.values()), host)       # 归属门户自己不再让给别人（登记成 None 留着可以）
         a = feishu.NioAdapter()
         a._bind_website_path("https://nio.jobs.feishu.cn/index/position")
         calls = []
@@ -712,6 +714,76 @@ class SharedTenantPortalTest(unittest.TestCase):
                 mock.patch.object(a, "_discover_detail_prefix", return_value="index"):
             rows, total, _reached = a._httpx_fetch("nio.jobs.feishu.cn")
         self.assertEqual((calls, len(rows), total, a.retire_jd_urls), (["index"], 1, 1, ()))
+
+
+class SameCompanyPortalOverlapTest(unittest.TestCase):
+    """同一家公司的两个门户挂着同一个岗、两个门户各有一条源：只留一行（2026-10-15，亚信安全 / 爱奇艺）。
+
+    碑文（各门户翻全 + 逐岗带各自门户的 website-path 读 channel_online_status，全集）：
+      · 亚信安全：首页自报 campus（12 岗）；index 是「社招官网（旧版）」12 岗，12 个全部也挂在新社招门户 social（71 岗）上，
+        两边都在线 → 主门户源把这 12 个让给 social，自报的 campus 登记为 None（留着）。
+      · 爱奇艺：新接的 intern（97 岗）与已有的 campus / internship 子门户源各重 1 个，两边都在线 → 都让给 intern；
+        主门户源取的 job / index 登记为 None。
+      · 登记表的值为 None = 留着、不取别的门户；主门户源取到的门户必须全部登记，认不出的照旧整轮不写。
+    """
+
+    @staticmethod
+    def _a(host, path):
+        url = f"https://{host}/{path}/position"
+        a = feishu.FeishuGenericAdapter()
+        a._bind_host(url)
+        a._bind_website_path(url)
+        a._PAGE_SIZE = 50
+        return a
+
+    _factory = staticmethod(SharedTenantPortalTest._factory)
+
+    def test_main_source_keeps_registered_none_portal_and_yields_the_old_one(self):
+        host = "asiainfo-sec.jobs.feishu.cn"
+        a = self._a(host, "index")
+        calls = []
+        pages = {"campus": [_page([1, 2], 2)], "index": [_page([3, 4], 2)], "social": [_page([4, 5, 6], 3)]}
+        with mock.patch.object(feishu.httpx, "Client", self._factory(pages, calls)), \
+                mock.patch.object(a, "_discover_detail_prefix", return_value="campus"):
+            rows, total, reached = a._httpx_fetch(host)
+        self.assertEqual(calls, ["campus", "index", "social"])     # 只为让出的 index 多取一次 social
+        self.assertEqual(([(r["id"], r["_portal"]) for r in rows], total, reached),
+                         ([("1", "campus"), ("2", "campus"), ("3", "index")], 3, True))
+        self.assertEqual(a.retire_jd_urls, (f"https://{host}/index/position/4/detail",))
+
+    def test_sub_portal_yields_to_owner_while_kept_portals_ask_nothing_extra(self):
+        host = "iq.jobs.feishu.cn"
+        pages = {"campus": [_page([1, 2], 2)], "internship": [_page([3, 4], 2)],
+                 "intern": [_page([2, 4, 9], 3)], "job": [_page([7], 1)], "index": [_page([8], 1)]}
+        for path, kept, retired, extra in (("campus", ["1"], ["2"], ["intern"]),
+                                           ("internship", ["3"], ["4"], ["intern"]),
+                                           ("intern", ["2", "4", "9"], [], [])):
+            a = self._a(host, path)
+            calls = []
+            with mock.patch.object(feishu.httpx, "Client", self._factory(pages, calls)):
+                rows, total, _reached = a._httpx_fetch(host)
+            self.assertEqual(calls, [path] + extra, path)
+            self.assertEqual(([r["id"] for r in rows], total), (kept, len(kept)), path)
+            self.assertEqual(a.retire_jd_urls,
+                             tuple(f"https://{host}/{path}/position/{i}/detail" for i in retired), path)
+        a = self._a(host, "index")
+        calls = []
+        with mock.patch.object(feishu.httpx, "Client", self._factory(pages, calls)), \
+                mock.patch.object(a, "_discover_detail_prefix", return_value="job"):
+            rows, total, _reached = a._httpx_fetch(host)
+        self.assertEqual((calls, sorted(r["id"] for r in rows), total, a.retire_jd_urls),
+                         (["job", "index"], ["7", "8"], 2, ()))
+
+    def test_main_source_still_refuses_an_unregistered_portal(self):
+        host = "iq.jobs.feishu.cn"
+        a = self._a(host, "index")
+        calls = []
+        pages = {"graduate": [_page([1], 1)], "index": [_page([8], 1)]}
+        with mock.patch.object(feishu.httpx, "Client", self._factory(pages, calls)), \
+                mock.patch.object(a, "_discover_detail_prefix", return_value="graduate"):
+            with self.assertRaises(RuntimeError):
+                a._httpx_fetch(host)
+        self.assertEqual((calls, a.retire_jd_urls), (["graduate", "index"], ()))
 
 
 if __name__ == "__main__":

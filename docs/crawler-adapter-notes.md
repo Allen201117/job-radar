@@ -53,6 +53,15 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #     库里这个路径下小米在招 2,252 行、当天实习门户列表只有 580 行（翻全）；不在列表的 1,672 行里 1,636 行
                          #     判的是社招、1,370 行当天挂在社招门户列表里（1,642 行是 2026-09-28 同一天入库的），加了会把它们整批判成实习。
                          #     小米另两个子门户同样：校招门户库里 2,861 / 列表 782，新零售 2,051 / 97。先跑门户对账清掉再说。
+                         #   找一个租户还挂着哪些门户：读租户首页（和各门户首页）HTML 里内嵌的导航配置——转义 JSON 的 "path" 字段，
+                         #     写成 https://{host}/{段} 或 /{段}；每段带 website-path 头问列表，不存在的回 -9000003。website_info 只说自报的那一个。
+                         #     导航也会链到另一个域名（jobs.chagee.com / xd-legacy / yvjpcqa2af / campus.dewu.com）：比 website_info.id 和
+                         #     岗位编号认是不是同一租户。2026-10-15 普查 111 个在用 host：库里没有源、有在招岗的门户 16 个，迁移 335 全接
+                         #     （832 岗逐岗读状态全在线；没接的拓竹 global / 霸王茶姬 store / 利欧内推，理由在迁移注释里）。
+                         #   ⚠️ 同一个岗挂在同租户两个门户上、两个门户各有源 → 一岗两行（链接前缀不同，唯一索引拦不住）：登记进
+                         #     `_SHARED_TENANT_PORTAL_OWNER`，值为 None = 留着；主门户源取的门户（自报 ∪ index）必须全登记，否则整轮不写。
+                         #     现登记英科（两家公司）、亚信安全（旧版社招 index → social）、爱奇艺（campus / internship → intern）。
+                         #     普查只证明今天两两不重叠，没登记的租户日后照样可能一岗两行。
                          #   china_ats.py = 本土通用 ATS（moka / beisen / company_spa；host 从 source_url 动态解析，浏览器拦截 SPA）
                          #   ⚠️ moka 岗位卡的地点与标题（`_parse_moka_card`，2026-10-11 重写；判据是拿 397 个在招门户、38,789 张卡片
                          #     innerText 原文量出来的）：列表接口是密文，地点只能从卡片文字里认。卡片字段区是
