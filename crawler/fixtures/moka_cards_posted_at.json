@@ -1,0 +1,103 @@
+{
+ "_note": "Moka 岗位卡 innerText 原文（a[href*='#/job/'] 的 innerText，一字未改），2026-10-12 从线上门户抓取；portal 是 app.mokahr.com 下的路径。posted_at 是人工对着卡片写的期望值（卡片上没写发布日期就是 null）。",
+ "cards": [
+  {
+   "id": "new-layout-date-after-title",
+   "portal": "social-recruitment/microport/46967",
+   "why": "新版卡片：标题后面第一行「发布于 …」",
+   "text": "销售经理\n发布于 2023-06-29\n优通\n优通\n|\n全职\n全职",
+   "posted_at": "2023-06-29"
+  },
+  {
+   "id": "new-layout-badge-on-its-own-line",
+   "portal": "apply/shein/2933",
+   "why": "角标「急」单独一行，发布日期在第三行",
+   "text": "急\n高级搭配师\n发布于 2026-08-24\n全职\n全职\n立即投递",
+   "posted_at": "2026-08-24"
+  },
+  {
+   "id": "new-layout-title-and-date-only",
+   "portal": "campus-recruitment/robam/45810",
+   "why": "新版卡片只有标题和发布日期两行",
+   "text": "算法\n发布于 2026-09-28",
+   "posted_at": "2026-09-28"
+  },
+  {
+   "id": "english-portal-posted-on",
+   "portal": "social-recruitment/futu5/141927",
+   "why": "英文渲染的门户写「Posted on …」",
+   "text": "(HK) Relationship Manager Assistant (PT)\nPosted on 2026-09-23\nFull-time\nFull-time\n|\n金融类\n金融类\n|\nHong Kong\nHong Kong\nApply Now",
+   "posted_at": "2026-09-23"
+  },
+  {
+   "id": "old-layout-tags-place-date",
+   "portal": "social-recruitment/wps/3471",
+   "why": "老版卡片：标签行 + 地点行，发布时间在最后一行；2019 年发布、门户至今仍列为在招",
+   "text": "Android开发工程师（MOB）\n全职技术类\n广东·珠海市\n发布时间：2019-06-12",
+   "posted_at": "2019-06-12"
+  },
+  {
+   "id": "old-layout-one-line-then-date",
+   "portal": "campus_apply/qsc/2817",
+   "why": "老版卡片：标题后只有一行就是发布时间",
+   "text": "公益基金会实习生\n社会责任部\n发布时间：2023-09-01",
+   "posted_at": "2023-09-01"
+  },
+  {
+   "id": "old-layout-title-and-date-only",
+   "portal": "social-recruitment/enflame/40891",
+   "why": "老版卡片只有标题和发布时间两行",
+   "text": "PM\n发布时间：2026-09-18",
+   "posted_at": "2026-09-18"
+  },
+  {
+   "id": "old-layout-glued-badge",
+   "portal": "social-recruitment/ruijie/26518",
+   "why": "老版卡片角标「急」粘在标题前面",
+   "text": "急内销售\n全职\n北京市\n发布时间：2026-05-13",
+   "posted_at": "2026-05-13"
+  },
+  {
+   "id": "oldest-year-in-the-corpus",
+   "portal": "social-recruitment/fenbi/45505",
+   "why": "全量卡片里最早的年份；照卡片写，不设下限",
+   "text": "营销推广主管\n发布于 2018-04-27\n斑马\n斑马",
+   "posted_at": "2018-04-27"
+  },
+  {
+   "id": "title-mentions-another-date",
+   "portal": "social-recruitment/sunnyoptical/45601",
+   "why": "标题里自带「9.14发布」：认卡片的发布日期行，不认标题",
+   "text": "软件spm 9.14发布\n发布于 2026-10-10\n舜为科技\n舜为科技",
+   "posted_at": "2026-10-10"
+  },
+  {
+   "id": "body-states-a-deadline",
+   "portal": "social-recruitment/yinlun/128570",
+   "why": "正文里另有「截止日期：2024年08月29日」：那不是发布日",
+   "text": "质量工程师（校招）\n发布于 2024-06-12\n5 - 7 K/月\n|\n商用车与非道路热管理事业部\n商用车与非道路热管理事业部\n|\n全职\n全职\n职位介绍 岗位职责：1、负责公司APQP体系文件的管理维护工作2、负责产品零件的入厂检验及供应商的质量管理3、负责产品成品、现场产品质量管理工作5、负责客户反馈问题的分类统计，牵头组织分析、整改及跟踪8、负责客户要求的质量会议组织任职资格：1、机械或质量等相关专业本科及以上；2、英语4级以上；3、正直踏实、责任心强，极佳的团队工作能力及沟通解决问题能力。截止日期：2024年08月29日招聘人数：30人\n\n\n\n\n            \n\n                职位介绍\n\n                \n\n                \n\n                岗位职责：\n\n1、负责公司APQP体系文件的管理维护工作\n\n2、负责产品零件的入厂检验及供应商的质量管理\n\n3、负责产品成品、现场产品质量管理工作\n\n5、负责客户反馈问题的分类统计，牵头组织分析、整改及跟踪\n\n8、负责客户要求的质量会议组织\n\n任职资格：\n\n1、机械或质量等相关专业本科及以上；\n\n2、英语4级以上；\n\n3、正直踏实、责任心强，极佳的团队工作能力及沟通解决问题能力。\n\n\n\n\n截止日期：2024年08月29日\n\n招聘人数：30人\n\n            \n\n            \n\n                \n\n            \n\n        \n\n立即投递",
+   "posted_at": "2024-06-12"
+  },
+  {
+   "id": "tenant-hides-the-date-new-layout",
+   "portal": "social-recruitment/tesla/46129",
+   "why": "租户没配置展示发布日期（特斯拉整站 889 张都没有）：留空",
+   "text": "急\n诉讼律师\n法务 Legal\n法务 Legal",
+   "posted_at": null
+  },
+  {
+   "id": "tenant-hides-the-date-old-layout",
+   "portal": "social-recruitment/zulong/25157",
+   "why": "老版门户同样可以不展示发布时间（祖龙整站 86 张都没有）：留空",
+   "text": "急TA\n程序类\n北京市·东城区",
+   "posted_at": null
+  },
+  {
+   "id": "sidebar-title-only-link",
+   "portal": "social-recruitment/anlogic/46365",
+   "why": "右栏「最新职位」只有标题的链接：留空",
+   "text": "采购专员",
+   "posted_at": null
+  }
+ ]
+}

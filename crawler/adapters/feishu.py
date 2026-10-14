@@ -35,6 +35,59 @@ def _int_or_none(value) -> Optional[int]:
         return None
 
 
+# 职能类别名自己读起来像招聘类型时，不和招聘类型标签拼在一起（见 compose_job_type）。读 job_type 的地方都是对整串
+# 做子串匹配、各有各的先后：sourceDeclaredCategory 是 实习 > 社招 > 校招，lib/insight-derive.ts 的 classifyRecruitment
+# 和 discovery.recruitment_category 是 实习 > 校招 > 社招 —— 类别名叫「实习生」「全职」「校园大使」时会压过后面的标签。
+# intern 另用整词（normalizer.INTERN_WORD_RE）：裸子串会把 International / Internal / Internet 一起丢掉。
+_RECRUIT_WORD_RE = re.compile(
+    r"实习|社招|社会招聘|全职|experienced|professional|full.?time"
+    r"|校招|校园|应届|管培|管理培训生|留学生|毕业生|campus|graduate|new\s?grad|entry.?level", re.I)
+
+
+def declared_recruit_label(recruit_type) -> str:
+    """列表每行自带的 `recruit_type`（对方自报的招聘类型）→ 交给分类器的标签；没有可用的返回空串。
+
+    ❌ 2026-10-12 前 `_map` 没用这个字段，job_type 只取 job_category（职能类别），招聘类型全靠分类器读标题 / 正文猜：
+       自报社招的被正文里的「优秀应届生亦可」「24-25 届毕业生」「负责校园招聘」判成校招；自报校招的门户
+       （智元 `campusrecruitment`、小米新零售）标题正文链接里都没有校招字样，判成社招。
+       两个方向的行数、逐源清单、改前改后对拍 → docs/crawler-adapter-notes.md 的 feishu.py 条目。
+    ✅ 字段两层：上一层 社招 / 校招，下一层 全职·外包·劳务·顾问·实习 / 正式·实习。只取能定桶的：
+         社招 > 全职·外包·劳务·顾问 → 「社招」      社招 > 实习 → 「实习」
+         校招 > 正式              → 「校招」      校招 > 实习 → 不带（见下）
+    🚫 下一层的「全职 / 正式」不许原样带：读侧 sourceDeclaredCategory("全职") 直接返回社招（北森绝不带 Kind 同一个理由），
+       「正式」它不认。下一层只用来认实习。
+    🚫 「校招 > 实习」不带：一个类型下混着两种东西——蔚来把「先带薪实习、表现好发校招正式 Offer」的岗归在这里
+       （标题写「校招-…」、面向应届），小米实习门户归在这里的是给在校生的实习。带成实习会把前一种挪出校招，
+       带成校招会把后一种写成校招；标题写着实习的本来就由标题判实习。
+    ⚠️ 社招也带（wt.py 的社招渠道刻意不带）：那边是「岗位挂在哪个渠道」，这里是对方给每个岗单独填的类型。
+    ⚠️ 这里只负责如实把对方的归类搬过来，裁决仍在 lib/china-keyword-expansion.js：标题写「实习」的照旧判实习（层1），
+       自报校招但写明 ≥2 年经验的照旧判社招（层2）。
+    ⚠️ 名字按「包含」认，不按全等：同平台的字节租户下一层叫「暑期实习 / 日常实习」。认不出的上一层 → 空串，
+       照旧按标题 / 正文判（有些租户整个不返回这个字段，也走这条路）。
+    """
+    if not isinstance(recruit_type, dict):
+        return ""
+    name = str(recruit_type.get("name") or "")
+    parent = recruit_type.get("parent")
+    parent_name = str(parent.get("name") or "") if isinstance(parent, dict) else ""
+    intern = "实习" in name
+    if "社招" in parent_name or "社会招聘" in parent_name:
+        return "实习" if intern else "社招"
+    if "校招" in parent_name or "校园招聘" in parent_name:
+        return "" if intern else "校招"
+    return ""
+
+
+def compose_job_type(category: str, label: str) -> str:
+    """职能类别 + 招聘类型标签（与 wt.py 同一种拼法：类别继续进检索文本，标签喂给 recruitmentCategory）。
+    类别名自己读起来像招聘类型的只留标签，否则它会压过标签（见 _RECRUIT_WORD_RE）。"""
+    if not label:
+        return category
+    if category and not (_RECRUIT_WORD_RE.search(category) or normalizer.INTERN_WORD_RE.search(category)):
+        return f"{category} {label}"
+    return label
+
+
 # ── 共享租户：同一个岗挂在两家公司的门户上，只归一家 ─────────────────────────────────────────
 # host → {让出的门户: 归属门户}。「让出的门户」那条源抓的时候剔掉也挂在「归属门户」上的岗，库里已有的由
 # run.py 按 retire_jd_urls 下架成 removed（可逆）。不剔 = 同一个岗两张卡、两个公司名（同北森孪生门户）。
@@ -483,10 +536,11 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
             names.extend(c.get("name") for c in cl if isinstance(c, dict))
         city = normalizer.join_places(names)
 
-        job_type = ""
+        category = ""
         jc = post.get("job_category")
         if isinstance(jc, dict):
-            job_type = jc.get("name") or ""
+            category = str(jc.get("name") or "")
+        job_type = compose_job_type(category, declared_recruit_label(post.get("recruit_type")))
 
         desc = (post.get("description") or "").strip()
         req = (post.get("requirement") or "").strip()

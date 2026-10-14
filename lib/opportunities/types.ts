@@ -126,7 +126,7 @@ export interface MatchFacts {
 
   skillsHit: string[]; // 命中的技能
 
-  noveltyHours: number | null; // now - first_seen_at 的小时数
+  noveltyHours: number | null; // now - first_seen_at 的小时数；进来时就已经发布很久的老岗为 null（lib/job-novelty）
   userAction: "saved" | "ignored" | "applied" | null; // 主动作（不含 viewed）
   viewed: boolean;
 }
@@ -179,7 +179,7 @@ export interface Opportunity {
   lastSeenAt: string | null;
   userAction: "saved" | "ignored" | "applied" | null;
   viewed: boolean;
-  isNew: boolean; // first_seen_at > 有效上次访问时间（由 grouping 计算填充）
+  isNew: boolean; // first_seen_at > 有效上次访问时间，且不是进来时就已经发布很久的老岗（由 grouping 计算填充）
   exploreEligible: boolean; // 是否够格进「拓展机会」（related 职能 或 命中目标公司），由 service 据 facts 算
   /** 只被职能层召回、方向层没命中（jobs-store/opportunities.stripTierColumns 打的标）：只进拓展看看，不进对口机会。 */
   functionOnly?: boolean;

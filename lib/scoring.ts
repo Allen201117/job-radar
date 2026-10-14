@@ -14,6 +14,7 @@ import {
 import { jobIndustryAllowed } from "./company-industry";
 import { locationProvinces } from "./cn-location-provinces";
 import { provinceOfTarget } from "./opportunities/location-targets";
+import { isNewWithinDays } from "./job-novelty";
 
 interface ScoreResult {
   score: number;
@@ -154,14 +155,10 @@ export function scoreJob(
     }
   }
 
-  // 7 天内新增
-  if (job.first_seen_at) {
-    const daysSinceFirstSeen =
-      (Date.now() - new Date(job.first_seen_at).getTime()) / 86400000;
-    if (daysSinceFirstSeen <= 7) {
-      score += 10;
-      match_reasons.push({ type: "freshness", value: "近 7 天新增" });
-    }
+  // 7 天内新增（进来时官方发布日就已经早 7 天以上的岗不算，见 lib/job-novelty）
+  if (isNewWithinDays(job, 7)) {
+    score += 10;
+    match_reasons.push({ type: "freshness", value: "近 7 天新增" });
   }
 
   // 用户操作状态只应用到当前岗位，避免一个 ignored/applied 影响整页排序。
