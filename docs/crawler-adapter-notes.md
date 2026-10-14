@@ -655,6 +655,24 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #     修法（2026-09-24，迁移 304）：**先**把存量 jd_url / apply_url 只换 host（canonical 由触发器重算），
                          #     **再**改 source_url 并启用——顺序反了，列表重抓会按新 host 另插一批，同一个岗变两行。
                          #     详情探活 `enrich._detail_workday`：404/410 判死，其余非 2xx 判 unknown 不盖戳（429 是 Workday 按 IP 限流）。
+                         #     ⚠️ 详情回 200 ≠ 库里这一行还对（2026-10-14）：对方改了帖子的主地点，旧链接照样 200，响应里
+                         #     `jobPostingInfo.externalUrl` 是现在的链接（有时写成 `wdN.myworkdaysite.com/recruiting/{租户}/{站点}/…`，
+                         #     同一个帖子）。探活器比对它和库里的链接，地点段不同就抛 `PostingMovedError`，由巡检
+                         #     `enrich_backlog._settle_moved` 处置：旧链接 30 小时没被列表看到、且库里没有新链接的在招行时，
+                         #     新主地点在本源地区内 → 原地换链接和地点；不在 → removed（链接也换成新的，列表日后再给出它时原 id 复活）；
+                         #     判不清（没给主地点、地点文本和对方自报国家打架）→ 不动。新链接已有在招行的留给写库端认旧链接。
+                         #     ⚠️ geo 只认得少数国家（「Paris, France」「Kuala Lumpur, Malaysia」都说不清），境外岗在不在地区内
+                         #     多半靠 detail 自报的 `jobRequisitionLocation.country.alpha2Code`（adapters.workday._declared_country）。
+                         #     全量（启用源 + 腾讯，旧链接 30 小时没被看到的在招行 3,081 行逐行打详情）：Target 以外 663 行 =
+                         #     链接没变 45 / 挪了且新链接已在库 553 / 挪了且库里没有新链接 45（换链接 14、下架 27、不动 4）/ 已撤 20；
+                         #     Target 2,095 行几乎全是「链接没变、排在列表 2000 条窗口外」；腾讯 323 行里 310 行已撤。
+                         #     同时整跑一遍当下列表当尺子：判下架 / 判死的行没有一行在列表里（两个方向的另一头见下一段）。
+                         #     「链接没变、列表也不给」有两种来路：① 2026-07-02 把地区放开到 {CN,US,SG,Remote} 之后，分组取到的岗
+                         #     超过 25 个，「China / Hong Kong / Macau」关键词补搜就不再跑，不在任何中国分组里的在华岗（GE 医疗 /
+                         #     罗氏 / 默沙东 / 博通）从那天起再没被列表看到；② 地区「Remote」按关键词认分组，「Brazil - Remote」
+                         #     「Remote - Belgium」这类别国远程分组整组收进来、不逐岗复核地点，帖子去掉远程地点后掉出列表、链接不变。
+                         #     腾讯那条源（tencent adapter）的海外岗 PostURL 就是 Workday 链接、没有 postId：以前 `_detail_tencent`
+                         #     取不到 postId 直接 return ""，有正文的行被盖「在招」章、永远判不死；现在这类行改问 Workday 详情。
                          #     ⚠️ 地点取列表每行的 `locationsText`（对方原文），**不从 externalPath 的地点段还原**（2026-10-12 改）：
                          #     地点段是原文的 slug（空白 → 连字符，逗号等标点直接删）：2026-10-12 抓回 101 个租户，39,062 个单地点岗逐条核过；
                          #     还原时分不出哪个连字符是分隔、哪个是词间空格，旧实现全换成逗号 → 「New, York, NY」「US, , , California」

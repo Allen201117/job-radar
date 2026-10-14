@@ -15,8 +15,9 @@ import json
 import re
 import threading
 import time
+from collections import namedtuple
 from datetime import date
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, unquote
 
 import httpx
 from html_dom import HTMLParser
@@ -27,6 +28,7 @@ from adapters.cmcc import CmccAdapter, _sign_header as _cmcc_sign_header
 from adapters.cn_portal_tls import make_transport
 from adapters.icbc import IcbcAdapter
 from adapters.spdb import SpdbAdapter
+from adapters.workday import WorkdayAdapter, _declared_country as _workday_declared_country
 
 UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
       "Accept": "application/json"}
@@ -53,6 +55,23 @@ class DetailUnknownError(RuntimeError):
     抛出它 → 调用方的 `except Exception: fetch_err = True` 分支 → 记 miss 重试，不盖戳、不改状态。"""
 
 
+class PostingMovedError(Exception):
+    """对方说这个岗还在招，但它现在的链接不是库里这一条（2026-10-14 加，Workday）。
+
+    Workday 只按链接最后一段找帖子，前面的地点段是帖子主地点的 slug：对方一改主地点，链接跟着变，
+    旧链接照样回 200。所以「能打开」不等于「库里这一行还对」。探活器只报事实（现在的链接 / 地点 /
+    正文），怎么处置由 enrich_backlog 结合库里的状态决定（见 enrich_backlog._settle_moved）：
+    探活器看不到库，判不了「新链接是不是已经有一行」「列表多久没见到它」。"""
+
+    def __init__(self, new_url, location=None, country_code=None, body=""):
+        # location：现在的主地点，已过 adapter 写库前同一道清洗；country_code：detail 自报的国家（ISO-2）。
+        super().__init__(f"posting moved to {new_url}")
+        self.new_url = new_url
+        self.location = location
+        self.country_code = country_code
+        self.body = body or ""
+
+
 def _raise_if_unknown(r):
     """非 2xx（且已排除 404/410 撤岗）一律判 unknown。**先调 _raise_if_gone 再调它。**"""
     if r.status_code >= 300:
@@ -77,13 +96,65 @@ def _json_field(r, key):
 
 
 # --- 外企四家族：搬 scripts/backfill_foreign_summaries.py（已 live 验证，全是公开 JSON API） ---
+# Workday 公开链接：{host}/[{locale}/]{site}/job/[{地点段}/]{锚}。detail 自报的 externalUrl 有时是另一种写法
+# wdN.myworkdaysite.com/recruiting/{tenant}/{site}/job/…（同一个帖子；2026-10-14 实测富达 / 麦格纳 / 富国 / 亿滋）。
+_WORKDAY_LINK_RE = re.compile(
+    r"^https?://(?P<host>[^/?#]+\.myworkdayjobs\.com)/(?:[a-z]{2}-[a-z]{2}/)?(?P<site>[^/?#]+)/job/"
+    r"(?:(?P<slug>[^/?#]+)/)?(?P<anchor>[^/?#]+)$", re.I)
+_WORKDAY_SITE_LINK_RE = re.compile(
+    r"^https?://(?P<dc>wd\d+)\.myworkdaysite\.com/(?:[a-z]{2}-[a-z]{2}/)?recruiting/(?P<tenant>[^/?#]+)/"
+    r"(?P<site>[^/?#]+)/job/(?:(?P<slug>[^/?#]+)/)?(?P<anchor>[^/?#]+)$", re.I)
+
+
+_WorkdayLink = namedtuple("_WorkdayLink", "host site slug anchor")  # host / 站点名小写（对方不分大小写），锚原样
+
+
+def _link_base(url):
+    return str(url or "").strip().split("?", 1)[0].split("#", 1)[0].rstrip("/")
+
+
+def _external_link(url):
+    """detail 自报的 externalUrl（两种写法都认）→ _WorkdayLink；认不出返回 None。"""
+    u = _link_base(url)
+    m = _WORKDAY_LINK_RE.match(u)
+    if m:
+        return _WorkdayLink(m["host"].lower(), m["site"].lower(), m["slug"], m["anchor"])
+    m = _WORKDAY_SITE_LINK_RE.match(u)
+    if m:
+        return _WorkdayLink(f"{m['tenant']}.{m['dc']}.myworkdayjobs.com".lower(), m["site"].lower(), m["slug"], m["anchor"])
+    return None
+
+
+def _same_slug(a, b):
+    """地点段只差大小写 / 百分号编码不算挪（宁可漏认：认错了会把链接换成列表永远不给的写法）。"""
+    return unquote(a or "").casefold() == unquote(b or "").casefold()
+
+
+def _workday_moved_url(jd_url, external_url):
+    """对方自报的现链接和库里这条是同一个帖子（host / 站点 / 锚都相同）、只是地点段不同 → 返回新链接；否则 None。
+
+    新链接按库里这条的写法拼（host / locale / 站点名照抄，只换 /job/ 之后那段）：这正是 adapter 写库时的写法，
+    列表日后给出它时 canonical 对得上，写库会落到同一行上，不会再插一行。
+    锚不同、认不出的一律当没挪——宁可漏认，不把两个帖子认成一个。库里那条只认 adapter 的写法（myworkdayjobs.com）。"""
+    base = _link_base(jd_url)
+    old, new = _WORKDAY_LINK_RE.match(base), _external_link(external_url)
+    if (not old or not new or (old["host"].lower(), old["site"].lower()) != (new.host, new.site)
+            or old["anchor"] != new.anchor or _same_slug(old["slug"], new.slug)):
+        return None
+    return f"{base[: old.end('site')]}/job/{new.slug + '/' if new.slug else ''}{new.anchor}"
+
+
 def _detail_workday(row, src):
     # jd_url = {host}/{site}{ep}；detail = source_url 去尾部 /jobs 再拼 {ep}（ep 从 /job/ 起）
     m = re.search(r"(/job/.+)$", urlparse(row["jd_url"]).path)
     if not m:
         return ""
     cxs_base = re.sub(r"/jobs/?$", "", src["source_url"])
-    r = httpx.get(f"{cxs_base}{m.group(1)}", headers=UA, timeout=TIMEOUT)
+    return _workday_detail(row, f"{cxs_base}{m.group(1)}")
+
+
+def _workday_detail(row, detail_url):
+    r = httpx.get(detail_url, headers=UA, timeout=TIMEOUT)
     _raise_if_gone(r)  # cxs /job/{path} 404 = 岗位下架
     # Workday 撤岗大多不是 404，是 403 + {"errorCode":"S22","message":"permission denied"}。
     # 2026-09-23 live 对拍（香港库在招 workday 岗随机抽样）：
@@ -102,7 +173,16 @@ def _detail_workday(row, src):
     # 其余非 2xx = 没探到，不是「确认在招」（F3）。此前这里 `return ""` → 巡检照样盖戳，2026-09-23 实测：
     # Workday 按 IP 限流的 429，和武田搬数据中心（wd3→wd502）后旧地址对每个岗回的 422，都被记成了刚确认在招。
     _raise_if_unknown(r)
-    return (r.json().get("jobPostingInfo", {}) or {}).get("jobDescription") or ""
+    info = r.json().get("jobPostingInfo", {}) or {}
+    body = info.get("jobDescription") or ""
+    # 帖子还在、链接换了（对方改了主地点）。2026-10-14 全量：启用源「30 小时没被列表看到」的在招行逐行打详情，
+    # Target 以外 663 行里 598 行是这种（其中 553 行新链接已被列表抓进库 = 同一个帖子两行），腾讯那条源 13 行。
+    new_url = _workday_moved_url(row["jd_url"], info.get("externalUrl"))
+    if new_url:
+        loc = info.get("location")
+        loc = WorkdayAdapter._post_location({"locationsText": loc}) if loc else None
+        raise PostingMovedError(new_url, loc, _workday_declared_country(info), body)
+    return body
 
 
 def _detail_oracle(row, src):
@@ -549,6 +629,17 @@ def _detail_duoyi(row, src):
 
 
 def _detail_tencent(row, src):
+    # 腾讯海外岗的 PostURL 是 Workday 链接（tencent.wd1.myworkdayjobs.com/{站点}/job/…），没有 postId。
+    # ❌ 以前下面取不到 postId 就 return ""：有正文的行被巡检盖「在招」章，永远判不死。
+    #    2026-10-14 全量：这条源 323 行 Workday 链接的在招行超过 30 小时没被列表看到，逐行打 Workday 详情 310 行已撤（403 S22）。
+    # ✅ 这类行改问 Workday 详情（判死 / 判挪与 workday 源同一套，见 _workday_detail）。cxs 路径里的租户名 = 子域名，
+    #    同次 323 行全部回 200 或 S22、没有一行 404 / 422。
+    link = _link_base(row.get("jd_url"))
+    wd = _WORKDAY_LINK_RE.match(link)
+    if wd:
+        # {host}/{站点}/job/… → {host}/wday/cxs/{租户}/{站点}/job/…
+        return _workday_detail(
+            row, f"https://{wd['host']}/wday/cxs/{wd['host'].split('.', 1)[0]}/{wd['site']}{link[wd.end('site'):]}")
     # postId = jd_url 查询参数；detail = 公开 ByPostId JSON。撤岗→HTTP500 {Code:500,Data:"E1005"}（3 真实撤岗）；
     # 在招→{Code:200,Data:{Responsibility/Requirement=正文}}。⚠️ E1003=bogus 入参错，不判死。
     pid = (parse_qs(urlparse(row["jd_url"]).query).get("postId") or [""])[0]

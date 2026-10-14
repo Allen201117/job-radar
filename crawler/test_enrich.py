@@ -6,6 +6,7 @@
   3. drain 死信：富化无果 → enrich_fail_count+1，不动 summary；有果 → 只写 summary。
 """
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 import enrich
@@ -207,6 +208,321 @@ class WorkdayDetailTest(unittest.TestCase):
         with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Html(None, status=403)):
             with self.assertRaises(enrich.DetailUnknownError):
                 enrich.ENRICH_REGISTRY["workday"](self._ROW, self._SRC)
+
+
+class WorkdayPostingMovedTest(unittest.TestCase):
+    """Workday 只按链接最后一段找帖子：对方改了主地点，链接的地点段跟着变，旧链接照样回 200。
+    探活器要把「还在招、但现在不是这个链接」报出来（2026-10-14）。"""
+    _OLD = "https://co.wd1.myworkdayjobs.com/en-US/Careers/job/Singapore/Eng_R-1"
+    _SRC = {"source_url": "https://co.wd1.myworkdayjobs.com/wday/cxs/co/Careers/jobs", "adapter_name": "workday"}
+
+    def _probe(self, external, location="Taipei, Taiwan", alpha2="TW"):
+        info = {"jobPostingInfo": {"externalUrl": external, "location": location, "jobDescription": "<p>do things</p>",
+                                   "jobRequisitionLocation": {"country": {"alpha2Code": alpha2}}}}
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp(info)):
+            return enrich.ENRICH_REGISTRY["workday"]({"jd_url": self._OLD}, self._SRC)
+
+    def test_same_link_is_not_moved(self):
+        # externalUrl 不带 locale、站点名大小写不同：还是这一条链接
+        self.assertIn("do things", self._probe("https://co.wd1.myworkdayjobs.com/careers/job/Singapore/Eng_R-1"))
+
+    def test_changed_location_segment_raises_moved_with_db_style_url(self):
+        with self.assertRaises(enrich.PostingMovedError) as cm:
+            self._probe("https://co.wd1.myworkdayjobs.com/Careers/job/Taipei/Eng_R-1")
+        e = cm.exception
+        # 新链接按库里那条的写法拼（保留 /en-US/ 与站点名原样）：列表日后给出它时 canonical 对得上
+        self.assertEqual(e.new_url, "https://co.wd1.myworkdayjobs.com/en-US/Careers/job/Taipei/Eng_R-1")
+        self.assertEqual((e.location, e.country_code), ("Taipei, Taiwan", "TW"))
+        self.assertIn("do things", e.body)
+
+    def test_moved_location_is_cleaned_like_the_adapter(self):
+        # 报出来的地点过 adapter 写库前同一道清洗（「 - 」换逗号、CHN 展开），巡检换链接时写的和下一轮列表写的是同一个值
+        with self.assertRaises(enrich.PostingMovedError) as cm:
+            self._probe("https://co.wd1.myworkdayjobs.com/Careers/job/CHN---Beijing/Eng_R-1",
+                        location="CHN - Beijing - Beijing (Wangjing Park)", alpha2="CN")
+        self.assertEqual(cm.exception.location, "China, Beijing, Beijing (Wangjing Park)")
+
+    def test_myworkdaysite_external_url_is_the_same_posting(self):
+        # 富达 / 麦格纳 / 富国 / 亿滋的 externalUrl 是 wdN.myworkdaysite.com/recruiting/{租户}/{站点}/… 这种写法
+        with self.assertRaises(enrich.PostingMovedError) as cm:
+            self._probe("https://wd1.myworkdaysite.com/recruiting/co/Careers/job/Durham-NC/Eng_R-1")
+        self.assertEqual(cm.exception.new_url, "https://co.wd1.myworkdayjobs.com/en-US/Careers/job/Durham-NC/Eng_R-1")
+
+    def test_other_posting_is_not_moved(self):
+        # 末尾多一个 -1 是同一个编号下的另一个帖子；别家租户 / 别的站点 / 没给链接：都不认成同一个帖子
+        for ext in ("https://co.wd1.myworkdayjobs.com/Careers/job/Taipei/Eng_R-1-1",
+                    "https://other.wd1.myworkdayjobs.com/Careers/job/Taipei/Eng_R-1",
+                    "https://co.wd1.myworkdayjobs.com/Other/job/Taipei/Eng_R-1",
+                    None, ""):
+            with self.subTest(ext=ext):
+                self.assertIn("do things", self._probe(ext))
+
+    def test_slug_differing_only_in_case_or_encoding_is_not_moved(self):
+        # 认错了会把链接换成列表永远不给的写法：只差大小写 / 百分号编码、带查询串或尾斜杠都算同一条
+        for ext in ("https://co.wd1.myworkdayjobs.com/Careers/job/SINGAPORE/Eng_R-1",
+                    "https://co.wd1.myworkdayjobs.com/Careers/job/Sing%61pore/Eng_R-1",
+                    "https://co.wd1.myworkdayjobs.com/Careers/job/Singapore/Eng_R-1/?source=x"):
+            with self.subTest(ext=ext):
+                self.assertIn("do things", self._probe(ext))
+
+    def test_moved_url_keeps_each_stored_link_shape(self):
+        ext = "https://co.wd1.myworkdayjobs.com/Careers/job/Taipei/Eng_R-1?q=1"
+        # 库里没有 locale（腾讯给的 PostURL 就是这样）/ 没有地点段 / 站点名恰好叫 job
+        self.assertEqual(enrich._workday_moved_url("https://co.wd1.myworkdayjobs.com/Careers/job/Singapore/Eng_R-1", ext),
+                         "https://co.wd1.myworkdayjobs.com/Careers/job/Taipei/Eng_R-1")
+        self.assertEqual(enrich._workday_moved_url("https://co.wd1.myworkdayjobs.com/en-US/Careers/job/Eng_R-1", ext),
+                         "https://co.wd1.myworkdayjobs.com/en-US/Careers/job/Taipei/Eng_R-1")
+        self.assertEqual(enrich._workday_moved_url("https://co.wd1.myworkdayjobs.com/en-US/job/job/Singapore/Eng_R-1",
+                                                   "https://co.wd1.myworkdayjobs.com/job/job/Taipei/Eng_R-1"),
+                         "https://co.wd1.myworkdayjobs.com/en-US/job/job/Taipei/Eng_R-1")
+        # 库里那条是 myworkdaysite 写法：不替它改写
+        self.assertIsNone(enrich._workday_moved_url(
+            "https://wd1.myworkdaysite.com/recruiting/co/Careers/job/Singapore/Eng_R-1", ext))
+
+
+class TencentWorkdayLinkTest(unittest.TestCase):
+    """腾讯海外岗的 PostURL 是 Workday 链接、没有 postId：以前直接 return ""，有正文的行被巡检盖「在招」章、永远判不死
+    （2026-10-14 全量：323 行超过 30 小时没被列表看到，310 行 Workday 回 403 S22）。"""
+    _SRC = {"source_url": "https://careers.tencent.com/", "adapter_name": "tencent"}
+
+    def test_workday_link_asks_workday_detail(self):
+        row = {"jd_url": "https://tencent.wd1.myworkdayjobs.com/Tencent_Careers/job/Malaysia-Kuala-Lumpur/Architect_R107538-1"}
+        cap = {}
+
+        def fake_get(url, headers=None, timeout=None, params=None):
+            cap["url"] = url
+            return _Resp({"errorCode": "S22", "message": "permission denied"}, status=403)
+
+        with mock.patch.object(enrich.httpx, "get", fake_get):
+            with self.assertRaises(enrich.JobClosedError):
+                enrich.ENRICH_REGISTRY["tencent"](row, self._SRC)
+        self.assertEqual(cap["url"], "https://tencent.wd1.myworkdayjobs.com/wday/cxs/tencent/Tencent_Careers"
+                                     "/job/Malaysia-Kuala-Lumpur/Architect_R107538-1")
+
+    def test_workday_link_moved_is_reported(self):
+        row = {"jd_url": "https://tencent.wd1.myworkdayjobs.com/Tencent_Careers/job/Singapore/Architect_R107538-1"}
+        info = {"jobPostingInfo": {"externalUrl": "https://tencent.wd1.myworkdayjobs.com/Tencent_Careers/job/"
+                                                  "Malaysia-Kuala-Lumpur/Architect_R107538-1",
+                                   "location": "Malaysia, Kuala Lumpur", "jobDescription": "<p>x</p>"}}
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp(info)):
+            with self.assertRaises(enrich.PostingMovedError) as cm:
+                enrich.ENRICH_REGISTRY["tencent"](row, self._SRC)
+        self.assertEqual(cm.exception.new_url, "https://tencent.wd1.myworkdayjobs.com/Tencent_Careers/job/"
+                                               "Malaysia-Kuala-Lumpur/Architect_R107538-1")
+
+    def test_postid_link_still_asks_tencent(self):
+        cap = {}
+
+        def fake_get(url, headers=None, timeout=None, params=None):
+            cap["url"], cap["params"] = url, params
+            return _Resp({"Code": 200, "Data": {"Responsibility": "负责后端", "Requirement": "三年经验"}})
+
+        with mock.patch.object(enrich.httpx, "get", fake_get):
+            body = enrich.ENRICH_REGISTRY["tencent"]({"jd_url": "https://careers.tencent.com/jobdesc.html?postId=123"},
+                                                    self._SRC)
+        self.assertEqual((cap["url"], cap["params"]),
+                         ("https://careers.tencent.com/tencentcareer/api/post/ByPostId", {"postId": "123"}))
+        self.assertIn("负责后端", body)
+
+
+class SettleMovedPostingTest(unittest.TestCase):
+    """巡检拿到「帖子挪了」之后的处置（enrich_backlog._settle_moved）。只在「旧链接 30 小时没被列表看到」且
+    「库里没有新链接的在招行」时动手：新链接已有在招行是写库端认旧链接的活，这里不抢。"""
+    _SRC = {"source_url": "https://co.wd1.myworkdayjobs.com/wday/cxs/co/Careers/jobs", "adapter_name": "workday",
+            "company": "Co", "regions": ["CN", "US", "SG", "Remote"]}
+    _OLD = "https://co.wd1.myworkdayjobs.com/en-US/Careers/job/Singapore/Eng_R-1"
+    _NEW = "https://co.wd1.myworkdayjobs.com/en-US/Careers/job/Shanghai/Eng_R-1"
+
+    def _row(self, hours_ago=40, summary="旧正文"):
+        return {"id": "job-1", "source_id": "src-1", "title": "Engineer", "jd_url": self._OLD, "job_type": None,
+                "summary": summary, "enrich_fail_count": 0,
+                "last_seen_at": datetime.now(timezone.utc) - timedelta(hours=hours_ago)}
+
+    def _run(self, row=None, location="Shanghai", country="CN", statuses=(), src=None, dry_run=False,
+             jobs_conn="conn", write_error=None, updated_rows=1):
+        moved = enrich.PostingMovedError(self._NEW, location, country, "<p>还在招的正文</p>")
+        writes = []
+
+        def fake_one(a, r, s):
+            raise moved
+
+        def fake_execute(conn, sql, params=None):
+            if write_error:
+                raise write_error
+            writes.append((sql, list(params or [])))
+            return updated_rows
+
+        sb = _FakeSB()
+        with mock.patch.object(enrich_backlog.enrich, "enrich_one", fake_one), \
+                mock.patch.object(enrich_backlog.jobs_db, "fetch_all",
+                                  lambda conn, sql, params=None: [{"status": s} for s in statuses]), \
+                mock.patch.object(enrich_backlog.jobs_db, "execute", fake_execute):
+            res = enrich_backlog.enrich_row(sb, row or self._row(), src or self._SRC, dry_run=dry_run,
+                                            jobs_conn=jobs_conn)
+        return res, writes, sb
+
+    @staticmethod
+    def _patch_of(write):
+        sql, params = write
+        cols = [c.split(" = ")[0] for c in sql.split(" set ", 1)[1].split(" where ")[0].split(", ")]
+        return dict(zip(cols, params)), sql, params[len(cols):]
+
+    def test_in_region_relinks_in_place_and_stays_active(self):
+        res, writes, _ = self._run()
+        self.assertEqual(res, "relinked")
+        patch, sql, where = self._patch_of(writes[0])
+        self.assertEqual((patch["jd_url"], patch["apply_url"]), (self._NEW, self._NEW))
+        self.assertEqual((patch["location"], patch["country_code"], patch["job_scope"]), ("上海", "CN", "domestic"))
+        self.assertNotIn("status", patch)
+        self.assertNotIn("summary", patch)  # 已有正文不重写
+        self.assertIn("enrich_checked_at", patch)
+        # 只动「还在招、还是旧链接、此刻仍 30 小时没被看到」的那一行：队列取完之后被别人动过就不换
+        self.assertIn("status = 'active' and jd_url = %s and last_seen_at < now()", sql)
+        self.assertEqual(where, ["job-1", self._OLD, enrich_backlog.MOVED_STALE_HOURS])
+
+    def test_relink_fills_missing_summary(self):
+        res, writes, _ = self._run(row=self._row(summary=None))
+        self.assertEqual(res, "relinked")
+        self.assertIn("还在招的正文", self._patch_of(writes[0])[0]["summary"])
+
+    def test_out_of_region_is_removed_and_relinked(self):
+        # 新地点不在本源地区内（马来西亚 / 台湾）：我们现在不收它 → removed；链接顺手换成新的，
+        # 日后列表又给出它时写库按 canonical 认到这一行，原 id 复活
+        for loc, cc in (("Kuala Lumpur, Malaysia", "MY"), ("Taipei, Taiwan", "TW")):
+            with self.subTest(loc=loc):
+                res, writes, _ = self._run(location=loc, country=cc)
+                self.assertEqual(res, "removed")
+                patch = self._patch_of(writes[0])[0]
+                self.assertEqual(patch["status"], "removed")
+                self.assertEqual((patch["jd_url"], patch["apply_url"]), (self._NEW, self._NEW))
+                self.assertNotIn("location", patch)
+
+    def test_removed_keeps_link_when_new_link_already_has_an_inactive_row(self):
+        res, writes, _ = self._run(location="Kuala Lumpur, Malaysia", country="MY", statuses=("removed",))
+        self.assertEqual(res, "removed")
+        patch = self._patch_of(writes[0])[0]
+        self.assertEqual(patch["status"], "removed")
+        self.assertNotIn("jd_url", patch)  # 不再造第二行占着同一个链接
+
+    def test_new_link_already_active_is_left_to_the_writer(self):
+        # 列表已经给了新链接（库里有它的在招行）→ 写库端会下架旧行并把最早首见记到新行上，这里只照常盖戳
+        res, writes, _ = self._run(location="Kuala Lumpur, Malaysia", country="MY", statuses=("active",))
+        self.assertEqual(res, "alive")
+        patch, _sql, where = self._patch_of(writes[0])
+        self.assertEqual(list(patch), ["enrich_checked_at"])
+        self.assertEqual(where, ["job-1"])
+
+    def test_recently_listed_row_is_not_touched(self):
+        # 旧链接 30 小时内还被列表看到：对方刚改、列表还没来得及给新链接 → 不动，留给下一轮列表
+        res, writes, _ = self._run(row=self._row(hours_ago=5), location="Kuala Lumpur, Malaysia", country="MY")
+        self.assertEqual(res, "alive")
+        self.assertEqual(list(self._patch_of(writes[0])[0]), ["enrich_checked_at"])
+
+    def test_unknown_last_seen_or_no_jobs_db_is_not_touched(self):
+        row = self._row()
+        row["last_seen_at"] = None
+        res, writes, _ = self._run(row=row, location="Kuala Lumpur, Malaysia", country="MY")
+        self.assertEqual(res, "alive")
+        self.assertEqual(list(self._patch_of(writes[0])[0]), ["enrich_checked_at"])
+        # Supabase 兜底路径（没配香港库）不处置，照常当在招
+        res, writes, sb = self._run(location="Kuala Lumpur, Malaysia", country="MY", jobs_conn=None)
+        self.assertEqual((res, writes), ("alive", []))
+        self.assertEqual(list(sb.updates["job-1"]), ["enrich_checked_at"])
+
+    def test_tencent_moved_and_unlisted_is_removed_even_in_region(self):
+        # 腾讯那条源不按地区筛：挪了且两个链接都不在列表里 = 已不在腾讯的公开列表上
+        src = {"source_url": "https://careers.tencent.com/", "adapter_name": "tencent", "company": "腾讯",
+               "regions": ["CN"]}
+        res, writes, _ = self._run(src=src)
+        self.assertEqual(res, "removed")
+        self.assertEqual(self._patch_of(writes[0])[0]["status"], "removed")
+
+    def test_dry_run_does_not_write(self):
+        res, writes, _ = self._run(dry_run=True)
+        self.assertEqual((res, writes), ("relinked", []))
+
+    def test_unclear_location_is_not_touched(self):
+        # 宁可漏判：地点说不清国家（空 / 光写城市名 / 门牌地址）且对方没自报国家 → 不动，照常当在招
+        for loc, cc in ((None, None), ("", None), ("Frederick", None), ("LOC6035: Rua 680", None),
+                        ("Kuala Lumpur, Malaysia", None),
+                        (None, "US"), ("", "DE")):  # 没给主地点：换链接会把地点写空，自报国家也不用
+            with self.subTest(loc=loc, cc=cc):
+                res, writes, _ = self._run(location=loc, country=cc)
+                self.assertEqual(res, "alive")
+                self.assertEqual(list(self._patch_of(writes[0])[0]), ["enrich_checked_at"])
+
+    def test_unclear_location_uses_declared_country(self):
+        # geo 只认得少数国家（「Kuala Lumpur, Malaysia」它也说不清），说不清时看 Workday 自报的国家
+        res, writes, _ = self._run(location="Lynnfield MA Branch", country="US")
+        self.assertEqual(res, "relinked")
+        patch = self._patch_of(writes[0])[0]
+        self.assertEqual((patch["jd_url"], patch["country_code"]), (self._NEW, "US"))
+        res, writes, _ = self._run(location="Kuala Lumpur, Malaysia", country="MY")
+        self.assertEqual((res, self._patch_of(writes[0])[0]["status"]), ("removed", "removed"))
+
+    def test_location_and_declared_country_disagree_is_not_touched(self):
+        # 只抓国内的源：主地点新加坡（地点自己说得清、不在范围内），附加地点上海（自报国家折成 CN）
+        # → 列表的中国分组多半还收它，两边打架 → 不动
+        src = dict(self._SRC, regions=["CN"])
+        res, writes, _ = self._run(location="Singapore", country="CN", src=src)
+        self.assertEqual(res, "alive")
+        self.assertEqual(list(self._patch_of(writes[0])[0]), ["enrich_checked_at"])
+
+    def test_in_region_does_not_relink_onto_a_link_another_row_holds(self):
+        # 新链接上有一行下架 / 撤岗过的：换过去会撞「公司+标题+地点+链接」不分状态的唯一约束 → 不动
+        res, writes, _ = self._run(statuses=("removed",))
+        self.assertEqual(res, "alive")
+        self.assertEqual(list(self._patch_of(writes[0])[0]), ["enrich_checked_at"])
+
+    def test_write_failure_falls_back_to_alive_stamp(self):
+        # 另一轮抓取刚把新链接插成在招行 → 换链接撞唯一索引：这一轮照常盖在招章，下一轮归写库端
+        writes = []
+
+        def fake_execute(conn, sql, params=None):
+            if "jd_url = %s, apply_url" in sql:
+                raise RuntimeError("duplicate key value violates unique constraint")
+            writes.append((sql, list(params or [])))
+            return 1
+
+        moved = enrich.PostingMovedError(self._NEW, "Shanghai", "CN", "<p>正文</p>")
+        with mock.patch.object(enrich_backlog.enrich, "enrich_one", mock.Mock(side_effect=moved)), \
+                mock.patch.object(enrich_backlog.jobs_db, "fetch_all", lambda *a, **k: []), \
+                mock.patch.object(enrich_backlog.jobs_db, "execute", fake_execute):
+            res = enrich_backlog.enrich_row(None, self._row(), self._SRC, jobs_conn="conn")
+        self.assertEqual(res, "alive")
+        self.assertEqual(list(self._patch_of(writes[0])[0]), ["enrich_checked_at"])
+
+    def test_row_changed_meanwhile_falls_back(self):
+        # 查完之后这一行被别人动过（换了链接 / 下架了）：update 命中 0 行 → 不算处置
+        res, writes, _ = self._run(updated_rows=0)
+        self.assertEqual(res, "alive")
+
+    def test_settle_error_never_escapes(self):
+        with mock.patch.object(enrich_backlog, "_settle_moved", mock.Mock(side_effect=TypeError("boom"))):
+            res, _writes, _ = self._run()
+        self.assertEqual(res, "alive")
+
+    def test_guard_counts_moved_rows(self):
+        # externalUrl 的写法哪天变了，每个岗都会被认成「挪了」：下架 / 换链接都算进熔断分子
+        for verdict in ("removed", "relinked"):
+            with self.subTest(verdict=verdict):
+                rows = [{"id": f"j{i}", "source_id": f"s{i % 10}", "jd_url": "u"} for i in range(500)]
+                smap = {f"s{i}": {"adapter_name": "workday", "company": "Co",
+                                  "source_url": f"https://t{i}.wd1.myworkdayjobs.com/wday/cxs/t/S/jobs"} for i in range(10)}
+                with mock.patch.object(enrich_backlog, "fetch_liveness_queue", lambda *a, **k: (rows, smap)), \
+                        mock.patch.object(enrich_backlog.jobs_db, "enabled", lambda: False), \
+                        mock.patch.object(enrich_backlog.must_apply, "patterns", lambda: []), \
+                        mock.patch.object(enrich_backlog, "enrich_row", lambda *a, **k: verdict):
+                    stat = enrich_backlog.drain(None, adapter="workday", workers=1, dry_run=True, sweep=True,
+                                                make_sb=lambda: None)
+                self.assertEqual(stat[verdict], enrich_backlog.EXPIRE_GUARD_MIN_SAMPLE)
+                self.assertEqual(stat["skipped"], 500 - enrich_backlog.EXPIRE_GUARD_MIN_SAMPLE)
+
+    def test_last_seen_must_be_a_datetime(self):
+        # 香港库给带时区的 datetime；Supabase 兜底路径本来就不处置（没有 jobs_conn），字符串一律当没有
+        self.assertEqual(enrich_backlog._as_utc(datetime(2026, 10, 14, 1, 2, 3)),
+                         datetime(2026, 10, 14, 1, 2, 3, tzinfo=timezone.utc))
+        self.assertIsNone(enrich_backlog._as_utc("2026-10-14T01:02:03Z"))
 
 
 class OracleDetailTest(unittest.TestCase):
