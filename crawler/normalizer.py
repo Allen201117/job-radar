@@ -1286,3 +1286,34 @@ def canonicalize_jd_url(url):
         query = "&".join(kept)
     base = re.sub(r"/+$", "", base)
     return base + "?" + query if query else base
+
+
+# Workday 公开链接：{host}/[{locale}/]{site}/job/[{地点段}/]{帖子锚}。
+_WORKDAY_POSTING_RE = re.compile(
+    r"^https?://([^/?#]+\.myworkdayjobs\.com)/(?:[a-z]{2}-[a-z]{2}/)?([^/?#]+)/job/(?:[^/?#]+/)?([^/?#]+)$",
+    re.I)
+
+
+def posting_identity(url):
+    """帖子身份：对方给同一个帖子换了链接也不变的那部分；认不出返回 None（绝大多数源都是 None）。
+
+    和 canonicalize_jd_url 的分工：canonical 回答「这两个链接是不是同一个链接」，库里的唯一约束挂在它上面；
+    这里回答「这两个**不同的**链接是不是同一个帖子」，只给 jobs_db 写库时认旧链接用（plan_moved_postings）。
+
+    目前只有 Workday。它的链接是 {host}/{locale}/{site}/job/{地点段}/{锚}，对方只按最后一段（接口报错里叫
+    Job_Posting_Anchor_ID）找帖子：地点段随便写、整段去掉都回同一个帖子，锚错一个字符就 404。
+    地点段是帖子主地点的 slug，对方一改主地点它就跟着变，于是同一个帖子有了第二个链接、旧链接照样能开。
+    2026-10-12 实测：101 个启用源库里同一个锚挂着多行在招的 569 组 / 1,161 行逐行打详情，
+    561 组各行都回 200 且是同一个帖子 id（另 8 组两行都已撤），帖子 id 不同的 0 组。
+    ⚠️ 身份是整个末段，不是末尾的招聘编号：同一个编号下对方可以发不止一个帖子，末尾加 -1 / -2 区分
+       （详情里的 jobReqId 不带这个后缀），那是另一个帖子；
+       标题改了锚不变（锚在发帖那一刻定死），所以也不能拿标题段比。
+    host / site 不分大小写（同一个站点 ShellCareers / shellcareers 都能开）。锚对方其实也不分大小写（实测），
+    这里仍原样比：列表给的大小写是固定的，用不着放宽——宁可漏认，不把两个帖子认成一个。
+    """
+    if not url:
+        return None
+    m = _WORKDAY_POSTING_RE.match(str(url).strip().split("?", 1)[0].rstrip("/"))
+    if not m:
+        return None
+    return f"workday:{m.group(1).lower()}/{m.group(2).lower()}/{m.group(3)}"

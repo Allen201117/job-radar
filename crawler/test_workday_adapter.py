@@ -364,5 +364,357 @@ class WorkdayLocationSourceTest(unittest.TestCase):
         self.assertEqual({j.location for j in adapter.parse(html)}, {"12100 Samsung Blvd, Austin, TX, USA"})
 
 
+# ── 同一个帖子换了链接（2026-10-12）──────────────────────────────────────────────
+# 例子都是当天库里 / 对方接口上的真实链接：空气产品把主地点从莆田改成晋江，路径的地点段跟着变，
+# 两条链接打详情回的是同一个帖子（同一个 id，自报的当前链接是晋江那条）。
+_AP = "https://airproducts.wd5.myworkdayjobs.com/en-US/AP0001/job"
+_AP_OLD = f"{_AP}/Putian-Fujian/Distribution-Safety-Specialist_JR-2026-20603"
+_AP_NEW = f"{_AP}/Jinjiang-CNMB-MUR/Distribution-Safety-Specialist_JR-2026-20603"
+_SRC = "11111111-1111-1111-1111-111111111111"
+
+
+class WorkdayPostingIdentityTest(unittest.TestCase):
+    def test_location_segment_is_not_part_of_the_identity(self):
+        self.assertIsNotNone(normalizer.posting_identity(_AP_OLD))
+        self.assertEqual(normalizer.posting_identity(_AP_OLD), normalizer.posting_identity(_AP_NEW))
+
+    def test_forms_without_location_segment_or_locale(self):
+        # 对方没填地点时路径只有一段；腾讯自己的接口给的 Workday 链接不带 locale（库里 626 行）。
+        ident = normalizer.posting_identity(_AP_NEW)
+        self.assertEqual(normalizer.posting_identity(f"{_AP}/Distribution-Safety-Specialist_JR-2026-20603"), ident)
+        self.assertEqual(
+            normalizer.posting_identity(
+                "https://airproducts.wd5.myworkdayjobs.com/AP0001/job/x/Distribution-Safety-Specialist_JR-2026-20603"),
+            ident)
+        self.assertEqual(
+            normalizer.posting_identity(
+                "https://tencent.wd1.myworkdayjobs.com/Tencent_Careers/job/Singapore/Game-Designer_R106214"),
+            normalizer.posting_identity(
+                "https://tencent.wd1.myworkdayjobs.com/Tencent_Careers/job/Game-Designer_R106214"))
+
+    def test_host_and_site_case_do_not_matter(self):
+        # 同一个站点 Visa / visa 两种写法都能开（迁移 225 壳牌那条影子源就是这么来的）。
+        a = "https://visa.wd5.myworkdayjobs.com/en-US/Visa/job/Singapore/VP_REF075667W"
+        b = "https://VISA.wd5.myworkdayjobs.com/en-US/visa/job/Singapore-Paya-Lebar-Green/VP_REF075667W"
+        self.assertEqual(normalizer.posting_identity(a), normalizer.posting_identity(b))
+
+    def test_query_and_trailing_slash_are_ignored(self):
+        self.assertEqual(normalizer.posting_identity(_AP_NEW + "/?source=LinkedIn"),
+                         normalizer.posting_identity(_AP_NEW))
+
+    def test_same_requisition_number_is_not_enough(self):
+        # 库里真有的两行：编号段都是「-1」，是两个帖子（详情回的帖子 id 不同）。按编号认会把它们并成一个。
+        base = "https://x.wd3.myworkdayjobs.com/en-US/Careers/job/Shanghai-China"
+        self.assertNotEqual(normalizer.posting_identity(f"{base}/Cost-Engineer_-1"),
+                            normalizer.posting_identity(f"{base}/Buyer_-1"))
+        # 同一个编号下的另一个帖子，对方在末尾加 -1 / -2 区分（详情里的 jobReqId 不带后缀）。
+        hp = "https://hp.wd5.myworkdayjobs.com/en-US/ExternalCareerSite/job/Spring-Texas"
+        self.assertNotEqual(normalizer.posting_identity(f"{hp}/Strategist_3159676-1"),
+                            normalizer.posting_identity(f"{hp}/Strategist_3159676-2"))
+        self.assertNotEqual(normalizer.posting_identity(f"{hp}/Strategist_3159676"),
+                            normalizer.posting_identity(f"{hp}/Strategist_3159676-1"))
+
+    def test_other_sites_of_the_same_tenant_are_other_postings(self):
+        host = "https://x.wd3.myworkdayjobs.com/en-US"
+        self.assertNotEqual(normalizer.posting_identity(f"{host}/Careers/job/A/T_R1"),
+                            normalizer.posting_identity(f"{host}/Campus/job/A/T_R1"))
+
+    def test_everything_else_has_no_identity(self):
+        for url in (None, "", "   ",
+                    "https://boards.greenhouse.io/acme/jobs/123",
+                    "https://app.mokahr.com/social-recruitment/acme/1#/job/abc",
+                    "https://airproducts.wd5.myworkdayjobs.com/en-US/AP0001",            # 列表页
+                    "https://airproducts.wd5.myworkdayjobs.com/en-US/AP0001/details/x",  # 不是 /job/ 路由
+                    f"{_AP}/a/b/Distribution-Safety-Specialist_JR-2026-20603",           # 两段地点：对方回 406
+                    "https://evil.example/myworkdayjobs.com/en-US/S/job/A/T_R1"):
+            self.assertIsNone(normalizer.posting_identity(url), url)
+
+
+def _sib(row_id, url, first_seen, posted_at=None, source_id=_SRC):
+    return {"id": row_id, "source_id": source_id, "canonical_jd_url": url,
+            "first_seen_at": first_seen, "posted_at": posted_at}
+
+
+_NOTHING = {"relink": {}, "retire": {}, "first_seen": {}}
+_AP_MID = f"{_AP}/Xiamen/Distribution-Safety-Specialist_JR-2026-20603"
+
+
+class WorkdayMovedPostingPlanTest(unittest.TestCase):
+    def setUp(self):
+        import jobs_db
+        self.jobs_db = jobs_db
+        self.item = (_AP_NEW, {"jd_url": _AP_NEW, "source_id": _SRC})
+
+    def test_old_row_is_relinked_when_the_new_url_has_no_row(self):
+        old = _sib("old", _AP_OLD, "2026-08-18")
+        plan = self.jobs_db.plan_moved_postings([self.item], {}, [old])
+        self.assertEqual(plan, {"relink": {_AP_NEW: old}, "retire": {}, "first_seen": {}})
+
+    def test_earliest_row_survives_when_several_old_links_exist(self):
+        # 地点改过两次：库里留着两条旧链接。最早那条顶上，另一条下架。
+        plan = self.jobs_db.plan_moved_postings(
+            [self.item], {}, [_sib("mid", _AP_MID, "2026-09-01"), _sib("old", _AP_OLD, "2026-08-18")])
+        self.assertEqual(plan["relink"][_AP_NEW]["id"], "old")
+        self.assertEqual(plan["retire"], {_AP_NEW: ["mid"]})
+
+    def test_old_row_is_retired_when_the_new_url_already_has_a_row(self):
+        # 存量就是这个形态：新链接早被当成新岗插过一行。旧行下架，最早的首见时间记到留下的那一行上。
+        existing = {_AP_NEW: {"id": "new", "status": "active", "posted_at": None}}
+        plan = self.jobs_db.plan_moved_postings([self.item], existing, [_sib("old", _AP_OLD, "2026-08-18")])
+        self.assertEqual(plan, {"relink": {}, "retire": {_AP_NEW: ["old"]}, "first_seen": {_AP_NEW: "2026-08-18"}})
+
+    def test_removed_row_at_the_new_url_counts_as_the_survivor(self):
+        # 地点改回去：新链接上是之前下架的那一行，upsert 会把它复活；这时在招的另一条才是旧链接。
+        existing = {_AP_NEW: {"id": "back", "status": "removed", "posted_at": None}}
+        plan = self.jobs_db.plan_moved_postings([self.item], existing, [_sib("old", _AP_OLD, "2026-08-18")])
+        self.assertEqual(plan["retire"], {_AP_NEW: ["old"]})
+
+    def test_nothing_is_retired_when_the_new_url_row_is_expired(self):
+        # expired 列表重抓不复活；这时再把旧行下架，这个帖子就一行在招的都没有了。
+        existing = {_AP_NEW: {"id": "dead", "status": "expired", "posted_at": None}}
+        plan = self.jobs_db.plan_moved_postings([self.item], existing, [_sib("old", _AP_OLD, "2026-08-18")])
+        self.assertEqual(plan, _NOTHING)
+
+    def test_a_link_still_in_this_batch_is_not_an_old_link(self):
+        # 并集查询之间对方正好改了地点：同一个帖子这一轮出现了两个链接。分不出哪个是现在的，这轮不动。
+        items = [self.item, (_AP_OLD, {"jd_url": _AP_OLD, "source_id": _SRC})]
+        siblings = [_sib("old", _AP_OLD, "2026-08-18"), _sib("new", _AP_NEW, "2026-10-01")]
+        existing = {_AP_OLD: {"id": "old", "status": "active"}, _AP_NEW: {"id": "new", "status": "active"}}
+        self.assertEqual(self.jobs_db.plan_moved_postings(items, existing, siblings), _NOTHING)
+
+    def test_two_links_in_the_batch_block_a_third_stale_one_too(self):
+        items = [self.item, (_AP_OLD, {"jd_url": _AP_OLD, "source_id": _SRC})]
+        plan = self.jobs_db.plan_moved_postings(items, {}, [_sib("third", _AP_MID, "2026-07-01")])
+        self.assertEqual(plan, _NOTHING)
+
+    def test_the_row_itself_is_not_its_own_old_link(self):
+        existing = {_AP_NEW: {"id": "new", "status": "active"}}
+        plan = self.jobs_db.plan_moved_postings([self.item], existing, [_sib("new", _AP_NEW, "2026-10-01")])
+        self.assertEqual(plan, _NOTHING)
+
+    def test_another_posting_of_the_same_requisition_is_left_alone(self):
+        # 粗筛按末段取行，取回来的一定同末段；这里直接喂一条别的帖子，确认身份那道门自己也拦得住。
+        other = _sib("other", f"{_AP}/Putian-Fujian/Distribution-Safety-Specialist_JR-2026-20603-1", "2026-08-18")
+        self.assertEqual(self.jobs_db.plan_moved_postings([self.item], {}, [other]), _NOTHING)
+
+    def test_same_path_on_another_host_is_not_the_same_posting(self):
+        # 库里真有这种行：2026-06 那次 adapter 单例串台，把别家租户的 host 拼到了这条路径前面。
+        other_host = _sib("ghost", _AP_OLD.replace("airproducts.wd5", "resmed.wd3"), "2026-06-17")
+        self.assertEqual(self.jobs_db.plan_moved_postings([self.item], {}, [other_host]), _NOTHING)
+
+    def test_rows_of_another_source_are_left_alone(self):
+        foreign = _sib("foreign", _AP_OLD, "2026-08-18", source_id="22222222-2222-2222-2222-222222222222")
+        self.assertEqual(self.jobs_db.plan_moved_postings([self.item], {}, [foreign]), _NOTHING)
+
+    def test_mixed_source_batch_pairs_each_item_with_its_own_source(self):
+        other_src = "22222222-2222-2222-2222-222222222222"
+        other_new = "https://visa.wd5.myworkdayjobs.com/en-US/Visa/job/Singapore-Paya-Lebar-Green/VP_REF075667W"
+        other_old = "https://visa.wd5.myworkdayjobs.com/en-US/Visa/job/Singapore-SingPost/VP_REF075667W"
+        items = [self.item, (other_new, {"jd_url": other_new, "source_id": other_src})]
+        siblings = [_sib("ap-old", _AP_OLD, "2026-08-18"), _sib("visa-old", other_old, "2026-06-30", source_id=other_src)]
+        plan = self.jobs_db.plan_moved_postings(items, {}, siblings)
+        self.assertEqual({c: r["id"] for c, r in plan["relink"].items()}, {_AP_NEW: "ap-old", other_new: "visa-old"})
+
+    def test_items_without_a_link_or_a_source_are_ignored(self):
+        items = [(None, {"jd_url": None, "source_id": _SRC}), ("", {"jd_url": "", "source_id": _SRC}),
+                 (_AP_NEW, {"jd_url": _AP_NEW})]  # 最后一条没有 source_id
+        self.assertEqual(self.jobs_db.plan_moved_postings(items, {}, [_sib("old", _AP_OLD, "2026-08-18")]), _NOTHING)
+
+    def test_rows_without_first_seen_never_win_as_earliest(self):
+        plan = self.jobs_db.plan_moved_postings(
+            [self.item], {}, [_sib("blank", _AP_MID, None), _sib("old", _AP_OLD, "2026-08-18")])
+        self.assertEqual(plan["relink"][_AP_NEW]["id"], "old")
+        self.assertEqual(plan["retire"], {_AP_NEW: ["blank"]})
+
+    def test_last_segment_prefilter_matches_what_the_identity_looks_at(self):
+        # 粗筛（SQL 取末段）漏掉的行，身份函数再严也认不回来：两边对「末段」的理解必须一致。
+        seg = "Distribution-Safety-Specialist_JR-2026-20603"
+        for url in (_AP_NEW, _AP_NEW + "?source=LinkedIn", f"{_AP}/{seg}",
+                    f"https://airproducts.wd5.myworkdayjobs.com/AP0001/job/x/{seg}"):
+            self.assertEqual(self.jobs_db._posting_last_segment(normalizer.canonicalize_jd_url(url)), seg, url)
+
+
+class _FakeCursor:
+    """按 SQL 片段回预设结果、记下每一条语句；只够 upsert 这条链用。"""
+
+    def __init__(self, by_canonical=(), siblings=(), fail_on=None, rowcount=1):
+        self.by_canonical, self.siblings = list(by_canonical), list(siblings)
+        self.fail_on, self.rowcount = fail_on, rowcount  # fail_on = (SQL 片段, 异常)
+        self.executed = []
+        self._rows = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, sql, params=None):
+        sql = " ".join(sql.split())
+        self.executed.append((sql, params))
+        if self.fail_on and self.fail_on[0] in sql:
+            raise self.fail_on[1]
+        if "split_part" in sql:
+            self._rows = self.siblings
+        elif sql.startswith("select") and "canonical_jd_url" in sql:
+            self._rows = self.by_canonical
+        else:
+            self._rows = []
+
+    def fetchall(self):
+        return self._rows
+
+    def statements(self, needle):
+        return [(s, p) for s, p in self.executed if needle in s]
+
+    def order(self, *needles):
+        """各片段第一次出现的先后位置（没出现记 -1）。"""
+        return [next((i for i, (s, _p) in enumerate(self.executed) if n in s), -1) for n in needles]
+
+
+_RELINK = "update jobs set jd_url = %s where id = %s"
+_RETIRE = "status = 'removed'"
+_CARRY = "least(first_seen_at"
+
+
+class WorkdayMovedPostingWriteTest(unittest.TestCase):
+    """写库两条入口（批量 / 单条）都要走同一套旧链接处置。"""
+
+    def setUp(self):
+        import jobs_db
+        self.jobs_db = jobs_db
+        self.job = {"jd_url": _AP_NEW, "apply_url": _AP_NEW, "source_id": _SRC, "company": "空气产品",
+                    "title": "Distribution Safety Specialist", "location": "Jinjiang"}
+        self.addCleanup(mock.patch.stopall)
+        mock.patch.object(jobs_db, "_annotate_recruitment", return_value=None).start()  # 不起 node
+        self.events = mock.patch.object(jobs_db, "record_job_events", return_value=0).start()
+        self.batch = mock.patch.object(jobs_db.psycopg2.extras, "execute_batch").start()
+        self.values = mock.patch.object(jobs_db.psycopg2.extras, "execute_values").start()
+        # 整批 UPDATE / INSERT 走的是 psycopg2.extras，不经过 cursor.execute：手动记一笔，才比得出先后。
+        self.batch.side_effect = lambda cur, sql, rows, **kw: cur.executed.append(("<<batch update>>", rows))
+        self.values.side_effect = lambda cur, sql, rows, **kw: cur.executed.append(("<<batch insert>>", rows))
+
+    def _conn(self, cur):
+        conn = mock.Mock()
+        conn.cursor = lambda *a, **k: cur
+        return conn
+
+    def _old(self):
+        return ("old-id", _SRC, _AP_OLD, "2026-08-18", None)
+
+    def test_batch_relinks_the_old_row_in_place_instead_of_inserting(self):
+        cur = _FakeCursor(by_canonical=[], siblings=[self._old()])
+        created, updated = self.jobs_db.upsert_jobs_batch(self._conn(cur), [dict(self.job)])
+        self.assertEqual((created, updated), (0, 1))
+        self.values.assert_not_called()  # 没有新插一行
+        (sql, params), = cur.statements(_RELINK)
+        self.assertEqual(params, (_AP_NEW, "old-id", _AP_OLD))
+        self.assertIn("status = 'active' and canonical_jd_url = %s", sql)  # 行被别人动过就不换
+        (_cur, _sql, rows), _kw = self.batch.call_args
+        self.assertEqual(rows[0][-1], "old-id")  # 之后按既有行 UPDATE：id / first_seen_at / 用户操作都保住
+        self.assertEqual(rows[0][self.jobs_db._UPDATE_COLS.index("jd_url")], _AP_NEW)
+        self.assertEqual(cur.statements(_RETIRE), [])
+        relink_at, write_at = cur.order(_RELINK, "<<batch update>>")
+        self.assertLess(relink_at, write_at)
+
+    def test_relinked_row_is_not_reported_as_a_new_job(self):
+        cur = _FakeCursor(by_canonical=[], siblings=[self._old()])
+        self.jobs_db.upsert_jobs_batch(self._conn(cur), [dict(self.job)])
+        (_conn, events), _kw = self.events.call_args
+        self.assertEqual(events, [])  # 没有 FIRST_SEEN：它不是新岗
+        self.assertEqual(cur.statements("job_closures"), [])  # 也不去数「撤过的岗又被当新岗插入」
+
+    def test_batch_retires_the_old_row_after_the_write_when_new_url_exists(self):
+        cur = _FakeCursor(by_canonical=[("new-id", _AP_NEW, "active", None)],
+                          siblings=[("new-id", _SRC, _AP_NEW, "2026-10-01", None), self._old()])
+        created, updated = self.jobs_db.upsert_jobs_batch(self._conn(cur), [dict(self.job)])
+        self.assertEqual((created, updated), (0, 1))
+        (sql, params), = cur.statements(_RETIRE)
+        self.assertEqual(params, (["old-id"],))
+        self.assertIn("status = 'active'", sql)  # 只动在招行
+        self.assertEqual(cur.statements(_CARRY)[0][1], ("2026-08-18", "new-id"))
+        self.assertEqual(cur.statements(_RELINK), [])
+        write_at, carry_at, retire_at = cur.order("<<batch update>>", _CARRY, _RETIRE)
+        self.assertTrue(0 <= write_at < carry_at < retire_at, cur.executed)  # 先写、再记首见、最后下架
+
+    def test_old_row_stays_when_the_batch_write_fails(self):
+        cur = _FakeCursor(by_canonical=[("new-id", _AP_NEW, "active", None)], siblings=[self._old()])
+        self.batch.side_effect = RuntimeError("connection lost")
+        with self.assertRaises(RuntimeError):
+            self.jobs_db.upsert_jobs_batch(self._conn(cur), [dict(self.job)])
+        self.assertEqual(cur.statements(_RETIRE), [])
+
+    def test_lookup_failure_only_warns_and_ingestion_goes_on(self):
+        cur = _FakeCursor(by_canonical=[], siblings=[self._old()], fail_on=("split_part", RuntimeError("timeout")))
+        created, updated = self.jobs_db.upsert_jobs_batch(self._conn(cur), [dict(self.job)])
+        self.assertEqual((created, updated), (1, 0))  # 回到改之前：当新岗插入，下一轮再处置旧行
+        self.assertEqual(cur.statements(_RELINK) + cur.statements(_RETIRE), [])
+
+    def test_relink_that_hits_the_unique_index_falls_back_to_a_plain_insert(self):
+        # 另一轮抓取抢先把新链接插进去了：这一个帖子退回当新岗插入（那条路自带撞键兜底），整批不受影响。
+        boom = self.jobs_db.psycopg2.errors.UniqueViolation("jobs_canonical_jd_url_active_uniq")
+        cur = _FakeCursor(by_canonical=[], siblings=[self._old(), ("mid-id", _SRC, _AP_MID, "2026-09-01", None)],
+                          fail_on=(_RELINK, boom))
+        created, updated = self.jobs_db.upsert_jobs_batch(self._conn(cur), [dict(self.job)])
+        self.assertEqual((created, updated), (1, 0))
+        self.assertEqual(cur.statements(_RETIRE), [])  # 没换成，这个帖子名下别的旧行也先不动
+
+    def test_relink_is_skipped_when_the_old_row_changed_under_us(self):
+        cur = _FakeCursor(by_canonical=[], siblings=[self._old()], rowcount=0)
+        created, updated = self.jobs_db.upsert_jobs_batch(self._conn(cur), [dict(self.job)])
+        self.assertEqual((created, updated), (1, 0))
+
+    def test_retire_failure_only_warns(self):
+        cur = _FakeCursor(by_canonical=[("new-id", _AP_NEW, "active", None)], siblings=[self._old()],
+                          fail_on=(_RETIRE, RuntimeError("blip")))
+        self.assertEqual(self.jobs_db.upsert_jobs_batch(self._conn(cur), [dict(self.job)]), (0, 1))
+        self.events.assert_called_once()  # 事件照记，抓取不算失败
+
+    def test_single_upsert_takes_the_same_path(self):
+        cur = _FakeCursor(by_canonical=[], siblings=[self._old(), ("mid-id", _SRC, _AP_MID, "2026-09-01", None)])
+        self.assertEqual(self.jobs_db.upsert_job(self._conn(cur), dict(self.job)), "updated")
+        self.assertEqual(cur.statements(_RELINK)[0][1], (_AP_NEW, "old-id", _AP_OLD))
+        full_updates = [p for s, p in cur.executed if s.startswith("update jobs set") and "last_seen_at" in s]
+        self.assertEqual(full_updates[0][-1], "old-id")
+        self.assertEqual(cur.statements("insert into jobs"), [])
+        self.assertEqual(cur.statements(_RETIRE)[0][1], (["mid-id"],))  # 第二条旧链接行下架
+
+    def test_single_upsert_asks_only_when_the_link_is_new(self):
+        # 逐岗调用的入口：链接已有行就照常 UPDATE，不为每个岗多问一次库。
+        cur = _FakeCursor(by_canonical=[("new-id", "active")], siblings=[self._old()])
+        self.assertEqual(self.jobs_db.upsert_job(self._conn(cur), dict(self.job)), "updated")
+        self.assertEqual(cur.statements("split_part") + cur.statements(_RETIRE), [])
+
+    def test_batch_fallback_does_not_redo_the_move_per_row(self):
+        # 整批 INSERT 撞键后逐行兜底：那时只看得见一条，分不出「这一轮同一个帖子给了两个链接」。
+        self.values.side_effect = self.jobs_db.psycopg2.errors.UniqueViolation("dup")
+        cur = _FakeCursor(by_canonical=[], siblings=[])
+        with mock.patch.object(self.jobs_db, "upsert_job", return_value="created") as single:
+            self.jobs_db.upsert_jobs_batch(self._conn(cur), [dict(self.job)])
+        self.assertEqual(single.call_args.kwargs, {"moved_postings": False})
+
+    def test_sources_without_posting_identity_cost_no_extra_query(self):
+        job = dict(self.job, jd_url="https://boards.greenhouse.io/acme/jobs/1", apply_url=None)
+        cur = _FakeCursor(by_canonical=[], siblings=[("x", _SRC, "y", None, None)])
+        self.jobs_db.upsert_jobs_batch(self._conn(cur), [job])
+        self.assertEqual(cur.statements("split_part"), [])
+        self.values.assert_called_once()
+
+    def test_sibling_lookup_is_scoped_to_active_rows_of_the_same_source(self):
+        cur = _FakeCursor(by_canonical=[], siblings=[])
+        self.jobs_db.upsert_jobs_batch(self._conn(cur), [dict(self.job)])
+        (sql, params), = cur.statements("split_part")
+        self.assertIn("status = 'active'", sql)
+        self.assertIn("source_id = any(", sql)
+        self.assertEqual(params, ([_SRC], ["Distribution-Safety-Specialist_JR-2026-20603"]))
+
+    def test_relink_relies_on_the_normal_update_leaving_identity_columns_alone(self):
+        # 原地换链接之后走既有行那条 UPDATE：它必须不动 id / first_seen_at，并把 apply_url 一起写成新的。
+        self.assertIn("jd_url", self.jobs_db._UPDATE_COLS)
+        self.assertIn("apply_url", self.jobs_db._UPDATE_COLS)
+        self.assertNotIn("first_seen_at", self.jobs_db._UPDATE_COLS)
+        self.assertNotIn("id", self.jobs_db._UPDATE_COLS)
+
+
 if __name__ == "__main__":
     unittest.main()
