@@ -27,7 +27,7 @@ import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
 
-from normalizer import canonicalize_jd_url
+from normalizer import canonicalize_jd_url, posting_identity
 from recruitment_classify import annotate as _annotate_recruitment
 
 # jobs 可写列（与 jobs-db/schema.sql 对齐）。canonical_jd_url 由触发器维护、search_doc v1 不填 → 都不在写入列。
@@ -473,6 +473,155 @@ def _find_existing_id_by_canonical(cur, canon):
     return rows[0][0]
 
 
+# ── 同一个帖子换了链接（2026-10-12）────────────────────────────────────────────
+# ❌ Workday 改了帖子的主地点，链接里的地点段跟着变，旧链接照样能开（对方只按最后一段找帖子）。
+#    列表重抓按新链接查 canonical 查不到 → 插一行新的；旧链接那一行再也不被列表看到，逐岗探活却每次都回 200
+#    → 同一个岗两行都在招。清存量之前全库在招里这样的有 587 组 / 多出 610 行，最早的挂了三个半月。
+# ✅ 写库时多问一句「本源在招行里有没有同一个帖子的旧链接」（帖子身份见 normalizer.posting_identity）：
+#    · 新链接还没有行 → 把最早的那条旧行**原地**换成新链接（保住 id / first_seen_at / 用户的收藏与投递）；
+#    · 新链接已经有行 → 旧行下架成 removed，最早的 first_seen_at 记到留下的那一行上。
+# 判「旧」只凭一条：同一个帖子、这一轮列表给的是另一个链接。不看 fetch_complete——帖子身份在对方站内唯一，
+# 列表没翻全也不影响「这个帖子现在的链接是哪一个」。
+# ⚠️ 这一整套是入库之外的附带整理，任何一步出错都只告警、照常入库（同 mark_reopened_from_closures）：
+#    认不出旧链接的后果只是回到改之前——多插一行，下一轮抓取走「新链接已有行」那条路把旧行下架。
+
+def _posting_last_segment(canon):
+    return str(canon).split("?", 1)[0].rsplit("/", 1)[-1]
+
+
+def _fetch_posting_siblings(cur, items) -> list:
+    """本批里认得出帖子身份的岗，在库里同源、在招、链接末段相同的行（含它自己）。认不出身份的批次不发查询。"""
+    want = {}  # source_id → 末段集合
+    for canon, job in items:
+        sid = job.get("source_id")
+        if canon and sid and posting_identity(canon):
+            want.setdefault(str(sid), set()).add(_posting_last_segment(canon))
+    if not want:
+        return []
+    segments = sorted(set().union(*want.values()))
+    # 末段只是粗筛（走 source_id 的在招部分索引，单源至多几千行），是不是同一个帖子由 plan_moved_postings 拿同一个函数再判。
+    cur.execute(
+        "select id, source_id, canonical_jd_url, first_seen_at, posted_at from jobs "
+        "where status = 'active' and source_id = any(%s::uuid[]) "
+        "and split_part(split_part(canonical_jd_url, '?', 1), '/', -1) = any(%s)",
+        (sorted(want), segments))
+    return [{"id": r[0], "source_id": r[1], "canonical_jd_url": r[2], "first_seen_at": r[3], "posted_at": r[4]}
+            for r in cur.fetchall()]
+
+
+def plan_moved_postings(items, existing, siblings) -> dict:
+    """纯函数：这一批里哪些岗在库里留着旧链接的行，各自怎么处置。
+
+    items     [(canon, job)]——本批（已按 canonical 去重）
+    existing  {canon: {"id", "status", ...}}——按 canonical 查到的既有行（任何状态）
+    siblings  _fetch_posting_siblings 的结果
+    返回三张表，键都是本批里那个帖子的链接（canon）：
+      relink      {canon: 旧行}——新链接没有行，这条旧行原地换成新链接；
+      retire      {canon: [旧行 id]}——这些旧行下架；
+      first_seen  {canon: 最早的 first_seen_at}——新链接已有行时，记到留下的那一行上。
+
+    不处置的三种情况（都留给下一轮）：
+      · 同一个帖子这一轮出现了两个链接（并集查询之间对方正好改了地点）——分不出哪个是现在的；
+      · 库里那一行的链接这一轮列表里还在——它不是旧链接；
+      · 新链接上的行是 expired——探活刚判它撤了、列表重抓不复活它（见 _update_set_clause），
+        这时把旧行也下架，这个帖子就一行在招的都没有了。
+    只认同一个源名下的行：帖子身份里已经带着站点，这里再卡一道，不同源的行互不处置。
+    """
+    plan = {"relink": {}, "retire": {}, "first_seen": {}}
+    batch_canons = {c for c, _ in items if c}
+    canons_of = {}  # (源, 帖子身份) → 本批里它的链接
+    for canon, job in items:
+        ident = posting_identity(canon) if canon else None
+        if ident and job.get("source_id"):
+            canons_of.setdefault((str(job["source_id"]), ident), []).append(canon)
+    stale = {}  # (源, 帖子身份) → 库里的旧链接行
+    for row in siblings:
+        if row["canonical_jd_url"] in batch_canons:
+            continue
+        key = (str(row["source_id"]), posting_identity(row["canonical_jd_url"]))
+        if key in canons_of:
+            stale.setdefault(key, []).append(row)
+    for key, rows in stale.items():
+        canons = canons_of[key]
+        if len(canons) != 1:
+            continue
+        canon = canons[0]
+        # 最早首见的在前；first_seen_at 为空的排最后（当不了「最早」的证据），再按 id 定序保证每次算出同一个结果。
+        rows = sorted(rows, key=lambda r: (r["first_seen_at"] is None, r["first_seen_at"] or 0, str(r["id"])))
+        ex = existing.get(canon)
+        if ex is None:
+            plan["relink"][canon] = rows[0]
+            if rows[1:]:
+                plan["retire"][canon] = [r["id"] for r in rows[1:]]
+        elif ex.get("status") != "expired":
+            plan["retire"][canon] = [r["id"] for r in rows]
+            if rows[0]["first_seen_at"] is not None:
+                plan["first_seen"][canon] = rows[0]["first_seen_at"]
+    return plan
+
+
+def _warn_posting_move(step, exc):
+    print(f"::warning::[posting-move] {step}跳过（不影响入库）：{type(exc).__name__}: {str(exc)[:120]}")
+
+
+def _prepare_moved_postings(cur, items, existing) -> dict:
+    """查旧链接行、出处置方案，并把「原地换链接」先做掉：换成功的行记进 existing，后面按既有行正常 UPDATE。
+
+    换链接单独一条语句、逐行做，不混进整批 UPDATE：另一轮抓取正好先把新链接插进去时，这一条会撞
+    在招链接的唯一索引——只让这一个帖子退回「当新岗插入」那条老路（那边自带撞键兜底），不连累整批。
+    条件里带着旧链接：行在我们查完之后被别人动过（换了链接 / 下架了）就不换。
+    """
+    try:
+        plan = plan_moved_postings(items, existing, _fetch_posting_siblings(cur, items))
+    except Exception as e:  # noqa: BLE001 — 附带整理，见上方 ⚠️
+        _warn_posting_move("查旧链接", e)
+        return {"relink": {}, "retire": {}, "first_seen": {}}
+    jobs_by_canon = dict(items)
+    for canon, row in list(plan["relink"].items()):
+        try:
+            cur.execute(
+                "update jobs set jd_url = %s where id = %s and status = 'active' and canonical_jd_url = %s",
+                (jobs_by_canon[canon].get("jd_url"), row["id"], row["canonical_jd_url"]))
+            moved = cur.rowcount == 1
+        except Exception as e:  # noqa: BLE001
+            _warn_posting_move("原地换链接", e)
+            moved = False
+        if moved:
+            existing[canon] = {"id": row["id"], "status": "active", "posted_at": row["posted_at"]}
+        else:
+            # 没换成：这个帖子这一轮按新岗插入，它名下别的旧行也先不动，下一轮一起处置。
+            del plan["relink"][canon]
+            plan["retire"].pop(canon, None)
+    return plan
+
+
+def _finish_moved_postings(cur, plan, existing) -> None:
+    """本批写完之后：把最早的首见时间记到留下的行上，再把旧链接行下架。
+
+    放在 upsert 成功之后——upsert 失败时旧行原样留着，不会出现新行没写成、旧行先下架。
+    先记首见、后下架：两步之间断了的话，旧行还在招，下一轮能重做；反过来就再也找不回最早的首见时间。
+    """
+    try:
+        for canon, first_seen in plan["first_seen"].items():
+            survivor = existing.get(canon)
+            if survivor:
+                cur.execute("update jobs set first_seen_at = least(first_seen_at, %s) where id = %s",
+                            (first_seen, survivor["id"]))
+        retire = [str(i) for ids in plan["retire"].values() for i in ids]
+        retired = 0
+        if retire:
+            # removed 可逆、不进 purge（同 retire_out_of_policy）：岗没撤，只是这一行的链接不是它现在的链接。
+            cur.execute("update jobs set status = 'removed' where status = 'active' and id = any(%s::uuid[])",
+                        (retire,))
+            retired = cur.rowcount
+        if plan["relink"] or retire:
+            example = next(iter(plan["relink"].values()), None)
+            print(f"    [posting-move] relinked={len(plan['relink'])} retired={retired}"
+                  + (f"（例：{str(example['canonical_jd_url'])[-90:]}）" if example else ""))
+    except Exception as e:  # noqa: BLE001
+        _warn_posting_move("下架旧链接行", e)
+
+
 def _row_tuple(job: dict, cols, **overrides):
     """把 job dict 投影成 cols 顺序的元组（缺列补默认）；overrides 覆盖具体列值。"""
     d = dict(job)
@@ -482,18 +631,29 @@ def _row_tuple(job: dict, cols, **overrides):
     return tuple(d.get(c) for c in cols)
 
 
-def upsert_job(conn, job: dict) -> str:
-    """单条 upsert，冲突键 canonical_jd_url；返回 'created' | 'updated'。"""
+def upsert_job(conn, job: dict, *, moved_postings: bool = True) -> str:
+    """单条 upsert，冲突键 canonical_jd_url；返回 'created' | 'updated'。
+    moved_postings=False：不查旧链接行（批量入口的撞键兜底用——那边已经按整批的列表处置过了）。"""
     # 入库前算好招聘类型（失败静默留空，绝不阻断写入）。批量路径已算过的行会被跳过。
     _annotate_recruitment([job])
     canon = canonicalize_jd_url(job.get("jd_url"))
     now = _now()
     with conn.cursor() as cur:
         existing_id = _find_existing_id_by_canonical(cur, canon)
+        moved, found = None, {}
+        if not existing_id and moved_postings:
+            # 新链接没有行：先看是不是同一个帖子换了链接，是就把旧行原地换过来（见 plan_moved_postings）。
+            # 单条入口只管这一种——它是逐岗调用的，每个岗都多问一次库不划算；
+            # 「新链接已有行、旧行还挂着」留给批量入口（每个源每轮抓取都会过一遍）。
+            moved = _prepare_moved_postings(cur, [(canon, job)], found)
+            if canon in found:
+                existing_id = found[canon]["id"]
         if existing_id:
             sets = _update_set_clause()
             vals = _row_tuple(job, _UPDATE_COLS, last_seen_at=now)
             cur.execute(f"update jobs set {sets} where id = %s", (*vals, existing_id))
+            if moved:
+                _finish_moved_postings(cur, moved, found)
             return "updated"
         jid = str(uuid.uuid4())
         cols = ", ".join(_INSERT_COLS)
@@ -546,6 +706,10 @@ def upsert_jobs_batch(conn, jobs: list, page_size: int = 500) -> tuple:
                 if canon not in existing or status == "active":
                     existing[canon] = {"id": jid, "status": status, "posted_at": posted_at}
 
+        # ②b 同一个帖子换了链接：新链接没有行的，把库里最早那条旧行原地换成新链接并记进 existing
+        #     （下面按既有行正常 UPDATE）；其余旧行等本批写完再下架（见 plan_moved_postings）。
+        moved = _prepare_moved_postings(cur, items, existing)
+
         to_insert, to_update = [], []
         for canon, job in items:
             ex = existing.get(canon)
@@ -595,10 +759,12 @@ def upsert_jobs_batch(conn, jobs: list, page_size: int = 500) -> tuple:
                 for _canon, job in items:
                     if existing.get(_canon):
                         continue  # 这些走 UPDATE 分支，已计入 updated
-                    if upsert_job(conn, job) == "created":
+                    if upsert_job(conn, job, moved_postings=False) == "created":
                         created += 1
                     else:
                         updated += 1
+
+        _finish_moved_postings(cur, moved, existing)
 
     # 事件 best-effort 落库（jobs 已 autocommit 提交；事件失败只 warning，不影响计数/返回）。
     # 仅记 job_id 确实已落库的事件：update_events（既有 id）+ insert_events（仅 bulk insert 成功时）。

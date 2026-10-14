@@ -1,14 +1,16 @@
 """feishu httpx-first 抓取单测（mock httpx，不打真网络）。
 
-覆盖：① _httpx_fetch 翻页/去重/抓全判定/真0岗 reached ② fetch() 决策——reached 用 httpx 不开浏览器、
-reached=False 回退浏览器、complete 计算（翻到 count=True / 撞 _MAX_JOBS 上限=False）。
-红线：httpx 没打通(reached=False)才回退浏览器；抓不全(撞上限)绝不让 list-absence 误判。
+覆盖：① _httpx_fetch 翻页/去重/抓全判定/真0岗 reached ② fetch() 决策——reached 用 httpx、
+reached=False 抛错记失败（不回退浏览器）、complete 计算（翻到 count=True / 撞 _MAX_JOBS 上限=False）。
+红线：抓不全(撞上限)绝不让 list-absence 误判。
 """
 import json
+import sys
 import unittest
 from unittest import mock
 
 from adapters import feishu
+from adapters.playwright_base import PlaywrightAdapter
 
 
 class _Resp:
@@ -463,27 +465,23 @@ class FetchDecisionTest(unittest.TestCase):
             a.fetch("https://nio.jobs.feishu.cn/index/position")
         self.assertFalse(a.fetch_complete)    # 抓不全 → absence 不会误判
 
-    def test_reached_zero_returns_empty_no_browser(self):
+    def test_reached_zero_returns_empty(self):
         a = feishu.NioAdapter()
-        called = {"browser": False}
-
-        def _boom(_url):
-            called["browser"] = True
-            return "BROWSER"
-
-        with mock.patch.object(a, "_httpx_fetch", return_value=([], 0, True)), \
-                mock.patch.object(a, "_browser_fetch", _boom):
+        with mock.patch.object(a, "_httpx_fetch", return_value=([], 0, True)):
             out = json.loads(a.fetch("https://nio.jobs.feishu.cn/index/position"))
         self.assertEqual(out["_intercepted"][0]["data"]["job_post_list"], [])
         self.assertTrue(a.fetch_complete)
-        self.assertFalse(called["browser"])   # httpx 打通即用，绝不多开浏览器
 
-    def test_not_reached_falls_back_to_browser(self):
-        a = feishu.NioAdapter()
-        with mock.patch.object(a, "_httpx_fetch", return_value=([], None, False)), \
-                mock.patch.object(a, "_browser_fetch", return_value="BROWSER"):
-            self.assertEqual(a.fetch("https://nio.jobs.feishu.cn/index/position"), "BROWSER")
-        self.assertFalse(a.fetch_complete)
+    def test_not_reached_fails_instead_of_browser_replay(self):
+        """接口没打通 → 这一轮记失败、不写库，不回退浏览器：浏览器重放列表请求不带 website-path 头，
+        取回的是另一个池子（碑文见 CLAUDE.md「飞书招聘的校招岗藏在 website-path 请求头后面」，2026-10-14）。"""
+        for path in ("index", "campus"):
+            a = feishu.NioAdapter()
+            a.fetch_complete, a.reported_total = True, 5    # 上一轮的状态不许漏到这一轮
+            with mock.patch.object(a, "_httpx_fetch", return_value=([], None, False)),                     mock.patch.dict(sys.modules, {"playwright": None, "playwright.sync_api": None}),                     mock.patch.object(PlaywrightAdapter, "fetch", side_effect=AssertionError("不许开浏览器")):
+                with self.assertRaises(RuntimeError, msg=path):
+                    a.fetch(f"https://nio.jobs.feishu.cn/{path}/position")
+            self.assertEqual((a.fetch_complete, a.reported_total), (False, None), path)
 
 
 class SharedTenantPortalTest(unittest.TestCase):
@@ -614,13 +612,12 @@ class SharedTenantPortalTest(unittest.TestCase):
                 rows, total, _reached = a._httpx_fetch(self.HOST)
         self.assertEqual((a.retire_jd_urls, len(rows), total), ((), 2, 2))
 
-    def test_no_source_on_a_shared_tenant_falls_back_to_browser(self):
-        """浏览器链重放列表请求时不带 website-path 头，取回的是整个租户的岗：英科医疗那两条源回退过去，
-        会把英科再生的岗和哪个门户都不挂的岗写到英科医疗名下；英科再生那条回退过去则不做让出。三条都不许回退。"""
+    def test_shared_tenant_sources_fail_when_list_unreachable(self):
+        """共享租户三条源接口没打通都记失败（浏览器重放不带 website-path 头，取回整个租户的岗，会把英科再生的岗
+        写到英科医疗名下）。2026-10-14 起所有飞书系源都不回退浏览器，这条留着钉住共享租户这一侧。"""
         for path in ("index", "757263", "840753"):
             a, url = self._a(path)
-            with mock.patch.object(a, "_httpx_fetch", return_value=([], None, False)), \
-                    mock.patch.object(a, "_browser_fetch", side_effect=AssertionError("不该开浏览器")):
+            with mock.patch.object(a, "_httpx_fetch", return_value=([], None, False)):
                 with self.assertRaises(RuntimeError, msg=path):
                     a.fetch(url)
 

@@ -288,7 +288,7 @@ _HTTPX_SAFE_ADAPTERS = {
     # sources.crawl_method 仍由运维侧改库，本白名单只控制代码侧并发档。
     "bytedance", "bytedance_campus", "bytedance_global",
     # feishu 家族：posts API 冷 httpx 直出岗位+正文（2026-06-28 实测 generic/nio/xpeng/xiaomi/zhipu/xtool
-    # 全可达），httpx-first + 浏览器回退见 adapters/feishu.py；进 daily-crawl 4×/天（原仅 enrich-crawl 1×/天）。
+    # 全可达），接口没打通就记失败、不回退浏览器（见 adapters/feishu.py fetch）；进 daily-crawl 4×/天（原仅 enrich-crawl 1×/天）。
     "feishu", "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu",
 }
 

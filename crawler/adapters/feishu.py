@@ -4,11 +4,8 @@
 与字节同平台：拦截 /api/v1/search/job/posts，岗位在 data.job_post_list，
 详情页 https://{host}/index/position/{id}/detail。一套适配覆盖蔚来/小鹏/地平线/小米。
 
-分页（与北森同思路）：列表页只发**一次** offset=0&limit=10 的 POST，被动拦截 + 滚动翻页
-最多 max_pages 页 → 恰好截断在 ~40 条（实测 ponyai 实有 93、ecoflow 实有 209）。
-data.count 给出真实总数。修复：捕获该 POST，用站点自身 session（含 _signature，实测签名
-**不绑定** offset/limit，可复用）服务端翻页重放 limit=50 直到收齐 count，合成同 shape 响应。
-捕获不到 POST 则回退被动拦截（super().fetch）。复用站点请求、不破签名、低频。
+取数：httpx 直拉 posts API，按 data.count 翻全（limit=50），每个门户都带 `website-path` 头（见类注释）。
+接口没打通就让这一轮记失败；原先的浏览器抓包 + 重放链已删（重放不带门户头，见 fetch 的注释）。
 """
 import json
 import logging
@@ -19,7 +16,7 @@ from urllib.parse import urlparse
 import httpx
 
 import normalizer
-from .base import (DEFAULT_LIST_CAP, RawJob, RepetitionBrake, exc_brief, redact_urls,
+from .base import (DEFAULT_LIST_CAP, RawJob, RepetitionBrake, exc_brief,
                    resolve_list_cap)
 from .playwright_base import PlaywrightAdapter, _UA
 
@@ -36,6 +33,59 @@ def _int_or_none(value) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+# 职能类别名自己读起来像招聘类型时，不和招聘类型标签拼在一起（见 compose_job_type）。读 job_type 的地方都是对整串
+# 做子串匹配、各有各的先后：sourceDeclaredCategory 是 实习 > 社招 > 校招，lib/insight-derive.ts 的 classifyRecruitment
+# 和 discovery.recruitment_category 是 实习 > 校招 > 社招 —— 类别名叫「实习生」「全职」「校园大使」时会压过后面的标签。
+# intern 另用整词（normalizer.INTERN_WORD_RE）：裸子串会把 International / Internal / Internet 一起丢掉。
+_RECRUIT_WORD_RE = re.compile(
+    r"实习|社招|社会招聘|全职|experienced|professional|full.?time"
+    r"|校招|校园|应届|管培|管理培训生|留学生|毕业生|campus|graduate|new\s?grad|entry.?level", re.I)
+
+
+def declared_recruit_label(recruit_type) -> str:
+    """列表每行自带的 `recruit_type`（对方自报的招聘类型）→ 交给分类器的标签；没有可用的返回空串。
+
+    ❌ 2026-10-12 前 `_map` 没用这个字段，job_type 只取 job_category（职能类别），招聘类型全靠分类器读标题 / 正文猜：
+       自报社招的被正文里的「优秀应届生亦可」「24-25 届毕业生」「负责校园招聘」判成校招；自报校招的门户
+       （智元 `campusrecruitment`、小米新零售）标题正文链接里都没有校招字样，判成社招。
+       两个方向的行数、逐源清单、改前改后对拍 → docs/crawler-adapter-notes.md 的 feishu.py 条目。
+    ✅ 字段两层：上一层 社招 / 校招，下一层 全职·外包·劳务·顾问·实习 / 正式·实习。只取能定桶的：
+         社招 > 全职·外包·劳务·顾问 → 「社招」      社招 > 实习 → 「实习」
+         校招 > 正式              → 「校招」      校招 > 实习 → 不带（见下）
+    🚫 下一层的「全职 / 正式」不许原样带：读侧 sourceDeclaredCategory("全职") 直接返回社招（北森绝不带 Kind 同一个理由），
+       「正式」它不认。下一层只用来认实习。
+    🚫 「校招 > 实习」不带：一个类型下混着两种东西——蔚来把「先带薪实习、表现好发校招正式 Offer」的岗归在这里
+       （标题写「校招-…」、面向应届），小米实习门户归在这里的是给在校生的实习。带成实习会把前一种挪出校招，
+       带成校招会把后一种写成校招；标题写着实习的本来就由标题判实习。
+    ⚠️ 社招也带（wt.py 的社招渠道刻意不带）：那边是「岗位挂在哪个渠道」，这里是对方给每个岗单独填的类型。
+    ⚠️ 这里只负责如实把对方的归类搬过来，裁决仍在 lib/china-keyword-expansion.js：标题写「实习」的照旧判实习（层1），
+       自报校招但写明 ≥2 年经验的照旧判社招（层2）。
+    ⚠️ 名字按「包含」认，不按全等：同平台的字节租户下一层叫「暑期实习 / 日常实习」。认不出的上一层 → 空串，
+       照旧按标题 / 正文判（有些租户整个不返回这个字段，也走这条路）。
+    """
+    if not isinstance(recruit_type, dict):
+        return ""
+    name = str(recruit_type.get("name") or "")
+    parent = recruit_type.get("parent")
+    parent_name = str(parent.get("name") or "") if isinstance(parent, dict) else ""
+    intern = "实习" in name
+    if "社招" in parent_name or "社会招聘" in parent_name:
+        return "实习" if intern else "社招"
+    if "校招" in parent_name or "校园招聘" in parent_name:
+        return "" if intern else "校招"
+    return ""
+
+
+def compose_job_type(category: str, label: str) -> str:
+    """职能类别 + 招聘类型标签（与 wt.py 同一种拼法：类别继续进检索文本，标签喂给 recruitmentCategory）。
+    类别名自己读起来像招聘类型的只留标签，否则它会压过标签（见 _RECRUIT_WORD_RE）。"""
+    if not label:
+        return category
+    if category and not (_RECRUIT_WORD_RE.search(category) or normalizer.INTERN_WORD_RE.search(category)):
+        return f"{category} {label}"
+    return label
 
 
 # ── 共享租户：同一个岗挂在两家公司的门户上，只归一家 ─────────────────────────────────────────
@@ -170,7 +220,7 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
     def _httpx_fetch(self, host: str) -> Tuple[List[dict], Optional[int], bool]:
         """纯 httpx 直拉 posts API（feishu_probe 已实证冷启动可达：真实 Chrome UA、无签名、无 cookie）。
         翻页到 data.count，返回 (rows, total, reached)。reached=至少一次拿到合法 data dict（用于区分
-        '真 0 岗' 与 'httpx 没打通'——前者照常返回空、后者回退浏览器）。daily-crawl 无 Playwright 也能跑。
+        '真 0 岗' 与 'httpx 没打通'——前者照常返回空、后者 fetch 抛错记失败）。daily-crawl 无 Playwright 也能跑。
         主门户源（`_main_portal`）走 `_httpx_fetch_main`：自报门户 ∪ index，都带 website-path 头。"""
         self._yielded = ()
         if getattr(self, "_main_portal", False) and not self.website_path:
@@ -444,8 +494,12 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
         return None
 
     def fetch(self, source_url: str) -> str:
-        """httpx-first：冷启动直拉 posts API（无浏览器，daily-crawl 4×/天可跑）；httpx 未打通才回退
-        浏览器抓包链（仅 Playwright 可用环境如 enrich-crawl）。"""
+        """直拉 posts API（无浏览器，daily-crawl 4×/天可跑）。接口没打通 → 抛错，这一轮记失败、不写库。
+
+        🚫 不回退浏览器（2026-10-14 删掉了浏览器抓包 + 重放链，别加回来）：重放列表请求**不带** `website-path` 头，
+        取回的是「不带头的全集」——子门户源拿到另一个池子（与本门户列表重合 0 行却标抓全），主门户源拿到夹着
+        已下线岗的全集。小米三条子门户源因此堆过 5,716 行死链；也没有哪条源靠它才抓得到。
+        实测数字见 CLAUDE.md「飞书招聘的校招岗藏在 website-path 请求头后面」。"""
         self.fetch_complete = False
         self.reported_total = None
         self.coverage_stop_reason = None
@@ -456,133 +510,14 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
         if host:
             rows, total, reached = prefetched or self._httpx_fetch(host)
             if reached:
-                # httpx 打通（含真 0 岗）→ 直接用，不再开浏览器。complete=翻全（含 0 岗）。
+                # httpx 打通（含真 0 岗）→ 直接用。complete=翻全（含 0 岗）。
                 self.reported_total = _int_or_none(total)
                 self.fetch_complete = (total is not None and len(rows) >= (total or 0))
                 return json.dumps(
                     {"_intercepted": [{"data": {"job_post_list": rows, "count": total if total is not None else len(rows)}}]},
                     ensure_ascii=False)
-        # httpx 没打通（reached=False）→ 回退浏览器抓包（无 Playwright 环境会抛 → 上层记 failed，不写空）
-        if host in _SHARED_TENANT_PORTAL_OWNER:
-            # 共享租户上的每一条源都不回退：浏览器链重放列表请求时不带 website-path 头（_replay_paginated），
-            # 取回的是整个租户的岗，会把别家公司的岗写到这条源名下；也不做「让给归属门户」那一步。
-            raise RuntimeError(f"feishu shared tenant {host}: list API unreachable; "
-                               "no browser fallback on a tenant shared by several companies")
-        return self._browser_fetch(source_url)
-
-    def _browser_fetch(self, source_url: str) -> str:
-        """捕获列表页自己发的 posts POST → 用站点 session 服务端翻页重放收齐 count；
-        捕获不到（站点改版/反爬）则回退被动拦截链（与原行为一致，零回归）。"""
-        from playwright.sync_api import sync_playwright
-
-        captured: dict = {}
-        passive: List[dict] = []
-        urls = self.list_urls or [source_url]
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            # 必须用真实浏览器 UA（与 PlaywrightAdapter.fetch 一致）：飞书 API 对默认 bot UA
-            # 的 page.request 重放返回 405；真实 Chrome UA 才放行（站点 JS 生成的 _signature 同此 UA 上下文）。
-            ctx = browser.new_context(
-                user_agent=_UA,
-                viewport={"width": 1366, "height": 900}, locale="zh-CN")
-            page = ctx.new_page()
-
-            def on_request(req):
-                # 捕获列表页自己发的 posts POST（含 _signature query + offset/limit body），供重放。
-                if self.intercept_match in req.url and req.method == "POST" and not captured:
-                    try:
-                        captured["url"] = req.url
-                        captured["body"] = json.loads(req.post_data or "{}")
-                    except Exception:
-                        pass
-
-            def on_response(resp):
-                # 被动拦截兜底（与 PlaywrightAdapter.fetch 同口径）：捕获不到 POST 时仍有数据可用。
-                try:
-                    if self.intercept_match not in resp.url:
-                        return
-                    if "json" in (resp.headers or {}).get("content-type", "").lower():
-                        passive.append(resp.json())
-                except Exception:
-                    pass
-
-            page.on("request", on_request)
-            page.on("response", on_response)
-            for u in urls:
-                try:
-                    page.goto(u, wait_until="domcontentloaded", timeout=self.pw_timeout)
-                    page.wait_for_timeout(self.wait_ms)
-                except Exception:
-                    continue
-                if captured.get("url"):
-                    break  # 首个列表页就抓到 POST，无需再开其它入口
-
-            rows: List[dict] = []
-            total = None
-            if captured.get("url") and isinstance(captured.get("body"), dict):
-                rows, total = self._replay_paginated(page, captured["url"], dict(captured["body"]))
-            browser.close()
-
-        if rows:
-            # 浏览器抓全判定（与 httpx 同口径）：翻到 total 且未撞 _MAX_JOBS → complete，供 list-absence。
-            self.reported_total = _int_or_none(total)
-            self.fetch_complete = (total is not None and len(rows) >= (total or 0))
-            # 合成下游同 shape 响应：parse() 走 posts_keys=data.job_post_list 抽取，逻辑不变。
-            return json.dumps(
-                {"_intercepted": [{"data": {"job_post_list": rows, "count": total or len(rows)}}]},
-                ensure_ascii=False)
-        if passive:  # 没捕获到 POST/重放为空 → 回退被动拦截链
-            return json.dumps({"_intercepted": passive}, ensure_ascii=False)
-        raise RuntimeError(
-            f"{self.name}: anti_bot_blocked — 未捕获 posts POST 也无被动拦截 "
-            f"(match={self.intercept_match})")
-
-    def _replay_paginated(self, page, url: str, body: dict):
-        """用站点 session 翻页重放 url（沿用其 _signature），limit=_PAGE_SIZE，收齐 data.count。
-        返回 (rows, total)。任一步异常即停，已收的照常返回（不丢已拿到的岗位）。"""
-        rows: List[dict] = []
-        seen: set = set()
-        total = None
-        offset = 0
-        hdrs = {"content-type": "application/json"}
-        cap = resolve_list_cap(self._MAX_JOBS)
-        brake = RepetitionBrake()
-        while len(rows) < cap:
-            body["offset"] = offset
-            body["limit"] = self._PAGE_SIZE
-            try:
-                r = page.request.post(url, data=json.dumps(body), headers=hdrs)
-                jj = r.json()
-            except Exception as exc:
-                logger.warning("%s: 翻页重放 offset=%d 失败，保留已抓 %d 条：%s",
-                               self.name, offset, len(rows), exc_brief(exc))
-                break
-            data = (jj or {}).get("data") if isinstance(jj, dict) else None
-            if not isinstance(data, dict):
-                break
-            if total is None:
-                total = data.get("count") or 0
-            chunk = data.get("job_post_list") or []
-            if not isinstance(chunk, list) or not chunk:
-                break
-            before = len(rows)
-            for post in chunk:
-                pid = str((post or {}).get("id") or "")
-                if pid and pid not in seen:
-                    seen.add(pid)
-                    rows.append(post)
-            if total and len(rows) >= total:
-                break
-            if brake.observe(_titles_of(rows[before:])):   # 与 httpx 路径同口径，见那边注释
-                self.coverage_stop_reason = "repetition_brake"
-                # url 是站点 JS 自己发的 posts 请求，查询串带 _signature，不进 CI 日志。
-                logger.info("%s: 重复度刹车 —— 连续 %d 条没有新角色，停在 %d/%s 条 url=%s",
-                            self.name, brake.stall_rows, len(rows), total, redact_urls(url))
-                break
-            if not _should_continue(before, len(rows), chunk, total, self._PAGE_SIZE):
-                break
-            offset += self._PAGE_SIZE
-        return rows, total
+        # 接口没打通 → 这一轮记失败（上层 run.py 记 failed、不写库、不跑缺席撤岗）。为什么不回退浏览器见 docstring。
+        raise RuntimeError(f"{self.name}: {host or source_url} list API unreachable")
 
     def _map(self, post: dict) -> Optional[RawJob]:
         pid = str(post.get("id") or post.get("code") or "").strip()
@@ -601,10 +536,11 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
             names.extend(c.get("name") for c in cl if isinstance(c, dict))
         city = normalizer.join_places(names)
 
-        job_type = ""
+        category = ""
         jc = post.get("job_category")
         if isinstance(jc, dict):
-            job_type = jc.get("name") or ""
+            category = str(jc.get("name") or "")
+        job_type = compose_job_type(category, declared_recruit_label(post.get("recruit_type")))
 
         desc = (post.get("description") or "").strip()
         req = (post.get("requirement") or "").strip()

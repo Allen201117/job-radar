@@ -28,6 +28,7 @@ import { appendJobScopeWhere, effectiveJobScope } from "@/lib/job-scope";
 import { collapseBulkStoreJobs } from "@/lib/bulk-store-dedup";
 import { appendCurrentSeasonWhere } from "@/lib/campus-season";
 import { currentGradClass } from "@/lib/grad-class";
+import { sqlIsNew } from "@/lib/job-novelty";
 import { spreadByCompany } from "../job-diversify";
 
 // 「按发布时间」排序也不让一家公司连续霸屏（线上实测深圳+校招前 14 张全是同一家）：
@@ -616,7 +617,13 @@ function prescoreOrderBy(
     params.push(companies.map((c: string) => `%${escapeLike(c)}%`));
     pieces.push(`((company ilike any($${params.length}::text[])) is true)::int * 15`);
   }
-  pieces.push("((first_seen_at > now() - interval '7 days') is true)::int * 10");
+  // 「7 天内新岗」与 scoreJob 的 +10 同一个判据（lib/job-novelty）：进来时官方发布日就已经早 7 天以上的岗不算。
+  // 加权项和下面候选收窄里的那一支用同一个条件——收窄只留「能靠方向或新岗拿分」的行，两边不一致就会把
+  // 拿不到新岗分的行留在窗口里白占名额。真实画像 213 条候选 / 召回 SQL 改前改后对拍：206 条计划形状不变，
+  // 7 条从并行扫描变成单进程、仍是同两个索引的 BitmapOr，热态耗时与读块数不变
+  //（docs/reviews/2026-10-12-novelty-official-posted-date.md §5）。
+  const recent = sqlIsNew("first_seen_at > now() - interval '7 days'");
+  pieces.push(`(${recent} is true)::int * 10`);
   let candidateWhere: string | null = null;
   if (dirQuery) {
     // ⚠️ 只有调用方真会把 candidateWhere 拼进 SQL 时才压这个参数：绑定了 SQL 里没引用的参数 PG 直接报错
@@ -625,7 +632,6 @@ function prescoreOrderBy(
       // 先压窄查询、再压宽查询：保住「候选查询最后一个参数 = 排序 tsquery」的既有契约（tests/jobs-store-candidate-window）。
       params.push(narrowQuery);
       const dir = `search_doc @@ to_tsquery('simple', $${params.length})`;
-      const recent = "first_seen_at > now() - interval '7 days'";
       // 选了校招 / 实习时按招聘类型拆开（2026-09-23）：外层预筛本来就只留「该类型 / 待回填（NULL）」两种行，
       // 所以 (方向 or 7天) ≡ (方向 and 该类型) or (7天 and 该类型) or (待回填 and (方向 or 7天))，候选集逐行不变。
       // 拆开后三支各走索引再 BitmapOr：方向支与 idx_jobs_active_recruitment_first_seen 做 BitmapAnd，7 天支直接按
@@ -880,6 +886,8 @@ async function searchViaFTS(
   // 撞窗口时的计数照旧走 exactTotalWhenCapped / formatMatchTotal（给不出确定数字就显示「N+」，不会给错数字）。
   // 「有偏好记录、但一个可粗排的信号都没有」（没填岗位名/城市/公司，prescore 为 null）的登录用户按匹配度排时，
   // 打分同样只剩「7 天内 +10」、与 first_seen_at 同向，和匿名是同一回事（扫描路径早已这样归并，见 searchViaScan）。
+  // ⚠️ 2026-10-12 起「同向」不再逐行成立：进来时就已经发布很久的老岗拿不到 +10（lib/job-novelty），在取回的这一窗里
+  // 会沉到拿到 +10 的行后面。窗口内靠前的非老岗顺序不变（第一页不受影响）；被老岗占掉的窗口尾部没有用更早的新岗补上。
   // 此前这里只认 `!prefs` → 这类用户反而拉满 8000 行（2026-09-23 实测「北京 + 实习」5.6 MB，慢请求里 4 次都是它）。
   // newest 不归并：JS 按 posted_at 排、SQL 按 first_seen_at 排，前 1000 行不保证是前 8000 行里 posted_at 最新的。
   // 开关 off 时 prescore 恒为 null，那是「取真值」不是「没信号」，保持 8000 窗。
@@ -1039,6 +1047,9 @@ async function searchViaScan(
   // 2026-09-18：有偏好但**一个可粗排的信号都没有**（没填岗位名 / 城市 / 公司，prescore 为 null）的登录用户，
   // 此前会落回「拉满 SCAN_BUDGET=28000 行再 JS 排序」的老路径（线上 19s 那档）——而此时 scoreJob 能算的只剩
   // 「7 天内 +10」，按分排序退化成纯新鲜度，与匿名路径逐行同序。所以和匿名一样走下面攒够即停的逐页路径。
+  // ⚠️ 2026-10-12 起不再逐行同序：进来时就已经发布很久的老岗拿不到 +10（lib/job-novelty），在已取回的批次里沉底。
+  // 第一页仍是最新的非老岗（一批 DB_PAGE=1000 行里非老岗远多于一页）；翻过一整批之后，前一批沉底的老岗会被
+  // 后一批的新岗挤到更后面，已经翻过的位置上会漏看几行。只影响没填任何方向 / 城市 / 公司的登录用户，接受。
   // 这正是刚注册、还没填偏好就点开 /campus（默认全部校招岗、sortBy=match）的新用户会踩的那条路。
   if (filters.sortBy === "match" && prefs && prescore) {
     // match 必须看满 SCAN_BUDGET 才能按分排序 → **一次查完，不要 OFFSET 翻页**。

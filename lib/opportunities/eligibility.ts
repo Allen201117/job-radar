@@ -25,6 +25,7 @@ import { educationMatch } from "../education-rank";
 import { excludeJobs } from "../live-search";
 import { normalizeCompany } from "../company-normalize";
 import { jobMatchesRegion } from "../job-scope";
+import { noveltyAgeMs } from "../job-novelty";
 import { matchLocationTargets } from "./location-targets";
 import { overseasLocationUnstated } from "./scope-intent";
 
@@ -252,11 +253,9 @@ export function computeMatchFacts(
   const ind = industryState(job, profile.targetIndustries);
   const company = companyHit(job, profile.targetCompanies);
 
-  let noveltyHours: number | null = null;
-  if (job.first_seen_at) {
-    const t = new Date(job.first_seen_at).getTime();
-    if (!Number.isNaN(t)) noveltyHours = (now.getTime() - t) / 3_600_000;
-  }
+  // 进来时官方发布日就已经早 7 天以上的岗不算新岗（lib/job-novelty）→ null：不出「今天首次发现」、不拿新鲜度分。
+  const noveltyMs = noveltyAgeMs(job, now.getTime());
+  const noveltyHours = noveltyMs === null ? null : noveltyMs / 3_600_000;
 
   // 正文长度优先认召回随行带回的 `summary_len`（= 库里 `char_length(btrim(summary))`，**完整**正文）。
   // 两个原因：① 召回只传 300 字截断正文，用它算「≥200 字」本来就是在算截断值；
