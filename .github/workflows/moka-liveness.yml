@@ -1,0 +1,65 @@
+name: moka-liveness
+
+# Moka 撤岗核验：每条源「最近一轮抓全了的列表里没见到」的在招岗，逐岗问详情请求确认已停才下架。
+# 为什么不直接按列表缺席下架、判据怎么来的、每道安全闸拦什么：见 crawler/moka_liveness.py 的模块注释。
+#
+# ⚠️ 现在只能手动触发，默认只报数不写库。定时 + 落库要等创始人同意后再加——届时同一个提交里
+#    补上体检期望（crawler/audit_contract.yaml），否则 audit_coverage 的差集会报这条 workflow 没有期望。
+# 清存量那一次：apply=true，并把 max_expire_fraction 放宽（2026-10-12 带着存量时李宁是 168 / 328）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "true = 真的写库；留空/false = 只 dry-run 报数"
+        required: false
+        default: "false"
+      max_expire_fraction:
+        description: "单条源拟下架占在招行数的上限，超了这条源不下架（日常 0.5；清存量时由人放宽）"
+        required: false
+        default: "0.5"
+      only:
+        description: "可选：只核源地址里含这一段的源（如 talent.catl.com）"
+        required: false
+        default: ""
+
+concurrency:
+  group: moka-liveness
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150   # 日常几分钟；清存量那一次约 7 千行、每行问两次，按 4 个请求 / 秒约一小时
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: crawler/requirements.txt
+      - run: pip install -r crawler/requirements.txt
+
+      - name: Verify Moka jobs missing from the latest complete list against the detail request
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+          JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+          JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
+          APPLY: ${{ github.event.inputs.apply }}
+          MAX_EXPIRE_FRACTION: ${{ github.event.inputs.max_expire_fraction }}
+          ONLY: ${{ github.event.inputs.only }}
+        run: |
+          set -euo pipefail
+          args=(--out moka-liveness-report.json --max-expire-fraction "${MAX_EXPIRE_FRACTION:-0.5}")
+          if [ -n "${ONLY:-}" ]; then args+=(--only "$ONLY"); fi
+          if [ "${APPLY:-}" = "true" ]; then args+=(--apply); fi
+          python3 crawler/moka_liveness.py "${args[@]}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: moka-liveness-report
+          path: moka-liveness-report.json
+          if-no-files-found: ignore
