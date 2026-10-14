@@ -871,7 +871,10 @@ adapter 里 `normalizer.location_in_source_regions(location, self.regions)` 一�
      蔚来当天不带头 2,087 / 公开门户 1,794，多出的 591/591 已下线。上线后存量下架 11,092、补进 2,521、误杀 0，
      下架后 12 家各抽 1 岗浏览器实开 12/12 已下线。「不带头 ⊇ 门户」也不成立（超级猩猩 6 / 17，美宜佳 10 / 96）。
   ✅ 防：`adapters/feishu._httpx_fetch_main`——主门户 = 租户首页自报 `website_info.path` ∪ index，都带头取，
-     每行按它真在线的门户拼 jd_url；index 门户不存在（接口回 `-9000003 site not exist`）算空门户；拿不到自报门户不标抓全。
+     每行按它真在线的门户拼 jd_url；index 门户不存在（接口回 `-9000003 site not exist`）算空门户。
+     📌 纠错（2026-10-14）：此处原写「拿不到自报门户不标抓全」——那时只问 index：index 不存在的租户（106 条主门户源里 17 家）
+     就记成「成功 0 岗」（歌尔丹拿 10-03、10-04 两轮），index 开着的只抓到一小部分（智元 79 / 正常 510）也记成功。
+     现在首页读不到自报门户（请求出错 / 5xx / 429 重取三次，原因写进报错）、或自报门户的列表没打通，这一轮记失败。
      回归钉在 `crawler/test_feishu_httpx.MainPortalTest`。存量死链堆积时跑 `feishu-portal-reconcile.yml`
      （逐岗读状态、只下架读到 0 的、每源阳性对照 + 全局对照，默认 dry-run）。
   📌 纠错（2026-10-14）：此处原写「小米私有部署偶尔无视 website-path 头返回全集（09-23 newretailing
