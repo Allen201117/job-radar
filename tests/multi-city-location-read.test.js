@@ -17,7 +17,7 @@ const { queryTokens } = loadTs(path.join(ROOT, "lib", "job-search.ts"));
 const { scoreJob } = loadTs(path.join(ROOT, "lib", "scoring.ts"));
 const {
   normalizeCampusCity, buildCampusFacets, campusFacetKey, selectFacetIndexes, countMatchingFacets, campusRowMatches,
-  selectFitIndexes, facetMatchesFit,
+  selectFitIndexes, facetMatchesFit, campusCityMembers,
 } = loadTs(path.join(ROOT, "lib", "campus-facets.ts"));
 
 const MULTI = "北京/深圳/上海";
@@ -174,6 +174,63 @@ test("校招必投看板：多城市岗算进它列的每个城市，下拉里�
   const fit = selectFitIndexes([], ["北京"], options);
   const fitCount = (byPattern.get("%x%") || []).reduce((n, f) => n + (facetMatchesFit(f, fit) ? f[4] : 0), 0);
   assert.equal(fitCount, 2);
+});
+
+// 2026-10-12：外企招聘系统给的拼音地点（「Changzhou, Jiangsu, China」）入库时认成中文地级市
+// （crawler/geo.latin_cn_places，写法见 lib/cn-prefecture-pinyin.json）。读侧一行没改，所以写进库的每种写法
+// 都得在这七处匹配得上真正的城市；原来按拼音子串认错的城市（hangzhou ⊂ changzhou、xian ⊂ xinxiang）一处都不许中。
+function sevenPaths(location, target) {
+  return {
+    "今日推荐城市门": Boolean(matchLocationTargets(location, [target])),
+    "今日推荐召回词": ftsHits(location, locationTargetSqlTerms(target)),
+    "岗位库城市筛选": locationMatchesCityFilter(location, [target]),
+    "岗位库全文候选门": ftsHits(location, cityFtsTerms([target])),
+    "location ilike": citySqlLikeTokens([target]).some((t) => location.toLowerCase().includes(t.toLowerCase())),
+    "打分 +20": locationBonus(location, target),
+    "校招看板分面": campusCityMembers(location).includes(normalizeCampusCity(target)),
+  };
+}
+
+test("拼音地点认成中文之后：七处都认真正的城市，不认原来折错的城市", () => {
+  const cases = [
+    // [写进库的地点, 真城市的目标写法, 不许认成的城市]
+    ["常州市", ["常州", "常州市"], ["杭州", "Hangzhou", "西安"]],        // Changzhou, Jiangsu, China
+    ["新乡市", ["新乡", "新乡市"], ["西安", "Xi'an", "杭州"]],           // Xinxiang, Henan Sheng, China
+    ["厦门市", ["厦门", "厦门市", "Xiamen"], ["西安", "杭州"]],          // Xiamen, Fujian, China
+    ["天津市", ["天津", "天津市"], ["上海", "北京"]],                    // Tianjin, TJ, CN, 300457
+    ["重庆市", ["重庆", "重庆市", "Chongqing"], ["成都"]],               // Chongqing, Chongqing Shi, China
+    ["泰州", ["泰州", "泰州市"], ["杭州", "苏州"]],                      // Taizhou, Jiangsu（别名表里的城市写短名）
+    ["恩施土家族苗族自治州", ["恩施"], ["西安", "武汉"]],                // China, Hubei, Enshi
+    ["襄阳市/武汉", ["襄阳", "襄阳市", "武汉"], ["西安", "杭州"]],       // XIANGYANG / WUHAN
+  ];
+  for (const [location, targets, wrong] of cases) {
+    for (const target of targets) {
+      assert.deepEqual(
+        Object.entries(sevenPaths(location, target)).filter(([, hit]) => !hit).map(([name]) => name),
+        [],
+        `${location} 应命中 ${target}`,
+      );
+    }
+    for (const target of wrong) {
+      assert.deepEqual(
+        Object.entries(sevenPaths(location, target)).filter(([, hit]) => hit).map(([name]) => name),
+        [],
+        `${location} 不该命中 ${target}`,
+      );
+    }
+  }
+});
+
+test("拼音地点认成中文之后：所在的省、只写了省的地点，填省的用户都匹配得上", () => {
+  for (const [location, province] of [["常州市", "江苏"], ["新乡市", "河南省"], ["恩施土家族苗族自治州", "湖北"], ["江苏", "江苏"]]) {
+    assert.ok(matchLocationTargets(location, [province]), `今日推荐 ${location} ${province}`);
+    assert.equal(locationMatchesCityFilter(location, [province]), true, `岗位库 ${location} ${province}`);
+    assert.equal(locationBonus(location, province), true, `打分 ${location} ${province}`);
+  }
+  // 只写了省（Jiangsu, China → 江苏）不替用户猜是哪个市
+  assert.equal(matchLocationTargets("江苏", ["南京"]), null);
+  assert.equal(locationMatchesCityFilter("江苏", ["苏州"]), false);
+  assert.equal(matchLocationTargets("江苏", ["浙江"]), null);
 });
 
 test("校招必投看板：上线那一小段缓存里是旧形状的选项表（没有 cityKeys），照样筛得对", () => {

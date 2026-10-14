@@ -38,7 +38,7 @@ import httpx
 import ops_runs
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from discover_domestic import _CN_STOP, _GENERIC_PREFIX, _feishu_self_report  # noqa: E402
+from discover_domestic import _CN_STOP, _GENERIC_PREFIX, _feishu_self_report, feishu_portal_home  # noqa: E402
 from company_name_match import strip_leading_place  # noqa: E402  地名前缀（「苏州凌志软件」→「凌志软件」）
 
 _CONFIG_API = "/wecruit/suite/config/"
@@ -295,7 +295,8 @@ def audit_wt(rows, client):
 
 
 # ── 飞书系门户 ────────────────────────────────────────────────────────────────
-# 门户自报 = 租户首页（https://{host}/）的租户名 / <title> / keywords，解析与入库核名门共用
+# 门户自报 = 源自己那个门户首页的租户名 / <title> / keywords（主门户源读 https://{host}/，子门户源读
+# https://{host}/{门户}/，见 discover_domestic.feishu_portal_home），解析与入库核名门共用
 # discover_domestic._feishu_self_report。不收 meta description：那是宣传语，会点名旗下产品
 # （字节跳动首页写着「今日头条、抖音、西瓜视频、飞书」）。只认 HTTP 200 的首页。
 # 判法比 wecruit 严一档：只有「库名的核心词落在门户文本里」才算对上；反过来拿门户名去库名里找才对上的，
@@ -329,10 +330,11 @@ _FEISHU_UNDECIDABLE = {
 
 def feishu_identity(source_url: str, client):
     """返回 (门户自报的文本 [租户名, <title>, keywords] 里非空的, None)；取不到返回 (None, 原因)。
+    读的是源自己那个门户的首页（feishu_portal_home）：主门户源 = 租户首页，子门户源 = 该门户的首页。
     请求头与入库核名门（discover_domestic._client）对齐成中文页面，两边读到的是同一种语言的标题。"""
-    host = urlparse(source_url).netloc
     try:
-        resp = client.get(f"https://{host}/", headers={"Accept": "text/html,*/*", "Accept-Language": "zh-CN,en;q=0.9"})
+        resp = client.get(feishu_portal_home(source_url),
+                          headers={"Accept": "text/html,*/*", "Accept-Language": "zh-CN,en;q=0.9"})
     except Exception as e:  # noqa: BLE001
         return None, f"{type(e).__name__}: {e}"
     if resp.status_code != 200:
@@ -359,16 +361,19 @@ def _reviewed_for(registry: dict, host: str, company: str) -> bool:
 
 
 def audit_feishu(rows, client):
-    """返回 (mismatches, weak, undecidable, unknowns, ok_count)。同一主机的多条源只取一次首页。
-    unknowns = 首页没取到；undecidable = 登记过的「门户自报的不是公司名」。"""
+    """返回 (mismatches, weak, undecidable, unknowns, ok_count)。同一个门户首页只取一次。
+    unknowns = 首页没取到；undecidable = 登记过的「门户自报的不是公司名」。
+
+    按门户首页缓存、不按主机：一个租户可以挂几家公司的门户（英科：/ 是英科再生，/757263、/840753 是英科医疗）。"""
     cache = {}
     mismatches, weak, undecidable, unknowns, ok = [], [], [], [], 0
     for row in rows:
         company, url = row["company"], row["source_url"]
         host = urlparse(url).netloc
-        if host not in cache:
-            cache[host] = feishu_identity(url, client)
-        texts, err = cache[host]
+        home = feishu_portal_home(url)
+        if home not in cache:
+            cache[home] = feishu_identity(url, client)
+        texts, err = cache[home]
         if texts is None:
             unknowns.append((company, url, err))
             continue

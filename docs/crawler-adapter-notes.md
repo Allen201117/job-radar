@@ -148,6 +148,14 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #   radancy.py = Radancy/TalentBrew（欧莱雅 2026-10-05 从 Avature 迁来）：sitemap.xml → 按链接城市/
                          #     中文标题粗筛 → 逐岗详情页 ld+json。🚫 **TalentBrew 的 robots 一律禁 /search-jobs**：第一版抓搜索页，
                          #     本机试跑全绿、上线首轮被 robots 门挡成 skipped——接外企门户先读对方 robots.txt，再选入口。
+                         #   apple.py = Apple 官网搜索页的 hydration 数据。`apple` 写死只搜美国（location=united-states-USA），不按源的
+                         #     regions 过滤；`apple_cn` 不限地区、parse 后只留在华 / 远程（2026-10-12 查 sources：没有源在用它）。
+                         #     ⚠️ 列表行地点的 `name` 只是门店 / 园区 / 城市名（Cambridge / Maiden / Bellevue Square / Melbourne），不带国家；
+                         #     国家在同一个对象的 `countryID`（`iso-country-USA`，ISO 三字母码）里。2026-10-12 前 adapter 只取 name：
+                         #     香港库这条源 4,773 个在招岗里 291 个（155 种写法）判不出国家，按源登记的 regions（[CN]）兜底成了国内岗。
+                         #     现在由 `_declared_country` 交给 `RawJob.country_code`（normalize 只在地点文本说不清时采信；多地点里有一个
+                         #     在大中华就报大中华，有地点没报国家就不报）。同名地点别国也有（Cambridge 英国 / Melbourne 澳大利亚 /
+                         #     Vancouver 加拿大），🚫 **不要往 geo 词表里背门店名**。
                          #   wt.py / hotjob.py 的截止日（2026-10-10）：🚫 **列表里的 endDate 大多不是截止日**。只有「长期发布」标记
                          #     （wt `isLongTermRelease` / hotjob `longTermRelease`）== 1 才是官网显示的「下线时间」；== 0 时官网写「长期发布」，
                          #     endDate 是系统填的数（wt 回请求当天、hotjob 每晚续成 +7 天、3000-01-01、发布日+12 个月、早已过去的日期）。
@@ -644,6 +652,10 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #     「 - 」统一成逗号再交给 geo：geo 认「开头两字母国别码 + 逗号」，Visa 的「JM - Remote - Jamaica」不换就判不出国家。
                          #     有的租户把「地点名」配成整段门牌地址（Target / 三星 / 富达 / 奥的斯 / 开利）：截成城市在
                          #     `normalizer.strip_street_address`（对所有 adapter 生效，greenhouse 的 Sweetgreen 同样受益）。
+                         #     Target 排在列表 2000 条上限之外、重抓够不着的那批岗，地点已于 2026-10-12 一次性回填：详情接口的 `jobPostingInfo.location` 就是同一份原文，
+                         #     逐岗取回后按现行代码重算，只改 location 一列，只动「接口 200 且地点名的 slug 与链接里的地点段一致」的行
+                         #     ——2,176 行地点以数字开头的在招岗里改写 2,102 行（全是 Target），不动 74 行（对方已不公开 32 /
+                         #     原文没写城市 30 / 岗位后来换了地点 12）。全库在招岗地点以数字开头：4,716 → 重抓后 2,176 → 回填后 74。
                          #     📌 同日早些时候这里写的是「Target 2,062 行排在上限之外…辉瑞 / 通用汽车 / 安波福也报了 got=2000，漏了多少没核」。核完：那三家是下面说的假撞上限，一个岗没漏；Target 是真撞，对方自报的是 14,072 不是 4 千。
                          #     ⚠️ 列表接口的三条硬边界（2026-10-12，全部 101 个启用源 293 个翻页查询逐个真翻）：
                          #       · 单页最多 20 条（limit=50 / 100 回 400）；
@@ -680,6 +692,44 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #       Target 的地点是门店街道地址，4,132 行只折得掉 74 行。要不要整包拉 / 只留非门店岗，等创始人定。
                          #     ⚠️ 文本兜底（searchText）超过 2000 条时不切块（逐岗还要再过 regions，且当天没有一个源的文本查询真撞上限）。
 ```
+
+## 六家自建站的逐岗探活信号（2026-10-12，`enrich.py`「六家自建站」）
+
+网易 / 携程 / 百度 / B 站 / 小红书 / OPPO 此前只有浏览器巡检，判不出也轮不到（成因见 CLAUDE.md §4「六家自建站已有逐岗探活」）。
+接口都是匿名直连；数字是 2026-10-12 库里这六家全部 12,182 个在招岗逐个问出来的，同时对了各站当天的列表。
+
+| 站 | 接口 | 在招 | 已撤 | 伪 id | 在列→在招 | 不在列→已撤 | 不在列却在招 |
+|---|---|---|---|---|---|---|---|
+| 网易 | `GET hr.163.com/api/hr163/position/query?id=` | code=200 且回带 id 相同 | code=402 +「职位失效或者不存在」+ data=null | 超大 id 回 code=500 | 2,688 / 2,689 | 1,632 / 1,632 | 0 |
+| 携程 | `POST careers.ctrip.com/api/hrrecruit/getJobAd`，`condition.fromId=[id]` | 结果里有这一条 | retCode 201 + Ack Success + total 0 + 空列表 | 同「已撤」 | 520 / 521 | 813 / 815 | 2 |
+| 百度 | `GET` 详情页本身（服务端直出） | 带 `window.__INITIAL_DATA__` 且含 postId（23~35KB） | 5.7~5.9KB 空壳 | 同「已撤」；招聘类型写错也是 | 2,300 / 2,300 | 638 / 638 | 0 |
+| B 站 | 先 `GET /api/auth/v1/csrf/token`，再 `GET /api/srs/position/detail/{id}`（带 `X-CSRF`） | `positionStatus=1` | `positionStatus=0` | code=60015 | 462 / 462 | 402 / 404 | 2 |
+| 小红书 | `GET job.xiaohongshu.com/websiterecruit/position/queryPositionDetail?positionId=` | `recruitStatus=in_recruitment` | `recruit_close` | statusCode=999 | 1,322 / 1,322 | 1,083 / 1,109 | 26 |
+| OPPO | `GET careers.oppo.com/openapi/position/detail?id=` | `positionStatus=0` | `positionStatus=1` 且工作城市为空 | code=500 | 237 / 237 | 53 / 53 | 0 |
+
+- **撤岗页长什么样**（真渲染，每家 50 条已撤 + 15 条在招对照）：携程有文案「您查看的职位已下架」；网易是「--」占位的空骨架，
+  侧栏「相关职位」里的同名岗会让标题检查命中（50 条里 12 条被判 alive）；百度是空壳，无头浏览器里连在招页都落到 about:blank；
+  B 站照样渲染岗位名 + 正文，只把按钮换成「职位已下架」；小红书、OPPO 的已关页和在招页看不出区别。
+- **六家判死前都要过阳性对照（`enrich._control_ok`）**：网易 / 携程 / 百度是「查不到 = 已撤」，伪 id、传错的参数、对方降级时回的是同一个东西；
+  带状态位的三家也可能在会话降级后对谁都回「已关」。对照 = 这个站这个板块（携程分社招 / 校招路由，百度分 SOCIAL / GRADUATE / INTERN）用同一个
+  请求形状**刚刚**读到过在招岗：60 秒内、且那之后连判的已撤不超过 20 个；过了就把记住的那个在招岗再问一遍，问不出就去问列表第一页的岗，
+  都不行 = 一行不判（5 分钟后再试）。对方中途变了最多错 20 来行就停。
+- **`jd_url` 必须整串符合各站详情页的形状才去问**（库里 12,182 行全部符合）；状态位只认整数或纯数字串（`_flag`），`False` / `0.0` / 缺字段都不算 0。
+- **OPPO 的状态位极性和 B 站相反**（OPPO 0 = 在招，B 站 1 = 在招），且 OPPO 的含义是按全集推的、没读对方前端代码——所以它判死要
+  「状态位是 1」和「工作城市字段在、且为空」两个条件同时成立。
+- **清存量 / 接新 adapter 的做法**：`gh workflow run liveness-sweep.yml -f adapters=a,b -f dry_run=true -f expire_guard_override=a=off,b=off`，
+  日志里 `[dry-run expired] <adapter> <行 id>` 是拟下架的名单，拿它和别处独立核过的名单逐行对（两个方向各数）再真跑。
+  `dry_run` 只有精确的 false 才写库；熔断改写只认 0~1 的小数或 `off`，且只对已登记熔断的 adapter 生效。
+- **同一个 id 会重新开放**：上线代码隔 3~5 小时把全集又过了一遍，小红书 19 行、网易 6 行从已关变回在招，逐条对官网当时的列表，
+  25 行里 23 行已经回到列表（另 2 行在招但不在列）。这是对方 HR 开关岗位，不是接口不稳——判死在当时是对的，重新开放的岗由列表抓取再收回来
+  （`job_closures.reopen_count` 会记）。另外四家两遍之间「已撤 → 在招」是 0。
+- **不能按列表缺席下架**：小红书 26 行、携程 2 行、B 站 2 行不在列表却在招。
+- **阿里系没接**：`POST https://{host}/position/detail?_csrf=` 的 `content=null` 不稳——1,422 个读到 null 的岗隔一两个小时再问有 28 个读到在招；
+  `channel` 传空或传错时**在招岗也回 null**（菜鸟回全空骨架）。连问两次（隔 2 秒）结果一致，所以二次确认救不了。它留在浏览器巡检：
+  页面文案「该职位已失效」可靠；菜鸟的撤岗页是无文案的空骨架（176 行），目前没有路。阿里国际 robots 禁抓，接口同样不问。
+- **快手没有便宜信号**：详情接口裸 GET 回 code=-1「系统错误」（要页面签名）；但页面文案「该职位已下线」词表认，留在浏览器巡检。
+- **本机验证的坑**：国内站必须直连——走系统代理时 B 站超时、百度返回体大小都不一样（Chrome 加 `--no-proxy-server`，httpx `trust_env=False`）。
+  这台 Windows 上一次性的 `httpx.get` 每次要 8~20 秒（常驻 Client 0.05 秒），本机跑全集要把传输换成常驻 Client；CI 上没有这个问题。
 
 ## 必投清单口径（`lib/must-apply-list.ts` / `.json`）
 

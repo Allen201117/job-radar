@@ -22,7 +22,6 @@ import json
 import os
 import re
 import sys
-from urllib.parse import urlparse
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -429,7 +428,7 @@ def feishu_name_gate(cand: dict, fetch_home=None):
     if str(cand.get("name_ok") or "").strip():
         return None
     import discover_domestic as dd  # 延迟导入，理由同上
-    home = f"https://{urlparse(cand['url']).netloc}/"
+    home = dd.feishu_portal_home(cand["url"])   # 子门户候选读自己那个门户的首页，不读租户首页（共享租户会读到别家）
     html = (fetch_home or _feishu_home_html)(home)
     if not html:
         return f"门户首页 {home} 取不到，核不了公司名"

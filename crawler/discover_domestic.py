@@ -32,12 +32,14 @@ import os
 import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urlparse
 
 sys.path.insert(0, os.path.dirname(__file__))
 
 import httpx  # noqa: E402
 import normalizer  # noqa: E402
 from probe import emit_sql  # noqa: E402  复用迁移生成
+from adapters.feishu import source_portal  # noqa: E402  子门户路径的解析与抓取共用一条规则
 
 _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -108,6 +110,19 @@ def _feishu_self_report(html: str):
     tenant = _FEISHU_TENANT_RE.search(html or "")
     keywords = _FEISHU_KEYWORDS_RE.search(html or "")
     return _title(html), (tenant.group(1) if tenant else ""), (keywords.group(1) if keywords else "")
+
+
+def feishu_portal_home(source_url: str) -> str:
+    """核公司名要读的那一页：源自己那个门户的首页。
+
+    主门户源（/index/position、根路径）读租户首页 `https://{host}/`；子门户源读 `https://{host}/{门户}/`。
+    ❌ 2026-10-12：一律读租户首页时，英科（global-intco，集团共用租户）读到的是英科再生那个门户，
+       而英科医疗官网链过去的是 /757263（社招）、/840753（校招），各有各的 <title>。
+    ✅ 当时 31 条子门户源 + 这 2 条两种读法对拍：30 条结论相同、1 条两边都是弱对上（小鹏，已登记）、
+       这 2 条由弱对上变对得上，变差 0，取不到 0。"""
+    host = urlparse(source_url or "").netloc
+    portal = source_portal(source_url)
+    return f"https://{host}/{portal}/" if portal else f"https://{host}/"
 
 
 def feishu_probe(slug: str, cn: str):
