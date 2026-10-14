@@ -21,11 +21,10 @@ import httpx
 from adapters.alibaba import AlibabaAdapter
 from adapters.amazon import AmazonAdapter
 from adapters.apple import AppleAdapter
-from adapters.base import RepetitionBrake, exc_brief
+from adapters.base import exc_brief
 from adapters import bytedance, china_ats
 from adapters.bytedance import BytedanceAdapter, BytedancePage, collect_bytedance_track
 from adapters.china_ats import _post_page_with_retry
-from adapters.feishu import NioAdapter
 from adapters.microsoft import MicrosoftAdapter
 from test_apple_adapter import ApplePaginationTest
 
@@ -343,37 +342,6 @@ class MokaFirstLineTests(unittest.TestCase):
                 raise RuntimeError("no str")
 
         self.assertEqual(china_ats._first_line(BrokenStr()), "BrokenStr")
-
-
-class FeishuReplayBrakeLogTests(unittest.TestCase):
-    """浏览器重放的 posts URL 是站点 JS 发的，查询串带 _signature；刹车日志只许出现 host+path。"""
-
-    def test_brake_log_drops_signature(self):
-        url = ("https://nio.jobs.feishu.cn/api/v1/search/job/posts"
-               "?keyword=&limit=10&offset=0&_signature=SIGSECRET")
-        calls = []
-
-        def post(u, data=None, headers=None):
-            calls.append(u)
-            offset = json.loads(data)["offset"]
-            resp = mock.Mock()
-            resp.json.return_value = {"data": {"count": 100_000, "job_post_list": [
-                {"id": f"{offset}-{i}", "title": "门店店员"} for i in range(50)]}}
-            return resp
-
-        page = mock.Mock()
-        page.request.post.side_effect = post
-        adapter = NioAdapter()
-        with mock.patch("adapters.feishu.RepetitionBrake", lambda: RepetitionBrake(stall_rows=100)):
-            with self.assertLogs("adapters.feishu", level="INFO") as cm:
-                rows, total = adapter._replay_paginated(page, url, {})
-        self.assertEqual(adapter.coverage_stop_reason, "repetition_brake")
-        self.assertTrue(all(u == url for u in calls))   # 重放本身照旧用带签名的完整 URL
-        msg = "\n".join(cm.output)
-        self.assertIn("重复度刹车", msg)
-        self.assertIn("url=https://nio.jobs.feishu.cn/api/v1/search/job/posts?…", msg)
-        self.assertNotIn("SIGSECRET", msg)
-        self.assertNotIn("_signature", msg)
 
 
 class AppleRetryPrintTests(unittest.TestCase):

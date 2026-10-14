@@ -861,8 +861,16 @@ adapter 里 `normalizer.location_in_source_regions(location, self.regions)` 一�
      每行按它真在线的门户拼 jd_url；index 门户不存在（接口回 `-9000003 site not exist`）算空门户；拿不到自报门户不标抓全。
      回归钉在 `crawler/test_feishu_httpx.MainPortalTest`。存量死链堆积时跑 `feishu-portal-reconcile.yml`
      （逐岗读状态、只下架读到 0 的、每源阳性对照 + 全局对照，默认 dry-run）。
-  ⚠️ 小米私有部署偶尔**无视 website-path 头**返回全集（2026-09-23 newretailing 一轮抓回 2,075，正常 110）
-     → 幽灵行占比过半、list-absence 安全闸清不掉，只能重跑对账工具。
+  📌 纠错（2026-10-14）：此处原写「小米私有部署偶尔无视 website-path 头返回全集（09-23 newretailing
+     一轮抓回 2,075，正常 110）」，09-24 写下时就没有能和下面这个成因区分开的证据。
+  ❌ 小米三条子门户源（campus / internship / newretailing）堆了 5,716 行在招、不在本门户列表里的岗，链接打开是
+     「该职位已下线」（4,640 个同一个岗在社招门户下另有一行在招）；缺席撤岗占比 73%~95%，撞 50% 安全闸清不掉。
+  ✅ 根因是 adapter 自己：列表接口一时没打通就回退浏览器，浏览器重放列表请求**不带** website-path 头 → 取回不带头的
+     全集，与本门户列表重合 0 行却标抓全（本机真跑复现）。「全集」13 轮全落在装了浏览器的 campus-crawl / enrichment-crawl；
+     没装浏览器的轮次同一条路报 `Executable doesn't exist`。
+  ✅ 防：飞书系 adapter 删掉浏览器回退，接口没打通 = 这一轮记失败。9-30 起 139 源 10,555 轮里，能认出走了回退的
+     16 轮：没装浏览器 / 没截到请求而失败 13 轮，「成功」写进全集 3 轮（都是小米子门户）；没有一条源靠它才抓得到。
+     回归 `crawler/test_feishu_httpx.FetchDecisionTest`。
 - ⚠️ `portal_type` **不是**开关：带 `website-path: campus` 时传 2 或 6 返回同一批。
 - 🚫 **字节官网（`adapters/bytedance.py`）是同一个病，换了个 adapter（2026-10-12 立，创始人同日确认方案）**：
   ❌ 两条官网源不带头取列表：库里挂着 2,148 个中文站链接打开是「该职位已下线」的岗（其中 1,302 个只挂全球站 joinbytedance.com），
