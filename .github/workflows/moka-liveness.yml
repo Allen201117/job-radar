@@ -3,11 +3,15 @@ name: moka-liveness
 # Moka 撤岗核验：每条源「最近一轮抓全了的列表里没见到」的在招岗，逐岗问详情请求确认已停才下架。
 # 为什么不直接按列表缺席下架、判据怎么来的、每道安全闸拦什么：见 crawler/moka_liveness.py 的模块注释。
 #
-# ⚠️ 现在只能手动触发，默认只报数不写库。定时 + 落库要等创始人同意后再加——届时同一个提交里
-#    补上体检期望（crawler/audit_contract.yaml），否则 audit_coverage 的差集会报这条 workflow 没有期望。
-# 清存量那一次：apply=true，并把 max_expire_fraction 放宽（2026-10-12 带着存量时李宁是 168 / 328）。
+# 定时轮次写库（创始人 2026-10-14 同意落库后加），占比上限用默认 0.5；手动触发默认只报数。
+# UTC 03:10 = 排在重档（cron 18:00，实际 21:00~23:35 开跑、最长 180 分钟）之后，核的是当晚那一轮；
+# 还在跑的源本轮跳过（run_in_progress），第二天再核。体检期望：audit_contract.yaml 的
+# pipeline.moka_liveness_ran / jobs.moka_stale_active。
+# 清存量那一次是手动跑的：apply=true，并把 max_expire_fraction 放宽（2026-10-14 带着存量时李宁是 167 / 331）。
 
 on:
+  schedule:
+    - cron: "10 3 * * *"
   workflow_dispatch:
     inputs:
       apply:
@@ -47,7 +51,7 @@ jobs:
           JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
           JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
           JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
-          APPLY: ${{ github.event.inputs.apply }}
+          APPLY: ${{ github.event_name == 'schedule' && 'true' || github.event.inputs.apply }}
           MAX_EXPIRE_FRACTION: ${{ github.event.inputs.max_expire_fraction }}
           ONLY: ${{ github.event.inputs.only }}
         run: |

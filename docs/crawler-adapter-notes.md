@@ -106,7 +106,8 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #       现在会被门户总数照出来记成没抓全，不再是「0 岗成功、没有分母」，但那一轮确实没抓到。
                          #       moka 没开「列表缺席即撤岗」（MokaAdapter 没有 supports_absence_liveness），抓不全不会连带下架。
                          #     · 撤岗（2026-10-12）：岗掉出门户列表后原先只能等浏览器巡检轮到它（每条源每晚约 7 行），
-                         #       库里攒过 6,879 行页面写着「已停止招聘」的在招岗。现在由 `crawler/moka_liveness.py`（`moka-liveness.yml`）判：
+                         #       库里攒过 6,879 行页面写着「已停止招聘」的在招岗。现在由 `crawler/moka_liveness.py`（`moka-liveness.yml`，
+                         #       每天 UTC 03:10 定时写库，2026-10-14 起）判：
                          #       「这条源最近一轮抓全了的列表里没见到」只当候选，再逐岗问详情页自己发的那个请求
                          #       （`POST {门户域名}/api/outer/ats-apply/website/job`，匿名可发），两次都回已停才下架成 expired。
                          #       回包是密文，不解密只看长度：已停 / 不存在的岗 152 个字符，在招 1,708 个以上；其它长度一律判不了。
