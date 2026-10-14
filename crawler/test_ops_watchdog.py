@@ -281,6 +281,66 @@ class TimeoutKillTest(unittest.TestCase):
         self.assertEqual(findings, [])
 
 
+class SupersededCancelTest(unittest.TestCase):
+    """cancel-in-progress 顶掉的旧一轮不算「被杀」；没声明 / 没有新一轮 / 撞 timeout 照告。"""
+    WF = """jobs:
+  node:
+    timeout-minutes: 15
+"""
+    CIP = """concurrency:
+  group: x
+  cancel-in-progress: true
+""" + WF
+
+    def _runs(self):
+        return [{"id": i, "path": ".github/workflows/u.yml", "head_branch": "main", "conclusion": "cancelled",
+                 "created_at": f"2026-10-12T14:3{i}:00Z", "run_number": i} for i in (1, 2)]
+
+    def _job(self, i, minutes=1):
+        start = datetime(2026, 10, 12, 14, 30 + i, 10, tzinfo=timezone.utc)
+        return {"name": "node", "conclusion": "cancelled", "started_at": start.isoformat(),
+                "completed_at": (start + timedelta(minutes=minutes)).isoformat()}
+
+    def _eval(self, wf, runs, jobs, extra=()):
+        meta = {".github/workflows/u.yml": W.parse_workflow_meta(wf)}
+        return W.evaluate_timeout_kills(runs, jobs, meta, all_runs=list(runs) + list(extra))
+
+    def _next(self, minute, branch="main"):
+        return {"id": 9, "path": ".github/workflows/u.yml", "head_branch": branch,
+                "created_at": f"2026-10-12T14:{minute}:30Z"}
+
+    def test_parse_flag(self):
+        self.assertTrue(W.parse_workflow_meta(self.CIP)["cancel_in_progress"])
+        self.assertFalse(W.parse_workflow_meta(self.WF)["cancel_in_progress"])
+        self.assertFalse(W.parse_workflow_meta("""#  cancel-in-progress: true
+""" + self.WF)["cancel_in_progress"])
+
+    def test_superseded_runs_are_exempt(self):
+        runs = self._runs()
+        self.assertEqual(self._eval(self.CIP, runs, {1: [self._job(1)], 2: [self._job(2)]}, [self._next(32)]), [])
+
+    def test_without_cancel_in_progress_still_alerts(self):
+        runs = self._runs()
+        self.assertEqual(len(self._eval(self.WF, runs, {1: [self._job(1)], 2: [self._job(2)]}, [self._next(32)])), 1)
+
+    def test_no_newer_run_still_alerts(self):
+        # 两轮隔着几小时、中间没有同分支的新一轮 → 不是被顶掉的，照告；别的分支的新一轮不算
+        runs = [dict(r, created_at=f"2026-10-12T{10 + 3 * r['id']}:00:00Z") for r in self._runs()]
+        jobs = {}
+        for r in runs:
+            start = datetime(2026, 10, 12, 10 + 3 * r["id"], 0, 10, tzinfo=timezone.utc)
+            jobs[r["id"]] = [{"name": "node", "conclusion": "cancelled", "started_at": start.isoformat(),
+                              "completed_at": (start + timedelta(minutes=1)).isoformat()}]
+        other_branch = dict(self._next(0, "dev"), created_at="2026-10-12T13:00:30Z")
+        self.assertEqual(len(self._eval(self.CIP, runs, jobs, [other_branch])), 1)
+
+    def test_timeout_hit_never_exempt(self):
+        runs = self._runs()
+        found = self._eval(self.CIP, runs, {1: [self._job(1, 15)], 2: [self._job(2, 15)]}, [self._next(59)])
+        self.assertEqual(len(found), 1)
+        self.assertIn("撞到声明的 timeout", found[0]["summary"])
+
+
 class StuckLedgerTest(unittest.TestCase):
     def test_old_queued_rows_alert(self):
         rows = [{"status": "queued", "mode": "insight_enrich",

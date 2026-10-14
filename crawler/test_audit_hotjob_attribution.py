@@ -316,6 +316,7 @@ class AuditFeishuTest(unittest.TestCase):
             "https://mammotion.jobs.feishu.cn/": (_feishu_home("加入深圳库犸科技有限公司", "深圳库犸创新科技集团有限公司"),),
             "https://global-intco.jobs.feishu.cn/": (_feishu_home("英科再生社会招聘官网", "英科"),),
             "https://moonton.jobs.feishu.cn/": (_feishu_home("加入沐瞳科技", "沐瞳科技"),),
+            "https://moonton.jobs.feishu.cn/campus/": (_feishu_home("加入沐瞳科技", "沐瞳科技"),),
             "https://zj-innolight.jobs.feishu.cn/": (_feishu_home("加入苏州旭创科技有限公司", "苏州旭创科技有限公司"),),
             "https://toa7dmu9bq.jobs.feishu.cn/": (_feishu_home("欢迎加入电子所", "电子所"),),
             "https://didatravel.jobs.feishu.cn/": ("Not Found", 404),
@@ -325,6 +326,7 @@ class AuditFeishuTest(unittest.TestCase):
             {"company": "容知日新", "source_url": "https://mammotion.jobs.feishu.cn/index/position"},
             {"company": "英科医疗", "source_url": "https://global-intco.jobs.feishu.cn/index/position"},
             {"company": "沐瞳科技", "source_url": "https://moonton.jobs.feishu.cn/index/position"},
+            {"company": "沐瞳科技", "source_url": "https://moonton.jobs.feishu.cn/"},
             {"company": "沐瞳科技", "source_url": "https://moonton.jobs.feishu.cn/campus/position"},
             {"company": "中际旭创", "source_url": "https://zj-innolight.jobs.feishu.cn/index/position"},
             {"company": "上海航天电子技术研究所", "source_url": "https://toa7dmu9bq.jobs.feishu.cn/index/position"},
@@ -335,8 +337,45 @@ class AuditFeishuTest(unittest.TestCase):
         self.assertEqual(weak, [("英科医疗", rows[1]["source_url"], "英科")])
         self.assertEqual([c for c, _, _ in undecidable], ["上海航天电子技术研究所"])
         self.assertEqual([c for c, _, _ in unknowns], ["道旅科技 Dida"])
-        self.assertEqual(ok, 3)   # 沐瞳两条 + 中际旭创（人工核过：苏州旭创是它的经营主体）
-        self.assertEqual(client.calls.count("https://moonton.jobs.feishu.cn/"), 1)   # 同一主机两条源只取一次首页
+        self.assertEqual(ok, 4)   # 沐瞳三条 + 中际旭创（人工核过：苏州旭创是它的经营主体）
+        self.assertEqual(client.calls.count("https://moonton.jobs.feishu.cn/"), 1)   # 同一个门户首页两条源只取一次
+        self.assertEqual(client.calls.count("https://moonton.jobs.feishu.cn/campus/"), 1)   # 子门户源读自己的首页
+
+    def test_shared_tenant_each_source_is_checked_against_its_own_portal(self):
+        # 2026-10-12 实锤：英科这个租户挂着两家上市公司的门户。租户首页是英科再生的；英科医疗官网链过去的是
+        # /757263（社招）与 /840753（校招），各有各的标题。一律读租户首页时，这两条英科医疗的源只能判成弱对上。
+        pages = {
+            "https://global-intco.jobs.feishu.cn/": (_feishu_home("英科再生社会招聘官网", "英科"),),
+            "https://global-intco.jobs.feishu.cn/757263/": (_feishu_home("英科医疗社会招聘官网", "英科"),),
+            "https://global-intco.jobs.feishu.cn/840753/": (_feishu_home("英科医疗校园招聘官网", "英科"),),
+        }
+        client = _FeishuClient(pages)
+        rows = [
+            {"company": "英科再生", "source_url": "https://global-intco.jobs.feishu.cn/index/position"},
+            {"company": "英科医疗", "source_url": "https://global-intco.jobs.feishu.cn/757263/position"},
+            {"company": "英科医疗", "source_url": "https://global-intco.jobs.feishu.cn/840753/position"},
+        ]
+        mismatches, weak, undecidable, unknowns, ok = audit_feishu(rows, client)
+        self.assertEqual((mismatches, weak, undecidable, unknowns, ok), ([], [], [], [], 3))
+        self.assertEqual(sorted(client.calls), sorted(pages))
+        # 反方向：把名字挂反了照样报出来，不会因为同一个主机上有别的门户对得上就放过。
+        swapped = [
+            {"company": "英科医疗", "source_url": "https://global-intco.jobs.feishu.cn/index/position"},
+            {"company": "英科再生", "source_url": "https://global-intco.jobs.feishu.cn/757263/position"},
+        ]
+        mismatches, weak, _undecidable, _unknowns, ok = audit_feishu(swapped, _FeishuClient(pages))
+        self.assertEqual((ok, mismatches), (0, []))
+        self.assertEqual(sorted(c for c, _, _ in weak), ["英科再生", "英科医疗"])   # 只剩租户名「英科」反向对得上
+
+    def test_sub_portal_page_that_does_not_load_is_unknown_not_judged_by_the_tenant_root(self):
+        client = _FeishuClient({
+            "https://moonton.jobs.feishu.cn/": (_feishu_home("加入沐瞳科技", "沐瞳科技"),),
+            "https://moonton.jobs.feishu.cn/campus/": ("Not Found", 404),
+        })
+        rows = [{"company": "沐瞳科技", "source_url": "https://moonton.jobs.feishu.cn/campus/position"}]
+        _m, _w, _u, unknowns, ok = audit_feishu(rows, client)
+        self.assertEqual((ok, [c for c, _, _ in unknowns]), (0, ["沐瞳科技"]))
+        self.assertEqual(client.calls, ["https://moonton.jobs.feishu.cn/campus/"])
 
     def test_known_ok_is_bound_to_the_name_it_was_reviewed_for(self):
         # 白名单按「主机 + 当时核过的源名」生效：源名之后被改成别的，要重新进人眼。

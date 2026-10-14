@@ -91,6 +91,27 @@ def compose_job_type(category: str, label: str) -> str:
     return label
 
 
+# ── 共享租户：同一个岗挂在两家公司的门户上，只归一家 ─────────────────────────────────────────
+# host → {让出的门户: 归属门户}。「让出的门户」那条源抓的时候剔掉也挂在「归属门户」上的岗，库里已有的由
+# run.py 按 retire_jd_urls 下架成 removed（可逆）。不剔 = 同一个岗两张卡、两个公司名（同北森孪生门户）。
+#   · global-intco（租户名只写「英科」，集团共用；2026-10-12 三个门户翻全、逐岗带头读状态）：
+#       index  = 英科再生社会招聘官网 87 岗      757263 = 英科医疗社会招聘官网 326 岗（英科医疗官网「社会招聘」链到这里）
+#     两边都挂、两边都在线的 17 个：14 个淮北「-凯泽」（安徽凯泽新材料，英科医疗持股 65%，公告 2026-051）、
+#     九江安环主管（江西英科医疗厂址）、国毅 / 公益基金会运营各 1 → 归英科医疗。index ∩ 840753（英科医疗校招）= 0。
+# ⚠️ 登记在代码里、源的启停在库里：停用归属门户那条源之前先撤掉这里的登记，否则让出的岗两边都没人接。
+_SHARED_TENANT_PORTAL_OWNER = {
+    "global-intco.jobs.feishu.cn": {"index": "757263"},
+}
+
+
+def source_portal(source_url: str) -> str:
+    """source_url 指向哪个子门户（路径首段）；主门户（根路径 / index / position）返回空串。
+    抓取（_bind_website_path）与核名（discover_domestic.feishu_portal_home）共用这一条规则。"""
+    segments = [seg for seg in (urlparse(source_url or "").path or "").split("/") if seg]
+    first = segments[0] if segments else ""
+    return "" if first in ("", "index", "position") else first
+
+
 def _should_continue(before, after, chunk, total, page_size):
     """还该不该翻下一页。
 
@@ -146,6 +167,7 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
     # 故抓全时「上次在、这次没了」可判下架。仅 fetch_complete=True 时生效（见 run.py 兜底）。
     supports_absence_liveness = True
     fetch_complete = False  # 每次 fetch 末尾置位：是否抓到完整列表（翻到 count、未撞 _MAX_JOBS 上限）
+    _yielded: tuple = ()    # 这一轮让给同租户另一个门户的行（见 _SHARED_TENANT_PORTAL_OWNER）
 
     def __init__(self):
         self.official_hosts = (self.host,)
@@ -188,10 +210,9 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
         `index` / 根路径 = 主门户：website_path 留空、标 `_main_portal`，由 `_httpx_fetch_main`
         按租户自报门户 ∪ index **带头**去取（见类注释「主门户」一节；旧的「不带头 = 全集」已推翻）。
         """
-        segments = [seg for seg in (urlparse(source_url).path or "").split("/") if seg]
-        first = segments[0] if segments else ""
-        self._main_portal = first in ("", "index", "position")
-        self._apply_website_path("" if self._main_portal else first)
+        portal = source_portal(source_url)
+        self._main_portal = not portal
+        self._apply_website_path(portal)
 
     def _resolve_host(self, source_url: str) -> str:
         """httpx 直拉用的 host：子类有 self.host；通用类 fetch 前已 _bind_host → official_hosts[0]。"""
@@ -204,9 +225,74 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
         翻页到 data.count，返回 (rows, total, reached)。reached=至少一次拿到合法 data dict（用于区分
         '真 0 岗' 与 'httpx 没打通'——前者照常返回空、后者回退浏览器）。daily-crawl 无 Playwright 也能跑。
         主门户源（`_main_portal`）走 `_httpx_fetch_main`：自报门户 ∪ index，都带 website-path 头。"""
+        self._yielded = ()
         if getattr(self, "_main_portal", False) and not self.website_path:
-            return self._httpx_fetch_main(host)
-        return self._httpx_fetch_portal(host, self.website_path)
+            rows, total, reached = self._httpx_fetch_main(host)
+        else:
+            rows, total, reached = self._httpx_fetch_portal(host, self.website_path)
+        if reached and host in _SHARED_TENANT_PORTAL_OWNER:
+            rows, total = self._yield_to_owner_portal(host, rows, total)
+        return rows, total, reached
+
+    def _row_portal(self, post: dict) -> str:
+        """这一行是从哪个门户的列表里取到的（查的是哪个池子；链接前缀另见 _jd_url）。"""
+        return (post or {}).get("_portal") or self.website_path or "index"
+
+    def _jd_url(self, post: dict) -> str:
+        """这一行的详情链接：主门户的行用它实际挂着的门户前缀（`_portal`），其余用详情模板。"""
+        pid = str((post or {}).get("id") or (post or {}).get("code") or "").strip()
+        portal = (post or {}).get("_portal")
+        if portal:
+            host = (self.official_hosts[0] if getattr(self, "official_hosts", None) else "") or self.host
+            return f"https://{host}/{portal}/position/{pid}/detail"
+        return self.detail_template.format(id=pid)
+
+    @property
+    def retire_jd_urls(self) -> tuple:
+        """让给归属门户的岗的链接：run.py 把库里已有的下架成 removed。
+        读的时候才拼、与 _map 同一个拼法——详情模板可能在 should_skip 里被修过，早拼会对不上库里的链接。"""
+        return tuple(self._jd_url(p) for p in self._yielded)
+
+    def _yield_to_owner_portal(self, host: str, rows: List[dict],
+                               total: Optional[int]) -> Tuple[List[dict], Optional[int]]:
+        """见 _SHARED_TENANT_PORTAL_OWNER：剔掉也挂在归属门户上的岗，把它们的链接记进 retire_jd_urls。
+
+        归属门户的列表没取全 → 抛错、本轮不写。静默全收就是一岗两行；按半截列表剔，漏掉的那些同样是一岗两行。
+        不在登记表里的门户（含归属门户自己那条源）零额外请求、原样返回。"""
+        owners = _SHARED_TENANT_PORTAL_OWNER.get(host) or {}
+        if getattr(self, "_main_portal", False):
+            # 主门户源取的是「租户首页自报的门户 ∪ index」。登记时自报的就是让出的那个门户；对方哪天把首页换成
+            # 别的门户（最坏是归属门户本身），这条源会把别家的岗整批收进来 → 认不出的门户一律不写，等人重新核。
+            stray = sorted({self._row_portal(p) for p in rows} - set(owners))
+            if stray:
+                raise RuntimeError(
+                    f"feishu shared tenant {host}: main source now lists portal(s) {stray} that are not "
+                    "registered as yielding; re-verify the tenant's portal layout before writing")
+        needed = sorted({owners[self._row_portal(p)] for p in rows if self._row_portal(p) in owners})
+        if not needed:
+            return rows, total
+        owned = {}
+        for owner in needed:
+            for _attempt in range(2):   # 归属门户列表要翻好几页，抖一下就整源失败不值当：重取一次再判
+                o_rows, o_total, o_reached = self._httpx_fetch_portal(host, owner)
+                if o_reached and o_rows and o_total is not None and len(o_rows) >= o_total:
+                    break
+            else:
+                # 空列表同样按没取全算：归属门户瞬时回 0 岗时照单全收，让出的岗会被写回来。
+                raise RuntimeError(
+                    f"feishu shared tenant {host}: owner portal {owner} list incomplete "
+                    f"({len(o_rows)}/{o_total}); skip this run to avoid one job under two companies")
+            owned[owner] = {str((r or {}).get("id") or "") for r in o_rows}
+        kept, dropped = [], []
+        for post in rows:
+            owner = owners.get(self._row_portal(post))
+            pid = str((post or {}).get("id") or "")
+            (dropped if owner and pid and pid in owned[owner] else kept).append(post)
+        self._yielded = tuple(dropped)
+        if dropped:
+            logger.info("%s: %s 让出 %d 个也挂在门户 %s 上的岗，留 %d 个",
+                        self.name, host, len(dropped), "/".join(needed), len(kept))
+        return kept, (total - len(dropped) if total is not None else None)
 
     def _httpx_fetch_main(self, host: str) -> Tuple[List[dict], Optional[int], bool]:
         """主门户：取租户首页自报的门户（`website_info.path`）与 index 两个公开门户，合并去重。
@@ -430,6 +516,11 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
                     {"_intercepted": [{"data": {"job_post_list": rows, "count": total if total is not None else len(rows)}}]},
                     ensure_ascii=False)
         # httpx 没打通（reached=False）→ 回退浏览器抓包（无 Playwright 环境会抛 → 上层记 failed，不写空）
+        if host in _SHARED_TENANT_PORTAL_OWNER:
+            # 共享租户上的每一条源都不回退：浏览器链重放列表请求时不带 website-path 头（_replay_paginated），
+            # 取回的是整个租户的岗，会把别家公司的岗写到这条源名下；也不做「让给归属门户」那一步。
+            raise RuntimeError(f"feishu shared tenant {host}: list API unreachable; "
+                               "no browser fallback on a tenant shared by several companies")
         return self._browser_fetch(source_url)
 
     def _browser_fetch(self, source_url: str) -> str:
@@ -572,12 +663,7 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
         desc = (post.get("description") or "").strip()
         req = (post.get("requirement") or "").strip()
         summary = (desc + ("　【职位要求】" + req if req else "")).strip() or None
-        portal = post.get("_portal")
-        if portal:
-            host = (self.official_hosts[0] if getattr(self, "official_hosts", None) else "") or self.host
-            jd_url = f"https://{host}/{portal}/position/{pid}/detail"
-        else:
-            jd_url = self.detail_template.format(id=pid)
+        jd_url = self._jd_url(post)
         return RawJob(
             company=self.company_name, title=title, location=city or None,
             job_type=job_type or None, jd_url=jd_url, apply_url=jd_url,
