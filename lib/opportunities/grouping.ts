@@ -16,6 +16,7 @@ import type {
   OpportunitySignalType,
 } from "./types";
 import { spreadByCompany } from "../job-diversify";
+import { staleOnArrival } from "../job-novelty";
 
 // main 区相邻散列（2026-09-17）：公司配额只管「一家最多几张」，不管「挨着几张」——线上 /today 前 8 张全是字节跳动
 // （配额 30% × 30 = 9 张，全部堆在最前面）。/jobs 早有滑窗散列（lib/job-diversify），这里复用同一实现：
@@ -230,7 +231,12 @@ export function groupOpportunities(
 
   // isNew 仅供展示（NEWLY_DISCOVERED 信号未上时不用于分区）
   if (options.noveltySince) {
-    for (const o of candidates) o.isNew = Boolean(o.firstSeenAt) && o.firstSeenAt! > options.noveltySince;
+    for (const o of candidates) {
+      o.isNew =
+        Boolean(o.firstSeenAt) &&
+        o.firstSeenAt! > options.noveltySince &&
+        !staleOnArrival({ first_seen_at: o.firstSeenAt, posted_at: o.officialPostedAt });
+    }
   }
 
   const used = new Set<string>();

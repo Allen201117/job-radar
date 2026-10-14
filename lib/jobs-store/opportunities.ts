@@ -23,6 +23,7 @@ import { locationTargetSqlTerms } from "@/lib/opportunities/location-targets";
 import { overseasLocationUnstated } from "@/lib/opportunities/scope-intent";
 import { appendJobScopeWhere, effectiveTargetRegions, jobMatchesScope } from "@/lib/job-scope";
 import { appendCurrentSeasonWhere } from "@/lib/campus-season";
+import { SQL_NOT_STALE_ON_ARRIVAL, staleOnArrival } from "@/lib/job-novelty";
 import { collapseBulkStoreJobs, BULK_STORE_COMPANIES } from "@/lib/bulk-store-dedup";
 import { estimateRowBytes, kb } from "./row-bytes";
 import { writeRecallSnapshot, type RecallSnapshot, type RecallSnapshotWrite } from "./recall-snapshot";
@@ -599,7 +600,9 @@ export function buildRecallSql(
   if (cityRef) {
     tiers.push({
       tier: "cityNew",
-      conds: [cityRef, "first_seen_at >= $1"],
+      // 「新岗」与 stage-2 的新鲜度同一个判据（lib/job-novelty）：进来时官方发布日就已经早 7 天以上的岗不走这道门
+      //（它仍可以从方向 / 公司 / 职能层进池）。条件文本一变，召回快照的形状指纹跟着变，旧快照自动作废重算。
+      conds: [cityRef, "first_seen_at >= $1", SQL_NOT_STALE_ON_ARRIVAL],
       order: orderOf(directionCase, placeCase),
     });
   }
@@ -789,7 +792,12 @@ async function recallViaSupabase(
       profile,
     );
     const { data } = await query.limit(limit);
-    take(data);
+    // PostgREST 写不了「两列相减」，城市新岗层的发布日条件在取回后用同一个判据滤。判据与香港库路径同口径，
+    // 窗口不同：这里是先取满 limit 再滤（老岗会占掉取数名额），香港库是在 where 里滤。
+    // 截断判定按滤之前的行数：取满了就是截断，不能因为滤掉几行就当成没截断。
+    const cityRows: any[] = data || [];
+    if (cityRows.length >= limit) branchCapped = true;
+    take(cityRows.filter((j) => !staleOnArrival(j)));
   }
   const r = finalize(byId, limit);
   return { jobs: r.jobs, capped: branchCapped || r.capped };

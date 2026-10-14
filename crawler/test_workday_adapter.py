@@ -364,6 +364,379 @@ class WorkdayLocationSourceTest(unittest.TestCase):
         self.assertEqual({j.location for j in adapter.parse(html)}, {"12100 Samsung Blvd, Austin, TX, USA"})
 
 
+class _FakeWorkday:
+    """按 2026-10-12 实测复刻 CXS 列表接口的三个行为（Target / Diageo 等 101 个源逐个真翻过）：
+      · 一个查询最多给 cap 条：首页自报的 total 封顶在 cap；
+      · offset 翻过末尾（或 >= cap）不回空页，回的是第一页；
+      · facets 里每个取值的 count 受其它维度的过滤影响、不受本维度影响，且是准的。
+    cap 真实值是 2000，这里缩小到 200 让用例跑得快（adapter 里的同名常量一起缩）。"""
+
+    DIMS = ("Location_Country", "state", "jobFamilyGroup", "workerSubType")
+    DESCRIPTORS = {"us": "United States of America", "sg": "Singapore"}
+
+    def __init__(self, jobs, cap=200, dims=None, report_total=True):
+        self.jobs = jobs
+        self.cap = cap
+        self.dims = dims if dims is not None else self.DIMS
+        self.report_total = report_total
+        self.bodies = []
+
+    @staticmethod
+    def _match(job, applied, skip=None):
+        return all(job[p] in ids for p, ids in applied.items() if p != skip)
+
+    def rows(self, applied, search=""):
+        return [j for j in self.jobs if self._match(j, applied) and search.lower() in j["text"].lower()]
+
+    def post(self, url, json=None, headers=None, timeout=None):
+        body = json or {}
+        self.bodies.append(body)
+        applied = body.get("appliedFacets") or {}
+        rows = self.rows(applied, body.get("searchText") or "")
+        total = min(len(rows), self.cap)
+        offset = body.get("offset", 0)
+        if offset >= total:
+            offset = 0
+        payload = {"jobPostings": [{"title": j["title"], "externalPath": j["path"]}
+                                   for j in rows[:self.cap][offset:offset + body.get("limit", 20)]]}
+        if offset == 0:
+            if self.report_total:
+                payload["total"] = total
+            payload["facets"] = []
+            for dim in self.dims:
+                counts = {}
+                for j in self.jobs:
+                    if self._match(j, applied, skip=dim):
+                        counts[j[dim]] = counts.get(j[dim], 0) + 1
+                payload["facets"].append({"facetParameter": dim, "values": [
+                    {"id": v, "descriptor": self.DESCRIPTORS.get(v, v), "count": n} for v, n in counts.items()]})
+        return _response(200, payload)
+
+    def paged_bodies(self):
+        return [b for b in self.bodies if b.get("limit") == 20]
+
+
+def _word(i):
+    """把序号写成字母：重复度刹车比的是去掉数字 / 括号之后的标题，带数字的标题在它眼里是同一个。"""
+    out = ""
+    while True:
+        out = "abcdefghijklmnopqrstuvwxyz"[i % 26] + out
+        i //= 26
+        if not i:
+            return out
+
+
+def _job(i, state="mn", family="corp", sub="regular", title=None, country="us"):
+    place = "USA" if country == "us" else "Singapore"
+    return {"Location_Country": country, "state": state, "jobFamilyGroup": family, "workerSubType": sub,
+            "title": title or f"Role {_word(i)}", "path": f"/job/{place}-{state.upper()}-City/Role_R{i}",
+            "text": "United States"}
+
+
+class _FakeWorkdayCase(unittest.TestCase):
+    SOURCE_URL = "https://tenant.wd5.myworkdayjobs.com/wday/cxs/tenant/site/jobs"
+    CAP = 200
+
+    def _fetch(self, server, regions=("US",), env=None, adapter=None):
+        adapter = adapter or WorkdayAdapter()
+        adapter.regions = frozenset(regions)
+        adapter.max_pages = self.CAP // 20
+        with mock.patch("adapters.workday.httpx.post", side_effect=server.post), \
+                mock.patch("adapters.workday.httpx.get", side_effect=RuntimeError("no detail in test")), \
+                mock.patch("adapters.workday._QUERY_ROW_CAP", self.CAP), \
+                mock.patch("adapters.workday._SPLIT_BLOCK_ROWS", self.CAP * 9 // 10), \
+                mock.patch.dict("os.environ", {"CRAWL_REPEAT_STALL_ROWS": "40", **(env or {})}), \
+                mock.patch("time.sleep"):
+            html = adapter.fetch(self.SOURCE_URL)
+        return adapter, {j.jd_url.rsplit("/job/", 1)[1] for j in adapter.parse(html)}
+
+    @staticmethod
+    def _paths(jobs):
+        return {j["path"].split("/job/", 1)[1] for j in jobs}
+
+
+class WorkdayWrapAroundTest(_FakeWorkdayCase):
+    """翻过末尾时 Workday 回的是第一页，不是空页（2026-10-12 实测）。条数恰好是 20 的整数倍的查询因此
+    永远等不到短页 / 空页：旧实现一路翻满 100 页、记「可能未抓全」，同一轮 101 个源里 11 个源 12 个查询
+    中招，白翻 964 页（占全部列表请求的两成），而这 12 个查询一个岗都没少。"""
+
+    def test_query_whose_size_is_a_multiple_of_page_size_stops_at_the_wrap(self):
+        server = _FakeWorkday([_job(i) for i in range(40)])
+        adapter, got = self._fetch(server)
+        self.assertEqual(len(got), 40)
+        self.assertTrue(adapter.fetch_complete)
+        # 第 0、1 页 + 绕回第一页的那一次；候选组有两个（国家 / 无）也不该超过个位数
+        self.assertLessEqual(len(server.paged_bodies()), 4)
+
+    def test_wrap_is_detected_without_trusting_reported_total(self):
+        # 自报 total 缺席时同样要停：判据是「这一页没有带来新岗」，不是 total
+        server = _FakeWorkday([_job(i) for i in range(60)], report_total=False)
+        adapter, got = self._fetch(server)
+        self.assertEqual(len(got), 60)
+        self.assertTrue(adapter.fetch_complete)
+        self.assertLessEqual(len(server.paged_bodies()), 5)
+
+    def test_text_fallback_stops_at_the_wrap_too(self):
+        # 没有可用的地点 facet（trusted < 25）→ 走 searchText 兜底，同一个绕回行为
+        server = _FakeWorkday([_job(i) for i in range(20)], dims=())
+        adapter, got = self._fetch(server)
+        self.assertEqual(len(got), 20)
+        self.assertTrue(adapter.fetch_complete)
+        self.assertLessEqual(len(server.paged_bodies()), 2 * 2)   # 'United States' / 'USA' 各两次
+
+
+    def test_repeated_page_mid_listing_is_not_reported_complete(self):
+        # 对方中途把同一页回了两次（缓存 / 抖动）：那一页没有新岗，但还没到它自报的末尾——
+        # 不能当成收尾（后面 40 条照拿，旧实现也拿得到），少掉的那一页如实记没抓全
+        server = _FakeWorkday([_job(i) for i in range(100)])
+        orig_post = server.post
+
+        def post(url, json=None, headers=None, timeout=None):
+            body = dict(json or {})
+            if body.get("offset") == 40:
+                body["offset"] = 20
+            return orig_post(url, json=body, headers=headers, timeout=timeout)
+
+        server.post = post
+        with self.assertLogs("adapters.workday", level="WARNING"):
+            adapter, got = self._fetch(server)
+        self.assertEqual(len(got), 80)
+        self.assertFalse(adapter.fetch_complete)
+
+    def test_non_dict_item_does_not_make_a_full_page_look_like_the_last_one(self):
+        server = _FakeWorkday([_job(i) for i in range(40)])
+        orig_post = server.post
+
+        def post(url, json=None, headers=None, timeout=None):
+            resp = orig_post(url, json=json, headers=headers, timeout=timeout)
+            posts = resp.json.return_value["jobPostings"]
+            if len(posts) == 20 and posts[0]["title"] == server.jobs[0]["title"]:
+                posts[3] = None   # 第一页（含翻过末尾绕回来的那次）里夹一个坏项
+            return resp
+
+        server.post = post
+        adapter, got = self._fetch(server)
+        self.assertEqual(len(got), 39)   # 第一页 19 条 + 第二页 20 条；旧写法按「19 < 20」当成末页，只剩 19 条
+        self.assertTrue(adapter.fetch_complete)
+
+    def test_reused_instance_does_not_carry_the_previous_stop_reason(self):
+        adapter = WorkdayAdapter()
+        bulk, _hq = WorkdayCapSplitTest()._bulk()
+        self._fetch(_FakeWorkday(bulk), adapter=adapter)
+        self.assertEqual(adapter.coverage_stop_reason, "repetition_brake")
+        adapter, got = self._fetch(_FakeWorkday([_job(i) for i in range(45)]), adapter=adapter)
+        self.assertEqual(len(got), 45)
+        self.assertIsNone(adapter.coverage_stop_reason)
+        self.assertTrue(adapter.fetch_complete)
+        self.assertEqual(adapter.reported_total, 45)
+
+
+class WorkdayCapSplitTest(_FakeWorkdayCase):
+    """一个查询最多给 2000 条（用例里缩成 200）。国家级 facet 超过这个数时，旧实现只拿得到前 2000 条：
+    Target 美国岗自报 14,072、每轮只见 2,008，库里另有 2,107 个仍在招的岗再也刷不到（2026-10-12）。"""
+
+    def _diverse(self):
+        # 1,000 个美国岗、标题各不相同：一个州 460（自己就超过上限，要再切一层），其余九个州各 60
+        jobs, i = [], 0
+        for n, state in [(460, "ca")] + [(60, f"s{k}") for k in range(9)]:
+            for k in range(n):
+                jobs.append(_job(i, state=state, sub=("regular", "seasonal", "intern")[k % 3]))
+                i += 1
+        return jobs
+
+    def test_capped_country_query_is_split_until_every_block_fits(self):
+        jobs = self._diverse()
+        server = _FakeWorkday(jobs)
+        adapter, got = self._fetch(server)
+        self.assertEqual(got, self._paths(jobs))
+        self.assertTrue(adapter.fetch_complete)
+        self.assertIsNone(adapter.coverage_stop_reason)
+        self.assertGreaterEqual(adapter.reported_total, len(jobs))
+        # 请求量跟着岗位数走，不是成倍放大：1,000 条 = 50 页，再加每块的首页 / 收尾
+        self.assertLess(len(server.paged_bodies()), 50 + 30)
+        # 没有任何一块再去翻一个「装不下」的查询的后续页
+        for body in server.paged_bodies():
+            if body["offset"] > 0:
+                self.assertLess(len(server.rows(body["appliedFacets"])), self.CAP)
+
+    def test_split_blocks_never_exceed_the_facet_id_limit(self):
+        # 1,000 个岗各在各的「州」：按条数一块能装 180 个取值，但单次 appliedFacets 最多 150 个 id
+        jobs = [_job(i, state=f"u{i}") for i in range(1000)]
+        server = _FakeWorkday(jobs, dims=("Location_Country", "state"))
+        adapter, got = self._fetch(server)
+        self.assertEqual(got, self._paths(jobs))
+        self.assertTrue(adapter.fetch_complete)
+        sizes = [len(b["appliedFacets"]["state"]) for b in server.bodies if "state" in (b.get("appliedFacets") or {})]
+        self.assertEqual(max(sizes), 150)
+
+    def test_query_that_fills_the_cap_without_reporting_total_is_split_too(self):
+        # 首页不报 total 的租户：翻满上限才知道装不下，同样要切，而且切到底
+        jobs = self._diverse()
+        adapter, got = self._fetch(_FakeWorkday(jobs, report_total=False))
+        self.assertEqual(got, self._paths(jobs))
+        self.assertTrue(adapter.fetch_complete)
+
+    def test_failed_block_keeps_the_rest_and_does_not_repage_parent_windows(self):
+        # 切出来的某一块第一页就断连：别的块照收、如实记没抓全；中间层（加州）不为此再把自己的前 200 条翻一遍
+        jobs = self._diverse()
+        server = _FakeWorkday(jobs)
+        orig_post = server.post
+
+        def post(url, json=None, headers=None, timeout=None):
+            applied = (json or {}).get("appliedFacets") or {}
+            if applied.get("workerSubType") == ["seasonal"]:
+                raise httpx.RemoteProtocolError("Server disconnected")
+            return orig_post(url, json=json, headers=headers, timeout=timeout)
+
+        server.post = post
+        with self.assertLogs("adapters.workday", level="WARNING"):
+            adapter, got = self._fetch(server)
+        self.assertFalse(adapter.fetch_complete)
+        lost = {j["path"].split("/job/", 1)[1] for j in jobs
+                if j["state"] == "ca" and j["workerSubType"] == "seasonal"}
+        self.assertFalse((self._paths(jobs) - lost) - got, "没出事的块一条都不能少")
+        ca_window_pages = [b for b in server.bodies if b.get("offset", 0) > 0
+                           and b["appliedFacets"] == {"Location_Country": ["us"], "state": ["ca"]}]
+        self.assertEqual(ca_window_pages, [])
+
+    def _with_sg(self, us_jobs, n=30, **kw):
+        return us_jobs + [_job(9000 + i, state="sgx", country="sg", **kw) for i in range(n)]
+
+    def test_shortfall_is_caught_below_a_multi_country_root_too(self):
+        # 多个国家一起提交时，美国那一块是在第二层才单独切的：那里切完明显少于自报数，同样不许记抓全
+        us = [_job(i, state=f"s{i % 20}") for i in range(1000)]
+        for j in us:
+            if j["state"] in ("s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7"):
+                j["state"] = None
+        jobs = self._with_sg(us)
+        server = _FakeWorkday(jobs, dims=("Location_Country", "state"))
+        orig_post = server.post
+
+        def post(url, json=None, headers=None, timeout=None):
+            resp = orig_post(url, json=json, headers=headers, timeout=timeout)
+            for facet in resp.json.return_value.get("facets") or []:
+                if facet["facetParameter"] == "state":
+                    facet["values"] = [{**v, "count": v["count"] * 2} for v in facet["values"] if v["id"] is not None]
+            return resp
+
+        server.post = post
+        with self.assertLogs("adapters.workday", level="WARNING"):
+            adapter, got = self._fetch(server, regions=("US", "SG"))
+        self.assertFalse(adapter.fetch_complete)
+        self.assertFalse(self._paths(jobs[:self.CAP]) - got)
+
+    def test_brake_on_the_bulk_country_does_not_drop_the_small_countries(self):
+        # 美国那一块是门店批量发布、被刹车叫停；一起提交的新加坡只有 30 个岗（排在前 200 条之外、
+        # 职类 / 用工类型与门店岗相同）——它是「已选维度里的小取值」，要单独翻全
+        us, hq = self._bulk()
+        jobs = self._with_sg(us, family="stores", sub="seasonal")
+        adapter, got = self._fetch(_FakeWorkday(jobs), regions=("US", "SG"))
+        self.assertEqual(adapter.coverage_stop_reason, "repetition_brake")
+        self.assertFalse(self._paths(jobs[-30:]) - got, "新加坡的岗一条都不能少")
+        self.assertFalse(self._paths(hq) - got)
+        self.assertFalse(self._paths(jobs[:self.CAP]) - got)
+
+    def _bulk(self):
+        # 门店批量发布：1,140 个门店岗只有 3 种标题（括号里的店号各不相同）；60 个总部岗标题各不相同，
+        # 成两簇夹在列表里——一簇在旧实现够得着的前 200 条之内，一簇在之外。
+        stores = [_job(i, state=f"s{i % 12}", family="stores", sub="seasonal",
+                       title=("Guest Advocate", "Starbucks Barista", "Inbound")[i % 3] + f" (T{i})")
+                  for i in range(1140)]
+        hq = [_job(5000 + i, state="s0", family=f"fam{i % 6}", sub="regular") for i in range(60)]
+        return stores[:150] + hq[:30] + stores[150:1000] + hq[30:] + stores[1000:], hq
+
+    def test_bulk_store_tenant_keeps_old_window_and_adds_minority_values_only(self):
+        jobs, hq = self._bulk()
+        server = _FakeWorkday(jobs)
+        adapter, got = self._fetch(server)
+        window = self._paths(jobs[:self.CAP])
+        self.assertFalse(window - got, "改前拿得到的前 200 条，改后一条都不能少")
+        self.assertFalse(self._paths(hq) - got, "装得进一个查询的小众取值（非门店职类）要翻全")
+        # 同一个岗 × N 家门店不整包拉；刹车前试翻到的那几页门店岗也不留（下一轮未必还够得着）
+        self.assertEqual(got, window | self._paths(hq))
+        self.assertFalse(adapter.fetch_complete)
+        self.assertEqual(adapter.coverage_stop_reason, "repetition_brake")
+        self.assertEqual(adapter.reported_total, len(jobs))   # 分母如实记对方自报的数
+        self.assertLess(len(server.paged_bodies()), 3 * (self.CAP // 20) + 20)
+
+    def test_split_stops_at_the_per_source_list_cap(self):
+        jobs = self._diverse()
+        server = _FakeWorkday(jobs)
+        adapter, got = self._fetch(server, env={"CRAWL_MAX_JOBS": "500"})
+        self.assertFalse(adapter.fetch_complete)
+        self.assertEqual(adapter.coverage_stop_reason, "list_cap")
+        self.assertLess(len(got), len(jobs))
+        self.assertFalse(self._paths(jobs[:self.CAP]) - got, "撞上限时原来够得着的那一窗也要在")
+
+    def test_query_that_cannot_be_split_falls_back_to_the_old_window(self):
+        # 响应里除了已选的国家维度没有别的 facet：切不动 → 退回原做法拿前 200 条，如实记没抓全
+        jobs = self._diverse()
+        server = _FakeWorkday(jobs, dims=("Location_Country",))
+        adapter, got = self._fetch(server)
+        self.assertEqual(got, self._paths(jobs[:self.CAP]))
+        self.assertFalse(adapter.fetch_complete)
+
+    def test_dimension_that_misses_jobs_is_not_trusted_as_a_partition(self):
+        # 「州」这个维度只挂了一部分岗（真实例子：Target 带国家过滤时 locations 只露出 55 个叶子 766 个岗）：
+        # 计数和盖不住这一块 → 不拿它当全集的切法；有别的盖得住的维度就用那个
+        jobs = [_job(i, state=f"s{i % 20}", family=f"fam{i % 7}") for i in range(1000)]
+        for j in jobs[::2]:
+            j["state"] = None
+        server = _FakeWorkday(jobs)
+        orig_post = server.post
+
+        def post(url, json=None, headers=None, timeout=None):
+            resp = orig_post(url, json=json, headers=headers, timeout=timeout)
+            payload = resp.json.return_value
+            for facet in payload.get("facets") or []:
+                facet["values"] = [v for v in facet["values"] if v["id"] is not None]
+            return resp
+
+        server.post = post
+        adapter, got = self._fetch(server)
+        self.assertEqual(got, self._paths(jobs))
+        self.assertTrue(adapter.fetch_complete)
+        self.assertFalse(any("state" in (b.get("appliedFacets") or {}) for b in server.bodies))
+
+
+    def test_split_that_comes_up_short_of_the_declared_count_is_not_called_complete(self):
+        # facet 计数不准的租户（这里：四成的岗没挂「州」，而州的计数被报成两倍，看上去盖得住）：
+        # 每一块都能翻完，并集却只有自报数的六成 → 不许记抓全，原来够得着的前 200 条要补上
+        jobs = [_job(i, state=f"s{i % 20}") for i in range(1000)]
+        for j in jobs:
+            if j["state"] in ("s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7"):
+                j["state"] = None
+        server = _FakeWorkday(jobs, dims=("Location_Country", "state"))
+        orig_post = server.post
+
+        def post(url, json=None, headers=None, timeout=None):
+            resp = orig_post(url, json=json, headers=headers, timeout=timeout)
+            for facet in resp.json.return_value.get("facets") or []:
+                if facet["facetParameter"] == "state":
+                    facet["values"] = [{**v, "count": v["count"] * 2} for v in facet["values"] if v["id"] is not None]
+            return resp
+
+        server.post = post
+        with self.assertLogs("adapters.workday", level="WARNING"):
+            adapter, got = self._fetch(server)
+        self.assertFalse(adapter.fetch_complete)
+        self.assertFalse(self._paths(jobs[:self.CAP]) - got)
+        self.assertEqual(adapter.reported_total, len(jobs))
+
+
+class WorkdayPackFacetIdsTest(unittest.TestCase):
+    def test_bins_respect_row_capacity_and_id_limit(self):
+        from adapters.workday import _FACET_ID_CHUNK, _pack_facet_ids
+        pairs = [("big", 2155)] + [(f"v{i}", 7) for i in range(400)]
+        bins = _pack_facet_ids(pairs, capacity=1800)
+        self.assertEqual(bins[0], ["big"])   # 自己就超过上限的取值单独一块，留给下一层再切
+        counts = dict(pairs)
+        for b in bins[1:]:
+            self.assertLessEqual(sum(counts[i] for i in b), 1800)
+            self.assertLessEqual(len(b), _FACET_ID_CHUNK)
+        self.assertEqual(sorted(i for b in bins for i in b), sorted(counts))   # 一个 id 都不丢
+
+
 # ── 同一个帖子换了链接（2026-10-12）──────────────────────────────────────────────
 # 例子都是当天库里 / 对方接口上的真实链接：空气产品把主地点从莆田改成晋江，路径的地点段跟着变，
 # 两条链接打详情回的是同一个帖子（同一个 id，自报的当前链接是晋江那条）。
