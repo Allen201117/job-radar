@@ -199,7 +199,10 @@ NO_OUTPUT_MODULES = ("insight_staleness", "purge_expired", "ops_watchdog",
                      "auto_repair",
                      # byd_liveness（2026-10-11）：expired=0 = 这一轮比亚迪没有撤岗（国庆 10-01~10-07 每轮抓到的
                      # 官网列表都是 2,188~2,189 行）。被安全闸拦下的轮次进程退出码 2，信号是 workflow 变红。
-                     "byd_liveness")
+                     "byd_liveness",
+                     # moka_liveness（2026-10-12）：同理，expired=0 = 这一轮 Moka 门户没有岗掉出列表
+                     # （国庆那一周每天掉出列表的不到 10 行）。有源被安全闸拦下时进程退出码 2。
+                     "moka_liveness")
 
 # 规则 D：已落库的账户级错误信号。lib/track.ts 把 402/余额不足归一成 llm_insufficient_balance、
 # 把 401/403 归一成 llm_auth_error，写进 events.payload.diagnostics.error_code——用户侧真实踩到的欠费。
