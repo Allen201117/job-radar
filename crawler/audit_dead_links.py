@@ -56,18 +56,26 @@ _BROWSER_ADAPTERS = (
     # google 已移出：2026-07-14 live 核实其详情页其实是 SSR，httpx 直接拿得到 <main> 正文
     # （活岗 5-6k 字符）+ 软 404 文案判死 → 已进 ENRICH_REGISTRY/liveness-sweep（httpx 快且能补正文），
     # 留在这里只会无头重复探活（与 wt/hotjob 同理：有 httpx 检测的就不走浏览器）。
-    "kuaishou", "byd", "bytedance", "bytedance_campus",
-    # 2026-06-25 补：db-report 实测 24h 覆盖=0 的大厂 SPA（alibaba 3789/netease 1177/ctrip 772/huawei 445 岗，
-    # 之前不在任何保鲜流）。均为浏览器渲染详情页 → 纳入审计渲染探活（同上：命中 DEAD_MARKERS 才下架，否则只轮转盖戳）。
-    "alibaba", "netease", "ctrip",
+    # byd 已移出（2026-10-12）：它撤岗后的详情页是空壳——不渲染岗位名和正文，也没有任何「已下线」文案，
+    # classify() 只能落 suspect（375 个真渲染样本里 300 个已撤岗 0 个判 dead），每天巡、只盖戳、从不下架，
+    # 攒过 5,429 个已撤岗。改由 crawler/byd_liveness.py 判（不在全量列表 + 详情接口空骨架），留在这里纯属白烧预算。
+    "kuaishou", "bytedance", "bytedance_campus",
+    # 2026-06-25 补：db-report 实测 24h 覆盖=0 的大厂 SPA（当时 alibaba 3789 岗，之前不在任何保鲜流）。
+    # 浏览器渲染详情页 → 纳入审计渲染探活（同上：命中 DEAD_MARKERS 才下架，否则只轮转盖戳）。
+    # ⚠️ alibaba 留在这里是有意的（2026-10-12）：它的详情接口 content=null 不稳——同一批 1,422 个读到 null 的岗，
+    # 一两个小时后再问有 28 个读到在招；channel 传错时在招岗也回 null。拿它判死会错杀，页面文案「该职位已失效」
+    # 才是可靠的（弱词「已失效」认得）。菜鸟的撤岗页是空骨架、无文案，这里判不出（suspect），那 176 行还没有路。
+    "alibaba",
     # huawei 已移出（2026-07-29）：其详情走公开 JSON 接口 getJobDetail/newHr，httpx 直接判死+补正文
     # → 已进 ENRICH_REGISTRY/liveness-sweep。留在这里只会无头重复探活，且渲染出来的页面
     # 命不中 DEAD_MARKERS（实测探 300+ 岗下架 0 个）＝纯浪费（同 google/wt/hotjob 的处理）。
-    # 2026-06-25 补：bilibili（detail 端点需 ajSessionId cookie，httpx 拿不到 → 无快速撤岗信号）
-    # → 走浏览器渲染探活兜底（社招深链 SPA，命中 DEAD_MARKERS 才下架）。phenom(AMD/百事)仍延后(SPA 壳+低相关)。
-    "bilibili",
-    # 2026-07-06 补：小红书/OPPO/百度是必投头部公司但无 httpx closure detector，详情页探活走通用软 404 渲染审计。
-    "xiaohongshu", "oppo", "baidu",
+    # netease / ctrip / baidu / bilibili / xiaohongshu / oppo 已移出（2026-10-12）：这六家的撤岗页浏览器判不出——
+    # 携程的文案「您查看的职位已下架」词表没收；网易是「--」占位的空骨架（侧栏「相关职位」还会让标题检查命中）；
+    # 百度是空壳，且无头浏览器里连在招页都落到 about:blank（CI 上 4 轮 42/42 unsure）；B 站 / 小红书 / OPPO 已关的岗
+    # 照样渲染岗位名和正文（CI 上全判 alive）。加上轮转按源摊名额、一个源每天只看十来行，攒了 4,600 多个已撤岗。
+    # 它们都有逐岗详情接口 → 已进 ENRICH_REGISTRY/liveness-sweep（全集对拍，见 enrich.py「六家自建站」那段注释）。
+    # 🚫 2026-06-25 这里写过「bilibili 的 detail 端点需 ajSessionId cookie，httpx 拿不到」——那是当时没走通，
+    # 不是对方不给：先取匿名 CSRF token 再带 X-CSRF 头就能问（列表 adapter 早就是这么抓的）。
 )
 
 # 判死信号分两档（2026-09-08 拆分，修 F2）。
@@ -145,7 +153,7 @@ def is_same_document_nav(previous_url, url):
     自己的「头部达人运营-【电商】」，判定回到 alive。
 
     影响面：byd 6,362 + kuaishou 2,830 个 active 岗的 jd_url 都是「同一个 base + 不同 hash」，
-    两者都在 _BROWSER_ADAPTERS 里、每天带 --apply 跑。
+    立碑时两者都在 _BROWSER_ADAPTERS 里、每天带 --apply 跑（byd 2026-10-12 移出，原因见名单注释）。
     只在真正的同文档跳转上多花一次 reload，其余源一次都不多花。"""
     if not previous_url or not url:
         return False

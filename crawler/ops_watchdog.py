@@ -199,7 +199,10 @@ NO_OUTPUT_MODULES = ("insight_staleness", "purge_expired", "ops_watchdog",
                      "auto_repair",
                      # byd_liveness（2026-10-11）：expired=0 = 这一轮比亚迪没有撤岗（国庆 10-01~10-07 每轮抓到的
                      # 官网列表都是 2,188~2,189 行）。被安全闸拦下的轮次进程退出码 2，信号是 workflow 变红。
-                     "byd_liveness")
+                     "byd_liveness",
+                     # moka_liveness（2026-10-12）：同理，expired=0 = 这一轮 Moka 门户没有岗掉出列表
+                     # （国庆那一周每天掉出列表的不到 10 行）。有源被安全闸拦下时进程退出码 2。
+                     "moka_liveness")
 
 # 规则 D：已落库的账户级错误信号。lib/track.ts 把 402/余额不足归一成 llm_insufficient_balance、
 # 把 401/403 归一成 llm_auth_error，写进 events.payload.diagnostics.error_code——用户侧真实踩到的欠费。
@@ -372,6 +375,11 @@ def parse_workflow_meta(text):
     declared = [j["timeout"] for j in jobs if j["timeout"]]
     return {
         "crons": crons,
+        # concurrency 带 cancel-in-progress：同分支新一轮一起来，旧一轮就被平台取消（规则 B 据此豁免）
+        "cancel_in_progress": any(
+            re.match(r"^\s*cancel-in-progress:\s*true\s*(#.*)?$", raw)
+            for raw in str(text or "").splitlines()
+        ),
         "jobs": jobs,
         "max_timeout": max(declared) if declared else None,
         "max_gap_minutes": max(
@@ -1102,7 +1110,27 @@ def _host_of(url: str) -> str:
     return m.group(1) if m else "?"
 
 
-def evaluate_timeout_kills(runs, jobs_by_run, meta_by_path, ratio=TIMEOUT_KILL_RATIO, min_repeats=2):
+SUPERSEDE_SLACK_MIN = 3   # 新一轮创建到旧 job 收尾之间的平台延迟（实测 ≤1.5 分钟）
+
+
+def _superseded(run, job_done, all_runs):
+    """这一轮是不是被「同 workflow、同分支、紧跟着来的新一轮」按 cancel-in-progress 取消的。"""
+    created = _as_dt(run.get("created_at"))
+    if not created or not job_done:
+        return False
+    for other in all_runs or []:
+        if other.get("id") == run.get("id") or other.get("path") != run.get("path"):
+            continue
+        if (other.get("head_branch") or "") != (run.get("head_branch") or ""):
+            continue
+        other_created = _as_dt(other.get("created_at"))
+        if other_created and created < other_created <= job_done + timedelta(minutes=SUPERSEDE_SLACK_MIN):
+            return True
+    return False
+
+
+def evaluate_timeout_kills(runs, jobs_by_run, meta_by_path, ratio=TIMEOUT_KILL_RATIO, min_repeats=2,
+                           all_runs=None):
     """规则 B：按 **job 级** 判「任务被中途杀掉」。
 
     为什么必须看 job 级：run 级状态会骗人——dead-link-audit 有过 run 级 cancelled、job 级却是
@@ -1116,6 +1144,10 @@ def evaluate_timeout_kills(runs, jobs_by_run, meta_by_path, ratio=TIMEOUT_KILL_R
          ⚠️ 判据 ② 不是补充、是必需：2026-08-27 实测 dead-link-audit 22:00 那档的 6 个分片
          每晚都在**第 90 分钟整**被杀，而它声明的 timeout 是 150 分钟——仓库里也搜不到任何
          cancel-in-progress / 手动取消。只按判据 ① 判，这件天天发生的事永远告不出来。
+
+    豁免（2026-10-14 加）：workflow 声明了 cancel-in-progress、且同分支紧接着来了新一轮 → 是被新提交
+    顶掉的，不是被杀。❌ unit-tests.yml 10-12 连推几次，3 轮在第 1 分钟被顶掉，规则 B 开了 issue #68。
+    没撞 timeout 才豁免；撞了 timeout 的照告。all_runs 不传 = 不豁免（旧行为）。
     """
     hits = defaultdict(lambda: {"lines": [], "runs": set(), "timeout_hit": False})
     for run in runs or []:
@@ -1129,6 +1161,9 @@ def evaluate_timeout_kills(runs, jobs_by_run, meta_by_path, ratio=TIMEOUT_KILL_R
                 continue
             minutes = (done - started).total_seconds() / 60.0
             limit = timeout_for_job(meta, job.get("name"))
+            if (meta.get("cancel_in_progress") and minutes < limit * ratio
+                    and _superseded(run, done, all_runs)):
+                continue
             bucket = hits[run.get("path") or "?"]
             bucket["runs"].add(run_id)
             if minutes >= limit * ratio:
@@ -1948,7 +1983,7 @@ def main():
                     jobs_by_run[run["id"]] = fetch_jobs(repo, run["id"])
                 except RuntimeError as exc:
                     print(f"  [watchdog] 取 run {run.get('id')} 的 job 详情失败，跳过：{exc}")
-            findings += evaluate_timeout_kills(targets, jobs_by_run, meta_by_path)
+            findings += evaluate_timeout_kills(targets, jobs_by_run, meta_by_path, all_runs=runs)
             findings += evaluate_overdue(fetch_last_runs(repo, meta_by_path, runs), now=now)
             findings += evaluate_crawl_workflow_failures(runs)
         except Exception as exc:  # noqa: BLE001 - GitHub 侧失败只降级，不吞掉台账侧告警

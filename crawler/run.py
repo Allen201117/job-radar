@@ -35,8 +35,9 @@ from adapters.crc import CrcAdapter
 from adapters.netease_campus import NeteaseCampusAdapter
 from adapters.huawei_campus import HuaweiCampusAdapter
 from adapters.lixiang_campus import LixiangCampusAdapter
+from adapters.tal import TalAdapter
 from adapters.tencent_campus import TencentCampusAdapter
-from adapters.bytedance import BytedanceAdapter, BytedanceCampusAdapter
+from adapters.bytedance import BytedanceAdapter, BytedanceCampusAdapter, BytedanceGlobalAdapter
 from adapters.feishu import NioAdapter, XpengAdapter, HorizonAdapter, XiaomiAdapter, FeishuGenericAdapter
 from adapters.greenhouse import GreenhouseAdapter
 from adapters.lever import LeverAdapter
@@ -150,6 +151,7 @@ ADAPTERS = {
     "tencent_campus": TencentCampusAdapter(),
     "huawei_campus": HuaweiCampusAdapter(),
     "lixiang_campus": LixiangCampusAdapter(),  # 理想汽车校招/实习：api-web.lixiang.com 公开接口,零浏览器
+    "tal": TalAdapter(),  # 好未来校招官网 job.tal.com（集团 / 学而思 / 学而思网校三个站点）：公开列表接口，零浏览器
     "bilibili_campus": BilibiliCampusAdapter(),
     # 华润集团自建招聘平台（runjob.crc.com.cn）：一行 source = 一个品牌招聘站
     "crc": CrcAdapter(),
@@ -157,6 +159,7 @@ ADAPTERS = {
     "alibaba_campus_portal": AlibabaCampusPortalAdapter(),
     "bytedance": BytedanceAdapter(),
     "bytedance_campus": BytedanceCampusAdapter(),  # 字节校招/实习（与社招同平台）
+    "bytedance_global": BytedanceGlobalAdapter(),  # 字节全球站 joinbytedance.com（同租户 en 门户，海外岗）
     "nio_feishu": NioAdapter(),
     "xpeng_feishu": XpengAdapter(),
     "horizon_feishu": HorizonAdapter(),
@@ -255,6 +258,7 @@ DOMESTIC_ADAPTERS = {
     "abchina",  # 农业银行（浏览器档：响应体加密，读 React state）
     "cib",  # 兴业银行（浏览器档：请求要现场签名，调用页面自己的请求函数）
     "lixiang_campus",  # 理想汽车校招/实习（2026-09-09 live 核实逐岗详情页，零浏览器）
+    "tal",  # 好未来校招官网 job.tal.com（2026-10-12 live 核实逐岗详情页，零浏览器）
     "sf_express_campus", "midea_campus",  # 顺丰 / 美的 校招门户（2026-09-18 live，零浏览器）
     "duoyi", "duoyi_campus",  # 多益网络 社招 / 校招官网（2026-09-18 live，列表即全文，零浏览器）
     "byd_campus",  # 比亚迪校招门户（浏览器档：详情 URL 由官网路由生成，同 byd）
@@ -266,7 +270,7 @@ DOMESTIC_ADAPTERS = {
 # 未知 / 浏览器 adapter 一律落串行档（fail-safe），杜绝把 Playwright（sync API，非线程安全）
 # 的 adapter 误并发跑崩夜间 cron。新增 httpx adapter 时显式加进来才享受并发。
 _HTTPX_SAFE_ADAPTERS = {
-    "apple", "apple_cn", "baidu", "jd", "haier", "iguopin", "siemens", "tencent", "tencent_campus", "huawei_campus", "lixiang_campus", "bilibili_campus", "netease_campus", "alibaba_campus_portal", "hikvision",
+    "apple", "apple_cn", "baidu", "jd", "haier", "iguopin", "siemens", "tencent", "tencent_campus", "huawei_campus", "lixiang_campus", "tal", "bilibili_campus", "netease_campus", "alibaba_campus_portal", "hikvision",
     "greenhouse", "lever", "ashby", "smartrecruiters", "successfactors", "workday", "eightfold",
     "oracle", "amazon", "phenom", "microsoft", "hotjob", "wt",
     "netease", "oppo", "xiaohongshu", "alibaba", "alibaba_campus", "huawei", "ctrip",
@@ -282,7 +286,7 @@ _HTTPX_SAFE_ADAPTERS = {
     "citicbank",  # 中信银行：POST 列表 + GET 静态详情，纯 httpx、无共享状态（2026-09-23 live）
     # 字节：jobs.bytedance.com posts API 已改为纯 httpx offset/limit 全量翻页；
     # sources.crawl_method 仍由运维侧改库，本白名单只控制代码侧并发档。
-    "bytedance", "bytedance_campus",
+    "bytedance", "bytedance_campus", "bytedance_global",
     # feishu 家族：posts API 冷 httpx 直出岗位+正文（2026-06-28 实测 generic/nio/xpeng/xiaomi/zhipu/xtool
     # 全可达），httpx-first + 浏览器回退见 adapters/feishu.py；进 daily-crawl 4×/天（原仅 enrich-crawl 1×/天）。
     "feishu", "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu",

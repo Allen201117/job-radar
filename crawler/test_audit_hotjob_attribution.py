@@ -6,10 +6,11 @@ from unittest.mock import patch
 
 try:
     from audit_hotjob_attribution import (cjk_name, names_agree, audit, audit_wt, wt_identity, wt_key,
-                                          wt_verdict)
+                                          wt_verdict, audit_feishu, feishu_identity, feishu_verdict)
 except ModuleNotFoundError:
     from crawler.audit_hotjob_attribution import (cjk_name, names_agree, audit, audit_wt, wt_identity,
-                                                  wt_key, wt_verdict)
+                                                  wt_key, wt_verdict, audit_feishu, feishu_identity,
+                                                  feishu_verdict)
 
 
 class NamesTest(unittest.TestCase):
@@ -246,6 +247,174 @@ class AuditWtTest(unittest.TestCase):
         self.assertEqual(client.calls.count(yili), 1)                        # 同一门户两条源只问一次
 
 
+def _feishu_home(title="", tenant="", keywords="", description=""):
+    head = f"<title>{title}</title>" if title else ""
+    return (f'<html><head>{head}<meta name="description" content="{description}">'
+            f'<meta name="keywords" content="{keywords}"></head><body>'
+            f'<script>window.__DATA__={{"tenant_name":"{tenant}","use_v2_detail":"true"}}</script></body></html>')
+
+
+class _FeishuClient:
+    """假的飞书门户：pages = {首页地址: (html,) 或 (html, 状态码)}，没登记的地址一律抛错。"""
+
+    def __init__(self, pages):
+        self.pages, self.calls = pages, []
+
+    def get(self, url, params=None, headers=None):
+        self.calls.append(url)
+        if url not in self.pages:
+            raise RuntimeError("boom")
+        html, *status = self.pages[url]
+        return _Resp(url, html, status_code=status[0] if status else 200)
+
+
+class FeishuIdentityTest(unittest.TestCase):
+    def test_reads_tenant_title_keywords_from_tenant_root_and_never_description(self):
+        home = _feishu_home("", "ByteDance", "字节跳动招聘官网、字节跳动招聘、字节跳动社招",
+                            "字节跳动在全球推出了多款有影响力的产品，包括今日头条、抖音、西瓜视频、飞书等。")
+        client = _FeishuClient({"https://bytedance.jobs.feishu.cn/": (home,)})
+        texts, err = feishu_identity("https://bytedance.jobs.feishu.cn/index/position", client)
+        self.assertIsNone(err)
+        self.assertEqual(texts, ["ByteDance", "字节跳动招聘官网、字节跳动招聘、字节跳动社招"])
+        self.assertFalse(any("抖音" in t for t in texts))   # 宣传语里点名的产品不是门户自报的公司名
+
+    def test_error_page_is_unknown_not_a_declaration(self):
+        client = _FeishuClient({"https://didatravel.jobs.feishu.cn/": ("Not Found", 404)})
+        texts, err = feishu_identity("https://didatravel.jobs.feishu.cn/index/position", client)
+        self.assertIsNone(texts)
+        self.assertIn("404", err)
+
+    def test_unreachable_host_is_unknown(self):
+        texts, err = feishu_identity("https://down.jobs.feishu.cn/index/position", _FeishuClient({}))
+        self.assertIsNone(texts)
+        self.assertIn("RuntimeError", err)
+
+
+class FeishuVerdictTest(unittest.TestCase):
+    def test_source_name_found_in_portal_self_report_is_ok(self):
+        self.assertEqual(feishu_verdict("美图公司", ["美图公司", "加入Pixocial 像素互联"]), "ok")
+        self.assertEqual(feishu_verdict("厦门艾德生物医药科技股份有限公司", ["艾德生物", "艾德生物 Careers"]), "ok")
+
+    def test_latin_brand_in_mixed_name_is_ok(self):
+        self.assertEqual(feishu_verdict("智元机器人 AGIBot",
+                                        ["智元创新（上海）科技股份有限公司", "欢迎加入智元AGIBOT！"]), "ok")
+
+    def test_another_company_is_mismatch(self):
+        self.assertEqual(feishu_verdict("容知日新", ["深圳库犸创新科技集团有限公司", "加入深圳库犸科技有限公司"]),
+                         "mismatch")
+        self.assertEqual(feishu_verdict("千署科技", ["千曙科技", "加入千曙科技"]), "mismatch")
+
+    def test_agreeing_only_by_finding_the_portal_name_inside_ours_is_weak_not_ok(self):
+        # 2026-10-11 实锤：租户名只写「英科」，门户标题是「英科再生社会招聘官网」，库里记的是英科医疗 ——
+        # 拿门户名去库名里找，两个字的租户名会对上同集团的任何一家。
+        self.assertEqual(feishu_verdict("英科医疗", ["英科", "英科再生社会招聘官网", "英科招聘, 加入英科"]), "weak")
+
+
+class AuditFeishuTest(unittest.TestCase):
+    def test_buckets_cache_known_ok_and_undecidable(self):
+        pages = {
+            "https://mammotion.jobs.feishu.cn/": (_feishu_home("加入深圳库犸科技有限公司", "深圳库犸创新科技集团有限公司"),),
+            "https://global-intco.jobs.feishu.cn/": (_feishu_home("英科再生社会招聘官网", "英科"),),
+            "https://moonton.jobs.feishu.cn/": (_feishu_home("加入沐瞳科技", "沐瞳科技"),),
+            "https://moonton.jobs.feishu.cn/campus/": (_feishu_home("加入沐瞳科技", "沐瞳科技"),),
+            "https://zj-innolight.jobs.feishu.cn/": (_feishu_home("加入苏州旭创科技有限公司", "苏州旭创科技有限公司"),),
+            "https://toa7dmu9bq.jobs.feishu.cn/": (_feishu_home("欢迎加入电子所", "电子所"),),
+            "https://didatravel.jobs.feishu.cn/": ("Not Found", 404),
+        }
+        client = _FeishuClient(pages)
+        rows = [
+            {"company": "容知日新", "source_url": "https://mammotion.jobs.feishu.cn/index/position"},
+            {"company": "英科医疗", "source_url": "https://global-intco.jobs.feishu.cn/index/position"},
+            {"company": "沐瞳科技", "source_url": "https://moonton.jobs.feishu.cn/index/position"},
+            {"company": "沐瞳科技", "source_url": "https://moonton.jobs.feishu.cn/"},
+            {"company": "沐瞳科技", "source_url": "https://moonton.jobs.feishu.cn/campus/position"},
+            {"company": "中际旭创", "source_url": "https://zj-innolight.jobs.feishu.cn/index/position"},
+            {"company": "上海航天电子技术研究所", "source_url": "https://toa7dmu9bq.jobs.feishu.cn/index/position"},
+            {"company": "道旅科技 Dida", "source_url": "https://didatravel.jobs.feishu.cn/index/position"},
+        ]
+        mismatches, weak, undecidable, unknowns, ok = audit_feishu(rows, client)
+        self.assertEqual(mismatches, [("容知日新", rows[0]["source_url"], "深圳库犸创新科技集团有限公司")])
+        self.assertEqual(weak, [("英科医疗", rows[1]["source_url"], "英科")])
+        self.assertEqual([c for c, _, _ in undecidable], ["上海航天电子技术研究所"])
+        self.assertEqual([c for c, _, _ in unknowns], ["道旅科技 Dida"])
+        self.assertEqual(ok, 4)   # 沐瞳三条 + 中际旭创（人工核过：苏州旭创是它的经营主体）
+        self.assertEqual(client.calls.count("https://moonton.jobs.feishu.cn/"), 1)   # 同一个门户首页两条源只取一次
+        self.assertEqual(client.calls.count("https://moonton.jobs.feishu.cn/campus/"), 1)   # 子门户源读自己的首页
+
+    def test_shared_tenant_each_source_is_checked_against_its_own_portal(self):
+        # 2026-10-12 实锤：英科这个租户挂着两家上市公司的门户。租户首页是英科再生的；英科医疗官网链过去的是
+        # /757263（社招）与 /840753（校招），各有各的标题。一律读租户首页时，这两条英科医疗的源只能判成弱对上。
+        pages = {
+            "https://global-intco.jobs.feishu.cn/": (_feishu_home("英科再生社会招聘官网", "英科"),),
+            "https://global-intco.jobs.feishu.cn/757263/": (_feishu_home("英科医疗社会招聘官网", "英科"),),
+            "https://global-intco.jobs.feishu.cn/840753/": (_feishu_home("英科医疗校园招聘官网", "英科"),),
+        }
+        client = _FeishuClient(pages)
+        rows = [
+            {"company": "英科再生", "source_url": "https://global-intco.jobs.feishu.cn/index/position"},
+            {"company": "英科医疗", "source_url": "https://global-intco.jobs.feishu.cn/757263/position"},
+            {"company": "英科医疗", "source_url": "https://global-intco.jobs.feishu.cn/840753/position"},
+        ]
+        mismatches, weak, undecidable, unknowns, ok = audit_feishu(rows, client)
+        self.assertEqual((mismatches, weak, undecidable, unknowns, ok), ([], [], [], [], 3))
+        self.assertEqual(sorted(client.calls), sorted(pages))
+        # 反方向：把名字挂反了照样报出来，不会因为同一个主机上有别的门户对得上就放过。
+        swapped = [
+            {"company": "英科医疗", "source_url": "https://global-intco.jobs.feishu.cn/index/position"},
+            {"company": "英科再生", "source_url": "https://global-intco.jobs.feishu.cn/757263/position"},
+        ]
+        mismatches, weak, _undecidable, _unknowns, ok = audit_feishu(swapped, _FeishuClient(pages))
+        self.assertEqual((ok, mismatches), (0, []))
+        self.assertEqual(sorted(c for c, _, _ in weak), ["英科再生", "英科医疗"])   # 只剩租户名「英科」反向对得上
+
+    def test_sub_portal_page_that_does_not_load_is_unknown_not_judged_by_the_tenant_root(self):
+        client = _FeishuClient({
+            "https://moonton.jobs.feishu.cn/": (_feishu_home("加入沐瞳科技", "沐瞳科技"),),
+            "https://moonton.jobs.feishu.cn/campus/": ("Not Found", 404),
+        })
+        rows = [{"company": "沐瞳科技", "source_url": "https://moonton.jobs.feishu.cn/campus/position"}]
+        _m, _w, _u, unknowns, ok = audit_feishu(rows, client)
+        self.assertEqual((ok, [c for c, _, _ in unknowns]), (0, ["沐瞳科技"]))
+        self.assertEqual(client.calls, ["https://moonton.jobs.feishu.cn/campus/"])
+
+    def test_known_ok_is_bound_to_the_name_it_was_reviewed_for(self):
+        # 白名单按「主机 + 当时核过的源名」生效：源名之后被改成别的，要重新进人眼。
+        home = _feishu_home("加入苏州旭创科技有限公司", "苏州旭创科技有限公司")
+        client = _FeishuClient({"https://zj-innolight.jobs.feishu.cn/": (home,)})
+        rows = [{"company": "某某光电", "source_url": "https://zj-innolight.jobs.feishu.cn/index/position"}]
+        mismatches, weak, undecidable, unknowns, ok = audit_feishu(rows, client)
+        self.assertEqual([c for c, _, _ in mismatches], ["某某光电"])
+        self.assertEqual(ok, 0)
+
+    def test_blank_source_name_on_an_unlisted_host_is_a_mismatch(self):
+        home = _feishu_home("加入沐瞳科技", "沐瞳科技")
+        client = _FeishuClient({"https://moonton.jobs.feishu.cn/": (home,)})
+        rows = [{"company": "", "source_url": "https://moonton.jobs.feishu.cn/index/position"}]
+        mismatches, _weak, undecidable, _unknowns, ok = audit_feishu(rows, client)
+        self.assertEqual((len(mismatches), undecidable, ok), (1, [], 0))
+
+    def test_home_page_is_requested_in_chinese(self):
+        # 入库核名门（discover_domestic._client）带 Accept-Language: zh-CN；周检要读到同一种语言的标题。
+        seen = []
+
+        class _Client(_FeishuClient):
+            def get(self, url, params=None, headers=None):
+                seen.append(headers or {})
+                return super().get(url, params=params, headers=headers)
+
+        client = _Client({"https://moonton.jobs.feishu.cn/": (_feishu_home("加入沐瞳科技", "沐瞳科技"),)})
+        feishu_identity("https://moonton.jobs.feishu.cn/index/position", client)
+        self.assertTrue(seen[0].get("Accept-Language", "").startswith("zh-CN"))
+
+    def test_undecidable_list_is_bound_to_the_name_too(self):
+        home = _feishu_home("欢迎加入电子所", "电子所")
+        client = _FeishuClient({"https://toa7dmu9bq.jobs.feishu.cn/": (home,)})
+        rows = [{"company": "某某电子", "source_url": "https://toa7dmu9bq.jobs.feishu.cn/index/position"}]
+        mismatches, _weak, undecidable, _unknowns, _ok = audit_feishu(rows, client)
+        self.assertEqual([c for c, _, _ in mismatches], ["某某电子"])
+        self.assertEqual(undecidable, [])
+
+
 class _Query:
     def __init__(self, sb):
         self.sb, self.filters, self.start = sb, {}, 0
@@ -255,6 +424,10 @@ class _Query:
 
     def eq(self, col, value):
         self.filters[col] = value
+        return self
+
+    def in_(self, col, values):
+        self.filters[col] = tuple(values)
         return self
 
     def like(self, col, pattern):
@@ -283,25 +456,34 @@ class _Sb:
 
 
 class RunLedgerTest(unittest.TestCase):
-    def test_run_loads_both_adapters_and_records_wt_fields(self):
+    def test_run_loads_all_three_families_and_records_their_fields(self):
         M = sys.modules[audit.__module__]
+        feishu_family = ("feishu", "nio_feishu", "xiaomi_feishu", "xpeng_feishu", "horizon_feishu")
         sb = _Sb({"hotjob": [{"company": "甲", "source_url": "u1"}, {"company": "丙", "source_url": "u2"}],
-                  "wt": [{"company": "中国电信", "source_url": "u3"}]})
+                  "wt": [{"company": "中国电信", "source_url": "u3"}],
+                  feishu_family: [{"company": "容知日新", "source_url": "u5"}, {"company": "英科医疗", "source_url": "u6"},
+                                  {"company": "道旅", "source_url": "u7"}]})
         with patch.object(M.httpx, "Client"), \
              patch.object(M, "audit", return_value=([("甲", "u1", "乙")], [("丙", "u2", "boom")], 0)), \
              patch.object(M, "audit_wt", return_value=([("中国电信", "u3", "财通证券")],
                                                        [("中广核", "u4", "西安")], [], 7)), \
+             patch.object(M, "audit_feishu", return_value=([("容知日新", "u5", "深圳库犸")], [("英科医疗", "u6", "英科")],
+                                                           [("电子所那条", "u8", "只报简称")], [("道旅", "u7", "首页 HTTP 404")],
+                                                           4)), \
              patch.object(M.ops_runs, "record_ops_run") as rec:
             self.assertEqual(M._run(sb, SimpleNamespace(limit=None), started_at=None), 0)
         self.assertEqual(sb.asked, [
             {"adapter_name": "hotjob", "enabled": True, "source_url": "%/pb/%"},
-            {"adapter_name": "wt", "enabled": True, "source_url": "%/wt/%"}])
+            {"adapter_name": "wt", "enabled": True, "source_url": "%/wt/%"},
+            {"adapter_name": feishu_family, "enabled": True}])
         args, _ = rec.call_args
         self.assertEqual(args[1], "audit_hotjob_attribution")
         self.assertEqual(args[2], {"sources": 2, "ok": 0, "mismatch": 1, "unknown": 1,
                                    "wt_sources": 1, "wt_ok": 7, "wt_mismatch": 1,
-                                   "wt_undecidable": 1, "wt_unknown": 0})
-        self.assertEqual(args[3], "partial")   # 3 条源里 1 条接口没答复；wt「判不了」不算失败
+                                   "wt_undecidable": 1, "wt_unknown": 0,
+                                   "feishu_sources": 3, "feishu_ok": 4, "feishu_mismatch": 1, "feishu_weak": 1,
+                                   "feishu_undecidable": 1, "feishu_unknown": 1})
+        self.assertEqual(args[3], "partial")   # 6 条源里 2 条没答复；「判不了」「弱对上」都不算失败
 
 
 if __name__ == "__main__":

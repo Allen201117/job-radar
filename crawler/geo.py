@@ -1,7 +1,9 @@
+import functools
 import json
 import os
 import re
-from typing import Optional
+import unicodedata
+from typing import NamedTuple, Optional
 
 
 # 中文地名词表（省级 + 地级行政区，不含后缀）。
@@ -318,6 +320,7 @@ _STRICT_CJK_PLACES = {
         "广岛", "廣島", "广岛市", "仙台", "仙台市", "千叶", "千葉", "千叶市", "千叶县",
         "埼玉", "埼玉县", "川崎", "川崎市", "北九州", "北九州市", "静冈", "静冈县",
         "新潟", "熊本", "长崎", "長崎", "冲绳", "沖繩", "冲绳县", "奈良", "神奈川", "神奈川县",
+        "千代田区", "江差町",
     ),
     # 韩国。⚠️「大田」「光州」只收 "…广域市" 的完整形态：福建有大田县，
     # 裸「大田」「光州」在中文里撞得上中国地名/普通词。
@@ -326,18 +329,36 @@ _STRICT_CJK_PLACES = {
         "釜山", "釜山市", "釜山广域市", "仁川", "仁川市", "仁川广域市",
         "大邱广域市", "光州广域市", "大田广域市", "蔚山", "蔚山市", "蔚山广域市",
         "世宗市", "世宗特别自治市", "京畿道", "忠清北道", "忠清南道", "全罗北道", "全罗南道",
-        "庆尚北道", "庆尚南道", "江原道", "济州道", "济州特别自治道",
+        "庆尚北道", "庆尚南道", "江原道", "济州道", "济州特别自治道", "城南市",
     ),
     # 朝鲜。⚠️ 绝不收裸「朝鲜」：吉林有延边朝鲜族自治州、长白朝鲜族自治县（线上 32 个岗）。
     "KP": ("朝鲜民主主义人民共和国", "北朝鲜", "平壤", "平壤市"),
     # 越南：数据里「胡志明市」24 个岗，通用后缀规则会把它判成 CN。
-    "VN": ("越南", "胡志明市", "胡志明", "河内", "河内市", "岘港", "海防市"),
-    "TH": ("泰国", "曼谷", "曼谷市", "清迈"),
-    "MY": ("马来西亚", "吉隆坡", "槟城", "柔佛"),
-    "ID": ("印度尼西亚", "印尼", "雅加达", "泗水"),
-    "PH": ("菲律宾", "马尼拉"),
-    "IN": ("印度", "新德里", "孟买", "班加罗尔"),
-    "AE": ("阿联酋", "迪拜", "杜拜", "阿布扎比"),
+    # ── 2026-10-12 补境外**城市**中文名 ──────────────────────────────────────────────────
+    # 此前本表的城市只有各国首都和几个大城市。飞书招聘（含字节官网）用的是同一套标准地点库，
+    # 岗位地点只给一个城市的中文译名、不带国家：「塔吉格」「帕西格市」「南雅加达行政市」「古来」……
+    # 一个都认不出 → 按 source.regions={CN} 兜底成国内岗。香港库实测在招 259 行 / 47 种写法 / 32 条源
+    # （字节跳动 126、小鹏 24、中国五矿 23、英科 15、禾赛 13、中际旭创 12……）。
+    # 每个词都有出处：岗位标题 / 正文写明国家，或飞书详情接口返回的英文原名（Taguig / Alor Gajah /
+    # Nong Khae / Diemen …）。逐条用例与行数在 tests/fixtures/geo-cases.json；另有 12 个同名后缀变体
+    # （塔吉格市 / 春武里府 / 东雅加达行政市 …）库里还没出现，按地名本身收，夹具里单独标了。
+    # ⚠️ 仍然是**整段精确匹配**，且排在中文行政区规则之后：「深圳、富寿」「昆明市·普吉」照旧判 CN。
+    # 🚫 刻意不收（宁可漏判）：
+    #   · 「大城」（泰国大城府 Ayutthaya）—— 河北廊坊有大城县，农业银行这类源会把区县名裸写；
+    #   · 「清化」只收「清化市」（河南博爱县有清化镇）；「北宁」只收裸名（辽宁北镇市 2006 年前叫北宁市）；
+    #   · 「圣弗朗西斯科」「阿姆斯特朗」「巴尔韦伦」—— 多国重名或登记的国别与岗位对不上，判不准哪国就不判。
+    "VN": ("越南", "胡志明市", "胡志明", "河内", "河内市", "岘港", "海防市",
+           "清化市", "北宁", "桂武县", "巴亭", "富寿"),
+    "TH": ("泰国", "曼谷", "曼谷市", "清迈",
+           "春武里", "春武里府", "春武里府治", "北揽", "北揽府", "农凯", "是拉差", "普吉", "普吉岛",
+           "邦巴沙都拍"),
+    "MY": ("马来西亚", "吉隆坡", "槟城", "柔佛", "古来", "亚罗牙也", "巴生", "新山"),
+    "ID": ("印度尼西亚", "印尼", "雅加达", "泗水",
+           "南雅加达行政市", "北雅加达行政市", "东雅加达行政市", "西雅加达行政市", "中雅加达行政市",
+           "大雅加达首都特区", "雅加达首都特区", "普哇加达县", "巴厘", "巴厘岛"),
+    "PH": ("菲律宾", "马尼拉", "塔吉格", "塔吉格市", "帕西格", "帕西格市", "帕赛", "帕赛市"),
+    "IN": ("印度", "新德里", "孟买", "班加罗尔", "古尔冈"),
+    "AE": ("阿联酋", "迪拜", "杜拜", "阿布扎比", "阿拉伯联合酋长国"),
     # 以下国名/城市来自**线上残留写法实测**（不是背世界地图）：改完之后仍抽不出国家的
     # 6,627 个中文地点岗里，绝大多数就是这些串。它们眼下靠 source.regions 兜底，
     # CN 源下会被算成国内供给 —— 正是本次要治的病。
@@ -345,11 +366,12 @@ _STRICT_CJK_PLACES = {
     #    整段精确匹配已经能挡（"内蒙古" != "蒙古"），这里再加一层字面保险。
     "US": ("美国", "圣何塞", "帕罗奥多", "帕洛阿尔托", "洛杉矶", "森尼韦尔", "圣克拉拉",
            "贝尔维尤", "费利蒙", "山景城", "尔湾", "奥斯汀", "布鲁克林", "萨克拉门托",
-           "华盛顿哥伦比亚特区"),
+           "华盛顿哥伦比亚特区", "阿什本", "波士顿", "亚特兰大", "布法罗", "奇诺"),
     "GB": ("英国", "伦敦", "莱斯特"),
-    "DE": ("德国", "慕尼黑", "柏林", "杜塞尔多夫", "法兰克福", "斯图加特"),
-    "FR": ("法国", "巴黎"),
-    "NL": ("荷兰", "阿姆斯特丹", "鹿特丹", "霍夫多尔普"),
+    "DE": ("德国", "慕尼黑", "柏林", "杜塞尔多夫", "法兰克福", "斯图加特", "汉堡", "诺伊斯莱茵县"),
+    # 「布洛涅-比扬古」的连字符是段分隔符，会被切成两段，所以两段各收一条。
+    "FR": ("法国", "巴黎", "布洛涅", "比扬古"),
+    "NL": ("荷兰", "阿姆斯特丹", "鹿特丹", "霍夫多尔普", "迪门"),
     "ES": ("西班牙", "马德里"),
     "IT": ("意大利", "米兰", "罗马"),
     "PL": ("波兰", "华沙"),
@@ -359,7 +381,7 @@ _STRICT_CJK_PLACES = {
     "SA": ("沙特阿拉伯", "利雅得", "艾卜哈"),
     "TR": ("土耳其", "伊斯坦布尔"),
     "AU": ("澳大利亚", "悉尼", "墨尔本", "布里斯班"),
-    "CA": ("加拿大", "多伦多", "温哥华"),
+    "CA": ("加拿大", "多伦多", "温哥华", "不列颠哥伦比亚省"),
     "ZA": ("南非", "约翰内斯堡"),
     "EG": ("埃及", "开罗"),
     "NG": ("尼日利亚", "拉各斯"),
@@ -378,7 +400,7 @@ _STRICT_CJK_PLACES = {
     "MN": ("蒙古国",),
     "ZW": ("津巴布韦",),
     "GN": ("几内亚",),
-    "MA": ("摩洛哥", "卡萨布兰卡"),
+    "MA": ("摩洛哥", "卡萨布兰卡", "丹吉尔"),
     "HU": ("匈牙利", "布达佩斯"),
     "CZ": ("捷克", "布拉格", "布拉格直辖市"),
     "SK": ("斯洛伐克",),
@@ -422,7 +444,7 @@ _STRICT_CJK_PLACES = {
     "ML": ("马里",),
     "AO": ("安哥拉", "罗安达", "罗安达市"),
     "CD": ("刚果民主共和国", "金沙萨"),
-    "CG": ("刚果",),
+    "CG": ("刚果", "刚果共和国"),
     "GA": ("加蓬",),
     "UG": ("乌干达",),
     "SL": ("塞拉利昂",),
@@ -436,6 +458,17 @@ _STRICT_CJK_PLACES = {
     "JO": ("约旦", "安曼"),
     "AZ": ("阿塞拜疆", "巴库"),
     "DO": ("多米尼加", "圣多明各"),
+    # 2026-10-12 新增的国家一律接在表尾：多国混写串按本表国家的先后判，插到中间会改掉已有串的答案。
+    "PG": ("巴布亚新几内亚",),
+    # 「奥克兰」也是美国加州 Oakland 的译名；库里 4 行都是腾讯的新西兰岗（详情链接路径 New-Zealand-Auckland），
+    # 两种都在境外，求职范围不会判错。
+    "NZ": ("新西兰", "奥克兰"),
+    "BB": ("巴巴多斯",),
+    "MG": ("马达加斯加",),
+    "MR": ("毛里塔尼亚",),
+    "BW": ("博茨瓦纳",),
+    "MC": ("摩纳哥",),
+    "MZ": ("莫桑比克",),
 }
 
 # 中国大陆省级 + 地级行政区名（不含后缀）。**枚举而非猜**：这是一份有边界的清单
@@ -1372,3 +1405,257 @@ def location_cn_places(location: Optional[str]) -> list:
             i += len(name)
             last_province = glued = province if is_province else None
     return hits
+
+
+# 别名表里的城市，别处有同名的区：牡丹江市西安区、辽源市西安区。只有这种才能凭「X区」说它不是 X 市——
+# 「杭州区」「北京区」是业务片区的叫法（live：Moka 卡片上的部门名「浙江业务区-杭州区…」），说的就是那个城市。
+_CITY_NAMES_USED_BY_DISTRICTS_ELSEWHERE = frozenset({"西安"})
+
+
+def cn_name_is_part_of_another_place(location: Optional[str], name: str) -> bool:
+    """location 里每一处「name」是不是都只是别的地名 / 路名的一部分，而不是在说 name 这个城市（2026-10-12 加）。
+
+    给 normalizer.clean_location 用：子串折叠折出了 name，location_cn_places 却在串里认出了别的地方、没认出它。
+    下面几种算「不是在说它」；有一处哪种都不是就返回 False——宁可维持折叠，不把原来对的城市改丢：
+      · 那几个字跨在别的地名上（「陕西安康」「山西安泽县」的「西安」：西是省名的）；
+      · 串里另有 name 所在省之外的地方，而它后面紧跟路 / 街（「哈尔滨市利民开发区南京路6号」，判法同
+        _STREET_AFTER_PLACE_RE），或者它是别处有同名区的那个名字、后面是「区」（「牡丹江市·西安区」）；
+      · 同一段里前面已经写了另一个城市、它后面是「湾」（「宁波市杭州湾新区」）。只认这一个字：紧跟在别的城市后面的
+        多半是几个城市粘在一起写（「广州深圳等地」「南京上海深圳」「宁波杭州区域」），那里的每个城市都是真的。
+    """
+    text = str(location or "")
+    own_province = cn_place_province(name)
+    others = [(pos, pos + len(nm), is_province, nm)
+              for pos, nm, _province, is_province, _written in location_cn_places(text) if nm != name]
+    if not others:
+        return False
+    elsewhere = any(not (is_province and nm == own_province) for _s, _e, is_province, nm in others)
+    seg_ends = [m.end() for m in _SEGMENT_SPLIT_RE.finditer(text)]
+    start = text.find(name)
+    found = False
+    while start >= 0:
+        found = True
+        end = start + len(name)
+        rest = text[end:]
+        seg_start = max((e for e in seg_ends if e <= start), default=0)
+        straddles = any(s < end and start < e for s, e, _is_province, _nm in others)
+        street = bool(_STREET_AFTER_PLACE_RE.match(rest))
+        district = (name in _CITY_NAMES_USED_BY_DISTRICTS_ELSEWHERE
+                    and rest.startswith("区") and not rest.startswith("区域"))
+        after_city = any(seg_start <= s and e <= start and not is_province for s, e, is_province, _nm in others)
+        if not (straddles or (elsewhere and (street or district)) or (after_city and rest.startswith("湾"))):
+            return False
+        start = text.find(name, start + 1)
+    return found
+
+
+# ---------------------------------------------------------------------------
+# 拼音 / 英文写法的国内地名（2026-10-12 加）。给 normalizer.clean_location 用，只有爬虫侧在用。
+#
+# 外企招聘系统（workday / smartrecruiters / radancy / successfactors…）给的国内地点是拼音：「Changzhou, Jiangsu, China」
+# 「Tianjin, TJ, CN, 300457」「He Fei Shi, An Hui Sheng, China」。读侧的城市判断只做中文匹配，原样入库 = 这个岗对
+# 任何填了城市的用户都对不上。词表在 lib/cn-prefecture-pinyin.json（全国地级单位，不动别名表）。
+#
+# 认法偏严——多认一个城市是把岗位推给不在那里的人，少认一个只是维持原样的拉丁写法：
+#   · 串里有汉字的一律不看（中文写法的行一个字都不动）；
+#   · 这串自己判得出是中国才认（derive_country_code == CN），所以认出来之后国家码不会变；
+#     地点自己没说国家、对方 ATS 自报是 CN 的裸城市名（「Urumqi」）由 normalize 带着 assume_cn 再问一次；
+#   · 拼音按整词比（两边都不能粘着字母），而且要**独占一段**：按逗号 / 斜杠 / 括号 / 连字符切段，段里除了它只许有
+#     国家词、省名、Shi / City、数字。街名、楼名、校名里的城市名因此不算——「Zhongshan Er Lu, Guangzhou」
+#     「Harbin Institute of Technology, Weihai」「Peking University Shenzhen Graduate School」里的中山 / 哈尔滨 /
+#     北京都不是岗位所在地（2026-10-12 只读审查推演出来的反例，真实数据里当天恰好没有）；
+#   · 后面跟着 Road / District / County 的是路和区县（隔着逗号的「Zhongshan, Dong, Road」也算），不是那个地级市；
+#   · 词表里标了 needs_province 的名字（撞名、与大城市的区同音、连写后像别的词）要串里写着它所在的省；
+#   · 音节拆开写的（「He Fei」）要后面跟着 Shi / City 或串里写着它的省；
+#   · 串里点了省或直辖市，却不是它的省 → 不认（「Baoshan, Shanghai」是宝山区，「Zhongshan Park, Shanghai」不是中山市）。
+# ---------------------------------------------------------------------------
+_CN_PINYIN_JSON = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "lib", "cn-prefecture-pinyin.json"
+)
+_HAS_CJK_RE = re.compile(r"[一-鿿]")
+_LATIN_ROAD_DIRECTION = r"(?:east|west|north|south|middle|central|e|w|n|s|dong|xi|nan|bei|zhong)"
+# 路名可以隔着逗号（「Zhongshan, Dong, Road」这种把每个词劈开的旧写法），区 / 县 / 镇只认空格
+# （「Changsha, Xian」是并列的两个城市，「Changsha Xian」才是长沙县）。
+_LATIN_NOT_A_CITY_AFTER = (
+    # 路名词后面是撇号的不算路：「Hefei, Lu'an」的 Lu 是六安的第一个音节。
+    r"(?!(?:[\s,]+" + _LATIN_ROAD_DIRECTION + r")?[\s,]+"
+    r"(?:road|rd|street|st|avenue|ave|boulevard|blvd|lu|dadao|jie|dajie)(?![a-z'’])"
+    r"|\s+(?:district|qu|county|xian|town|zhen|subdistrict|jiedao|new\s+(?:area|district)|xinqu)(?![a-z]))"
+)
+_LATIN_SHI_AFTER_RE = re.compile(r"[\s,]*(?:shi|city)(?![a-z])", re.I | re.A)
+# 「独占一段」怎么切段、段里还许有什么。连字符算分隔（「Dalian-Liaoning-China」）；下划线不算，所以
+# 「China_Dalian_Plant」这种站点代号整段都不认。
+_LATIN_PLACE_SEGMENT_BREAKS = frozenset(",;/|()·:>\\-–—")
+_LATIN_SEGMENT_FILLER_RE = re.compile(
+    r"(?:p\.?\s?r\.?\s?)?china|people'?s republic of|"
+    r"(?<![a-z])(?:mainland|cn|prc|shi|city|municipality|prefecture|sheng|province|zizhiqu|autonomous region|"
+    r"uygur|uyghur|zhuang|zhuangzu|huizu|hui)(?![a-z])|\d+", re.I | re.A)
+# 两字母省码只在紧挨着 CN / China 时才当证据（「Tianjin, TJ, CN, 300457」「Dalian, LN, CN」）；必须大写。
+_LATIN_PROVINCE_CODE_RE = re.compile(r"(?<![A-Za-z])([A-Z]{2})(?=\s*,\s*(?:CN|China)(?![A-Za-z]))")
+# 判「只写了省」时按这些标点分段。不复用 _SEGMENT_SPLIT_RE：那条连空白和「.」也切，会把「He Bei」「Henan Sheng」切碎。
+_LATIN_SEGMENT_SPLIT_RE = re.compile(r"[,;/|·\-–—()]+")
+_LATIN_COUNTRY_SEGMENT_RE = re.compile(
+    r"^(?:(?:p\.?\s?r\.?\s?)?china(?:\s+mainland)?|mainland(?:\s+china)?|cn|prc|"
+    r"people'?s republic of(?: china)?)$", re.I)
+_LATIN_PROVINCE_TAIL_RE = re.compile(
+    r"^(?:\s*(?:sheng|province|zizhiqu|autonomous region|uygur zizhiqu|uyghur autonomous region|"
+    r"zhuang autonomous region|zhuangzu zizhiqu|huizu zizhiqu|hui autonomous region))?$", re.I)
+
+
+class _LatinIndex(NamedTuple):
+    city_re: "re.Pattern"           # 词表里全部城市写法
+    names_by_key: dict              # 连写拼音 → [短名]（撞名时不止一个）
+    entries: dict                   # 短名 → 词表条目
+    province_re: "re.Pattern"
+    province_by_key: dict           # 连写拼音 → 省
+    province_codes: dict            # 两字母码 → 省 / 直辖市
+    also_provinces: dict            # 省 → 这个写法一并算数的省（Shanxi → 陕西）
+    municipalities: frozenset
+    two_word_forms: frozenset       # 本来就分开写的英文名（bayan nur），不算「音节拆开写」
+
+
+_latin_index = None
+
+
+def _latin_form_pattern(form: str) -> str:
+    """词表里的一个写法 → 正则：音节之间可以连写、空一格或带撇号；「_」两边是本来就分开写的两个词。"""
+    words = (r"[ '’]{0,2}".join(re.escape(s) for s in word.split(" ")) for word in form.split("_"))
+    return r"[ -]?".join(words)
+
+
+def _latin_letters(text: str) -> str:
+    return re.sub(r"[^a-z]", "", text.lower())
+
+
+def _load_latin_index() -> _LatinIndex:
+    global _latin_index
+    if _latin_index is None:
+        with open(_CN_PINYIN_JSON, encoding="utf-8") as f:
+            data = json.load(f)
+        names_by_key, forms, two_word = {}, [], set()
+        for name, entry in data["cities"].items():
+            for form in entry["latin"]:
+                forms.append(form)
+                names = names_by_key.setdefault(_latin_letters(form), [])
+                if name not in names:
+                    names.append(name)
+                if "_" in form:
+                    two_word.add(form.replace("_", " "))
+        province_by_key, province_forms, codes, also = {}, [], dict(data["municipality_codes"]), {}
+        for province, entry in data["provinces"].items():
+            codes[entry["code"]] = province
+            also[province] = tuple(entry.get("also", ()))
+            for form in entry["latin"]:
+                province_forms.append(form)
+                province_by_key[_latin_letters(form)] = province
+
+        def compile_names(all_forms):
+            alternation = "|".join(
+                _latin_form_pattern(f) for f in sorted(set(all_forms), key=lambda f: -len(_latin_letters(f))))
+            # re.A：不带它时 re.I 会让「ı」「ſ」这类非 ASCII 字母匹配上 i / s，按连写拼音查表就查不到了。
+            return re.compile(r"(?<![a-z])(" + alternation + r")(?![a-z])" + _LATIN_NOT_A_CITY_AFTER, re.I | re.A)
+
+        _latin_index = _LatinIndex(
+            compile_names(forms), names_by_key, data["cities"], compile_names(province_forms), province_by_key,
+            codes, also, frozenset(data["municipality_codes"].values()), frozenset(two_word))
+    return _latin_index
+
+
+def _latin_fold_accents(text: str) -> str:
+    """「Ürümqi」这类带变音符的写法折成 ASCII。NFD 只拆变音符、不做兼容分解，去掉之后长度和位置都不变。"""
+    if text.isascii():
+        return text
+    return "".join(ch for ch in unicodedata.normalize("NFD", text) if not unicodedata.combining(ch))
+
+
+def _latin_stands_alone(text: str, start: int, end: int, index: _LatinIndex) -> bool:
+    """text[start:end] 这个城市名是不是独占一段：同段里除了它只有国家词、省名、Shi / City、数字。"""
+    left, right = start, end
+    while left > 0 and text[left - 1] not in _LATIN_PLACE_SEGMENT_BREAKS:
+        left -= 1
+    while right < len(text) and text[right] not in _LATIN_PLACE_SEGMENT_BREAKS:
+        right += 1
+    rest = index.province_re.sub(" ", text[left:start] + " " + text[end:right])
+    return not re.search(r"[A-Za-z0-9]", _LATIN_SEGMENT_FILLER_RE.sub(" ", rest))
+
+
+def latin_cn_places(location: Optional[str], assume_cn: bool = False) -> tuple:
+    """纯拉丁写法的国内地点 → (认出的地级市, 串里字面点到的省)。
+
+    地级市 = ((出现位置, 短名, 写进库的名字, 所在省), …)，按出现位置排；省 = (省短名, …)，按出现顺序去重。
+    串里有汉字、或判不出是中国（assume_cn 为真时由调用方担保）→ ((), ())。
+    """
+    raw = str(location or "")
+    if not raw or _HAS_CJK_RE.search(raw):
+        return (), ()                         # 中文地点是大多数：不进缓存，别把拉丁写法的条目挤出去
+    return _latin_cn_places(raw, assume_cn)
+
+
+@functools.lru_cache(maxsize=4096)
+def _latin_cn_places(raw: str, assume_cn: bool) -> tuple:
+    index = _load_latin_index()
+    text = _latin_fold_accents(raw)
+    named = []
+    for m in index.province_re.finditer(text):
+        named.append(index.province_by_key[_latin_letters(m.group(1))])
+    for m in _LATIN_PROVINCE_CODE_RE.finditer(text):
+        if m.group(1) in index.province_codes:
+            named.append(index.province_codes[m.group(1)])
+    named = tuple(dict.fromkeys(named))
+    candidates = []                           # (位置, [短名], 是不是音节拆开写且后面没有 Shi / City)
+    for m in index.city_re.finditer(text):
+        if not _latin_stands_alone(text, m.start(), m.end(), index):
+            continue
+        written_apart = " ".join(m.group(1).lower().replace("-", " ").split())
+        apart = " " in written_apart and written_apart not in index.two_word_forms
+        weak = apart and not _LATIN_SHI_AFTER_RE.match(text, m.end())
+        candidates.append((m.start(), index.names_by_key[_latin_letters(m.group(1))], weak))
+    # 国家这道闸放在后面只为省事：绝大多数拉丁地点是境外的，词表一个都不沾，用不着再判一次国家。
+    if not (candidates or named) or not (assume_cn or derive_country_code(raw) == "CN"):
+        return (), ()
+    # 直辖市自己就是「省」：串里写了上海，中山 / 保山这类外省地名就对不上省了。音节拆开写的直辖市不算证据。
+    municipal = {n for _, names, weak in candidates for n in names if n in index.municipalities and not weak}
+    own_province_named = set(named) | {p for n in named for p in index.also_provinces.get(n, ())}
+    evidence = own_province_named | municipal
+    cities = []
+    for pos, names, weak in candidates:
+        matching = [n for n in names if cn_place_province(n) in evidence] if evidence else list(names)
+        if len(matching) != 1:
+            continue                          # 撞名分不开，或者串里点到的省都不是它的省
+        name = matching[0]
+        province = cn_place_province(name)
+        if name in index.municipalities:
+            if weak and province not in own_province_named:
+                continue
+        elif (index.entries[name].get("needs_province") or weak) and province not in evidence:
+            continue
+        cities.append((pos, name, index.entries[name].get("written") or name + "市", province))
+    return tuple(cities), named
+
+
+def latin_cn_bare_province(location: Optional[str], assume_cn: bool = False) -> Optional[str]:
+    """串里只写了一个省（和国家 / 邮编）→ 省短名；有任何一段解释不了就返回 None。
+
+    「Jiangsu, China」「China, HA, Henan」→ 省名；「Taicang, Jiangsu」不动——太仓是县级市，写成「江苏」反而把
+    用户看得到的那点信息抹掉了。
+    """
+    provinces = latin_cn_places(location, assume_cn)[1]
+    if len(provinces) != 1:
+        return None
+    index = _load_latin_index()
+    spelled_out = False
+    for seg in _LATIN_SEGMENT_SPLIT_RE.split(_latin_fold_accents(str(location or ""))):
+        seg = seg.strip()
+        if not seg or re.fullmatch(r"\d{4,6}", seg) or _LATIN_COUNTRY_SEGMENT_RE.match(seg):
+            continue
+        if seg in index.province_codes:
+            continue
+        m = index.province_re.match(seg)
+        if m and _LATIN_PROVINCE_TAIL_RE.match(seg[m.end():]):
+            spelled_out = True
+            continue
+        return None
+    # 只有两字母码的不算写了省（「GZ, CN」在公司里常指广州，码表里是贵州）；「Shanxi」常被拿来写陕西，也不替它定。
+    if not spelled_out or index.also_provinces.get(provinces[0]):
+        return None
+    return provinces[0]

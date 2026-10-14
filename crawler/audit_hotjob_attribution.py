@@ -17,8 +17,13 @@
   · jks.hotjob.cn/wt/JKS 记成晶科能源，实为金科服务（85 岗；晶科能源在必投清单里，覆盖数全靠这批物业岗撑着）
 两条都是接入时按 BRAND 代号猜的公司名。wt 没有 suite/config，门户「自己说自己是谁」只有三处，见 wt_identity。
 
+飞书系门户（feishu / nio_feishu / xiaomi_feishu / xpeng_feishu / horizon_feishu）同样复核（2026-10-12 加）：
+  · 2026-10-11 全量普查 138 条：mammotion 记成容知日新（门户自报深圳库犸科技，84 岗）、global-intco 记成英科医疗
+    （门户标题「英科再生社会招聘官网」，87 岗）、tranxmart 记成千署科技（门户自报千曙科技）、bytedance 记成抖音。
+门户「自己说自己是谁」= 租户首页的租户名 / <title> / keywords，见 feishu_identity。
+
 用法：
-    python3 crawler/audit_hotjob_attribution.py            # 全部 enabled wecruit 源 + wt 源
+    python3 crawler/audit_hotjob_attribution.py            # 全部 enabled wecruit 源 + wt 源 + 飞书系源
     python3 crawler/audit_hotjob_attribution.py --limit 20
 """
 import argparse
@@ -33,7 +38,7 @@ import httpx
 import ops_runs
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from discover_domestic import _CN_STOP, _GENERIC_PREFIX  # noqa: E402
+from discover_domestic import _CN_STOP, _GENERIC_PREFIX, _feishu_self_report, feishu_portal_home  # noqa: E402
 from company_name_match import strip_leading_place  # noqa: E402  地名前缀（「苏州凌志软件」→「凌志软件」）
 
 _CONFIG_API = "/wecruit/suite/config/"
@@ -131,13 +136,16 @@ def tenant_identity(source_url: str, client: httpx.Client):
 
 
 def load_sources(sb, limit=None, adapter="hotjob", url_like="%/pb/%"):
-    """enabled 的 wecruit 源（/pb/ 形态；wt 源传 adapter='wt', url_like='%/wt/%'）；PostgREST 默认 1000 行截断，这里分页取全。"""
+    """enabled 的 wecruit 源（/pb/ 形态；wt 源传 adapter='wt', url_like='%/wt/%'）；PostgREST 默认 1000 行截断，这里分页取全。
+    adapter 传元组 = 一族 adapter（飞书系）；url_like=None = 不按地址形态筛。"""
     rows, page, size = [], 0, 1000
     while True:
-        res = (sb.table("sources").select("id,company,source_url,adapter_name")
-               .eq("adapter_name", adapter).eq("enabled", True)
-               .like("source_url", url_like)
-               .order("source_url").range(page * size, page * size + size - 1).execute())
+        query = sb.table("sources").select("id,company,source_url,adapter_name")
+        query = (query.in_("adapter_name", list(adapter)) if isinstance(adapter, tuple)
+                 else query.eq("adapter_name", adapter)).eq("enabled", True)
+        if url_like:
+            query = query.like("source_url", url_like)
+        res = query.order("source_url").range(page * size, page * size + size - 1).execute()
         batch = res.data or []
         rows.extend(batch)
         if len(batch) < size:
@@ -286,6 +294,101 @@ def audit_wt(rows, client):
     return mismatches, undecidable, unknowns, ok
 
 
+# ── 飞书系门户 ────────────────────────────────────────────────────────────────
+# 门户自报 = 源自己那个门户首页的租户名 / <title> / keywords（主门户源读 https://{host}/，子门户源读
+# https://{host}/{门户}/，见 discover_domestic.feishu_portal_home），解析与入库核名门共用
+# discover_domestic._feishu_self_report。不收 meta description：那是宣传语，会点名旗下产品
+# （字节跳动首页写着「今日头条、抖音、西瓜视频、飞书」）。只认 HTTP 200 的首页。
+# 判法比 wecruit 严一档：只有「库名的核心词落在门户文本里」才算对上；反过来拿门户名去库名里找才对上的，
+# 单列「弱对上」给人看 —— 租户名只写两个字时，它能对上同集团的任何一家（英科医疗 ↔ 租户「英科」，
+# 门户其实是英科再生）。
+_FEISHU_ADAPTERS = ("feishu", "nio_feishu", "xiaomi_feishu", "xpeng_feishu", "horizon_feishu")
+
+# 人工核过「名字对不上但归属没错」的飞书门户：主机 → (核过的源名, 理由)。2026-10-11 普查时逐条看过门户页。
+# 只对「当时核过的那个源名」生效：源名之后改成别的，要重新进人眼。
+_FEISHU_KNOWN_OK = {
+    "zj-innolight.jobs.feishu.cn": ("中际旭创", "门户自报苏州旭创科技，是中际旭创的经营主体"),
+    "lightwheel.jobs.feishu.cn": ("光轮智能", "门户自报法人名：启数光轮科技（上海）"),
+    "caz6yhvgk5z.jobs.feishu.cn": ("北电数智", "门户自报法人名：北京电子数智科技；页面导航写「北电数智招聘官网」"),
+    "echotech.jobs.feishu.cn": ("千岛", "门户自报运营公司回响科技；门户路径 qiandaozhaopin，页面正文有「千岛」"),
+    "hozonauto.jobs.feishu.cn": ("哪吒汽车", "门户自报法人名：合众新能源汽车；页面正文有「哪吒」"),
+    "xd.jobs.feishu.cn": ("心动网络", "门户自报英文名 XD Inc.；页面正文「工作在心动」"),
+    "gamealestudio.jobs.feishu.cn": ("游戏精酿", "门户自报英文品牌 GameAle；页面正文有「游戏精酿」"),
+    "xiaopeng.jobs.feishu.cn": ("小鹏汽车", "门户自报「小鹏集团」，只在反方向对得上"),
+    "hypergryph.jobs.feishu.cn": ("鹰角网络 Hypergryph", "门户自报简称「鹰角」，只在反方向对得上"),
+    "boke.jobs.feishu.cn": ("波克城市", "门户自报「波克科技集团」，只在反方向对得上"),
+}
+
+# 门户自报的不是公司名（简称 / 业务线）、岗位内容与源名不矛盾、也没有正面证据：单列「判不了」，不每周报警。
+# 同样只对当时核过的源名生效。
+_FEISHU_UNDECIDABLE = {
+    "toa7dmu9bq.jobs.feishu.cn": ("上海航天电子技术研究所",
+                                  "门户只自报简称「电子所」；岗位全在上海，内容是箭载电源 / 整星试验 / 雷达信号处理"),
+    "acnizrso7ikb.jobs.feishu.cn": ("算秩未来", "门户自报「算力业务线」，不是公司名；公开门户只有 1 个岗"),
+}
+
+
+def feishu_identity(source_url: str, client):
+    """返回 (门户自报的文本 [租户名, <title>, keywords] 里非空的, None)；取不到返回 (None, 原因)。
+    读的是源自己那个门户的首页（feishu_portal_home）：主门户源 = 租户首页，子门户源 = 该门户的首页。
+    请求头与入库核名门（discover_domestic._client）对齐成中文页面，两边读到的是同一种语言的标题。"""
+    try:
+        resp = client.get(feishu_portal_home(source_url),
+                          headers={"Accept": "text/html,*/*", "Accept-Language": "zh-CN,en;q=0.9"})
+    except Exception as e:  # noqa: BLE001
+        return None, f"{type(e).__name__}: {e}"
+    if resp.status_code != 200:
+        return None, f"首页 HTTP {resp.status_code}"
+    title, tenant, keywords = _feishu_self_report(resp.text or "")
+    texts = [t.strip() for t in (tenant, title, keywords) if (t or "").strip()]
+    if not texts:
+        # 真门户页一定带租户名（2026-10-11 取到的 109 个首页全有）；200 却一项都没有 = 拿到的不是门户页，按没取到算。
+        return None, "首页没有自报身份"
+    return texts, None
+
+
+def feishu_verdict(company: str, texts) -> str:
+    """'ok' / 'weak' / 'mismatch'，判据见本节开头。"""
+    if names_agree(company, texts, reverse=False) or _latin_brand_in(company, texts):
+        return "ok"
+    return "weak" if names_agree(company, texts) else "mismatch"
+
+
+def _reviewed_for(registry: dict, host: str, company: str) -> bool:
+    """这个主机在名单里，且名单登记的就是现在这个源名。"""
+    entry = registry.get(host)
+    return bool(entry) and entry[0] == company
+
+
+def audit_feishu(rows, client):
+    """返回 (mismatches, weak, undecidable, unknowns, ok_count)。同一个门户首页只取一次。
+    unknowns = 首页没取到；undecidable = 登记过的「门户自报的不是公司名」。
+
+    按门户首页缓存、不按主机：一个租户可以挂几家公司的门户（英科：/ 是英科再生，/757263、/840753 是英科医疗）。"""
+    cache = {}
+    mismatches, weak, undecidable, unknowns, ok = [], [], [], [], 0
+    for row in rows:
+        company, url = row["company"], row["source_url"]
+        host = urlparse(url).netloc
+        home = feishu_portal_home(url)
+        if home not in cache:
+            cache[home] = feishu_identity(url, client)
+        texts, err = cache[home]
+        if texts is None:
+            unknowns.append((company, url, err))
+            continue
+        verdict = feishu_verdict(company, texts)
+        if verdict == "ok" or _reviewed_for(_FEISHU_KNOWN_OK, host, company):
+            ok += 1
+        elif _reviewed_for(_FEISHU_UNDECIDABLE, host, company):
+            undecidable.append((company, url, _FEISHU_UNDECIDABLE[host][1]))
+        elif verdict == "weak":
+            weak.append((company, url, texts[0]))
+        else:
+            mismatches.append((company, url, texts[0]))
+    return mismatches, weak, undecidable, unknowns, ok
+
+
 def main(argv=None):
     started_at = datetime.now(timezone.utc)
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -310,29 +413,41 @@ def main(argv=None):
 def _run(sb, args, started_at):
     rows = load_sources(sb, args.limit)
     wt_rows = load_sources(sb, args.limit, adapter="wt", url_like="%/wt/%")
+    fs_rows = load_sources(sb, args.limit, adapter=_FEISHU_ADAPTERS, url_like=None)
     with httpx.Client(timeout=20, follow_redirects=True,
                       headers={"User-Agent": _UA, "Accept": "application/json, text/plain, */*"}) as client:
         mismatches, unknowns, ok = audit(rows, client)
         wt_mismatches, wt_undecidable, wt_unknowns, wt_ok = audit_wt(wt_rows, client)
+        fs_mismatches, fs_weak, fs_undecidable, fs_unknowns, fs_ok = audit_feishu(fs_rows, client)
     print(f"[audit-hotjob] sources={len(rows)} ok={ok} mismatch={len(mismatches)} unknown={len(unknowns)}")
     print(f"[audit-hotjob] wt sources={len(wt_rows)} ok={wt_ok} mismatch={len(wt_mismatches)} "
           f"undecidable={len(wt_undecidable)} unknown={len(wt_unknowns)}")
+    print(f"[audit-hotjob] feishu sources={len(fs_rows)} ok={fs_ok} mismatch={len(fs_mismatches)} "
+          f"weak={len(fs_weak)} undecidable={len(fs_undecidable)} unknown={len(fs_unknowns)}")
     for company, url, tenant in mismatches:
         print(f"::warning::归属对不上: sources.company='{company}' 租户自报='{tenant}' {url}")
-    for company, url, tenant in wt_mismatches:
+    for company, url, tenant in wt_mismatches + fs_mismatches:
         print(f"::warning::归属对不上: sources.company='{company}' 门户自报='{tenant}' {url}")
-    for company, url, err in unknowns + wt_unknowns:
+    for company, url, tenant in fs_weak:
+        print(f"::warning::归属只在反方向对得上，要人看: sources.company='{company}' 门户自报='{tenant}' {url}")
+    for company, url, err in unknowns + wt_unknowns + fs_unknowns:
         print(f"  unknown: '{company}' {url} ({err})")
     for company, url, orgs in wt_undecidable:
         print(f"  判不了: '{company}' {url}（门户没自报公司名，发布机构：{orgs}）")
+    for company, url, why in fs_undecidable:
+        print(f"  判不了: '{company}' {url}（{why}）")
     # 台账口径：mismatch/unknown 是核对结果，不是抓取失败——failed 只反映「租户接口打不通」（unknown）。
-    # wt 的「判不了」是门户没自报公司名，不是接口失败，不计进 failed。
+    # wt / 飞书的「判不了」是门户没自报公司名，飞书的「弱对上」是待人看，都不是接口失败，不计进 failed。
     ops_runs.record_ops_run(
         sb, "audit_hotjob_attribution",
         {"sources": len(rows), "ok": ok, "mismatch": len(mismatches), "unknown": len(unknowns),
          "wt_sources": len(wt_rows), "wt_ok": wt_ok, "wt_mismatch": len(wt_mismatches),
-         "wt_undecidable": len(wt_undecidable), "wt_unknown": len(wt_unknowns)},
-        ops_runs.status_from_counts(len(rows) + len(wt_rows), len(unknowns) + len(wt_unknowns)),
+         "wt_undecidable": len(wt_undecidable), "wt_unknown": len(wt_unknowns),
+         "feishu_sources": len(fs_rows), "feishu_ok": fs_ok, "feishu_mismatch": len(fs_mismatches),
+         "feishu_weak": len(fs_weak), "feishu_undecidable": len(fs_undecidable),
+         "feishu_unknown": len(fs_unknowns)},
+        ops_runs.status_from_counts(len(rows) + len(wt_rows) + len(fs_rows),
+                                    len(unknowns) + len(wt_unknowns) + len(fs_unknowns)),
         started_at=started_at,
     )
     return 0

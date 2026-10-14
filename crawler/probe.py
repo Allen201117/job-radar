@@ -14,7 +14,8 @@
   python3 probe.py --all                 # 连 playwright 类（moka/beisen/company_spa）一起探（需装 playwright）
   python3 probe.py --candidates my.json  # 用自定义候选清单（JSON 数组，字段同 CANDIDATES）
 
-候选 JSON 字段：{company, adapter, url, industry?}
+候选 JSON 字段：{company, adapter, url, industry?, name_ok?}
+  - name_ok：飞书候选的公司名与门户自报对不上、但人工核过是同一家时，逐条写明理由（见 feishu_name_gate）。
 """
 import argparse
 import json
@@ -397,6 +398,64 @@ def probe_one(cand: dict, timeout: int = 15):
     return result
 
 
+# 飞书招聘家族：候选清单里的公司名要和门户首页自报对上，才许进迁移。
+_FEISHU_FAMILY = {"feishu", "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu"}
+
+
+def _feishu_home_html(url: str):
+    """取飞书租户首页；拿不到 200 一律返回 None。"""
+    import discover_domestic as dd  # 延迟导入：discover_domestic 顶部 from probe import emit_sql
+    try:
+        with dd._client() as cli:
+            resp = cli.get(url)
+        return resp.text if resp.status_code == 200 else None
+    except Exception:
+        return None
+
+
+def feishu_name_gate(cand: dict, fetch_home=None):
+    """飞书候选的核名门：公司名与门户首页自报对不上，返回原因（不入迁移）；对得上或不归它管，返回 None。
+
+    ❌ 迁移 218 那批飞书候选（外部清单）只验了「真出岗 + jd_url 能用」，公司名原样进库。2026-10-11 全量普查
+       查出 3 条挂错：mammotion 记成容知日新（门户自报深圳库犸科技）、global-intco 记成英科医疗（门户标题
+       「英科再生社会招聘官网」）、tranxmart 记成千署科技（门户自报千曙科技）。探活出岗 ≠ 归属正确。
+    ✅ 与 discover_domestic.feishu_probe 同一把尺子：公司名的核心词要出现在门户自报的 <title> / 租户名 /
+       keywords 里；不看岗位标题，不看 meta description（宣传语会点名旗下产品）。
+    首页取不到 = 核不了名 = 不入（宁缺毋滥）。品牌名对法人名这类人工核过是同一家的，在候选上写 name_ok 理由放行，
+    理由会写进源的 notes。"""
+    if cand.get("adapter") not in _FEISHU_FAMILY:
+        return None
+    if str(cand.get("name_ok") or "").strip():
+        return None
+    import discover_domestic as dd  # 延迟导入，理由同上
+    home = dd.feishu_portal_home(cand["url"])   # 子门户候选读自己那个门户的首页，不读租户首页（共享租户会读到别家）
+    html = (fetch_home or _feishu_home_html)(home)
+    if not html:
+        return f"门户首页 {home} 取不到，核不了公司名"
+    title, tenant, keywords = dd._feishu_self_report(html)
+    # 核的就是写进迁移的那个名字（emit_sql 用 company），不认候选上别的名字字段。
+    if any(dd._verify(text, cand["company"]) for text in (title, tenant, keywords)):
+        return None
+    return f"公司名对不上门户自报：title={title!r} tenant={tenant!r}"
+
+
+def probe_candidates(cands: list, timeout: int = 15):
+    """逐个探活，返回可以写进迁移的候选（带 _valid / _china）。探活出岗的飞书候选还要过核名门。"""
+    passed = []
+    for c in cands:
+        r = probe_one(c, timeout=timeout)
+        if not r["ok"]:
+            continue
+        mismatch = feishu_name_gate(c)
+        if mismatch:
+            print(f"  ✗ [{c['adapter']:15}] {c['company']:22} 探活出岗但核名不过，不入迁移：{mismatch}", flush=True)
+            continue
+        detail = f"在华={r.get('china', 0)} valid={r['valid']} parsed={r.get('parsed', '-')} {r.get('sample', '')}"
+        print(f"  ✓ [{c['adapter']:15}] {c['company']:22} {detail}", flush=True)
+        passed.append({**c, "_valid": r["valid"], "_china": r.get("china", 0)})
+    return passed
+
+
 def emit_sql(prefix: str, passed: list):
     lines = [
         f"-- {prefix} — 扩源（探活器 probe.py live 探活通过，仅含真返回岗位的源）",
@@ -413,7 +472,9 @@ def emit_sql(prefix: str, passed: list):
         industry = c.get("industry", "") or ""
         # segment：外企 ATS → foreign；本土 adapter 用候选自带 segment（默认 private）
         segment = "foreign" if c["adapter"] in _FOREIGN_ATS else c.get("segment", "private")
-        notes = f"{c['company']}（{industry}，probe live 探活 {cn_txt}）".replace("'", "''")
+        name_ok = str(c.get("name_ok") or "").strip()
+        name_note = f"；公司名与门户自报不同，人工核过：{name_ok}" if name_ok else ""
+        notes = f"{c['company']}（{industry}，probe live 探活 {cn_txt}{name_note}）".replace("'", "''")
         method = "http" if c["adapter"] in _HTTPX_ADAPTERS else "playwright"
         url = c["url"].replace("'", "''")
         company = c["company"].replace("'", "''")
@@ -454,19 +515,9 @@ def main():
     if not args.all:
         cands = [c for c in cands if c["adapter"] in _HTTPX_ADAPTERS]
 
-    passed = []
     print(f"[probe] 探活 {len(cands)} 个候选源...\n", flush=True)
     # discover 模式候选多，用较短超时控制总时长（探不到快速丢弃）
-    probe_timeout = 8 if args.discover else 15
-    for c in cands:
-        r = probe_one(c, timeout=probe_timeout)
-        flag = "✓" if r["ok"] else "✗"
-        detail = (f"在华={r.get('china', 0)} valid={r['valid']} parsed={r.get('parsed', '-')} {r.get('sample', '')}"
-                  if r["ok"] else r.get("reason", ""))
-        if r["ok"]:
-            print(f"  {flag} [{c['adapter']:15}] {c['company']:22} {detail}", flush=True)
-            c = {**c, "_valid": r["valid"], "_china": r.get("china", 0)}
-            passed.append(c)
+    passed = probe_candidates(cands, timeout=8 if args.discover else 15)
 
     print(f"\n[probe] 通过 {len(passed)}/{len(cands)}。")
     if args.emit and passed:
