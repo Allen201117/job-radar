@@ -328,3 +328,164 @@
   6 条最近一轮没有可判的抓全率（空门户）、2 条最近一轮失败、1 条带筛选。它们名下的岗仍由浏览器巡检负责。
 
 **还没做的：** 没在 CI 上跑过（境外出口对这个请求的回答是否一样，要推上去跑一轮只报数的才知道）。
+
+## 十、上线（2026-10-14）
+
+创始人 10-14 说「推」，工具推上 main（`71e6dcd8`），只能手动触发、默认只报数。
+
+**CI 上只报数的一轮**（run 38528808621，境外 runner，占比上限放到 0.6）：382 条在用的源里 373 条可核；候选 7,189 行，
+点名要下架 7,176 行，读到在招 13 行，判不了 0 行，被闸拦下的源 0 条。境外网络对详情请求的回答与国内一致（判不了 0 行就是证据）。
+
+**和逐岗渲染对拍：** CI 点名的 7,176 行**全部有「已停止招聘」的渲染证据**——6,936 行是 10-12 渲染的，240 行是这两天新掉出列表、
+10-14 补渲染的（240 / 240 已停）。10-12 渲染判已停、这次没被点名的 182 行：158 行这两天已被浏览器巡检删掉，12 行对方重新开放、
+列表又见到了，9 行现在读到在招（重新开放了、列表还没刷到；10-14 渲染确认 9 / 9 在招），3 行所在的源这一轮没抓全被跳过。
+读到在招的 13 行 = 这 9 行 + 宝洁台湾岗 4 行。
+
+**落库清单**（按这一轮的点名，真正落库时以那一轮的确认为准）：115 个门户、7,176 行；占在招过半的只有李宁（167 / 331），
+所以清存量那一次要把占比上限放到 0.6。
+
+| 公司（源表里的写法） | 渠道 | 门户 | 库里在招 | 拟下架 | 占在招 |
+|---|---|---|---:|---:|---:|
+| 宁德时代 | 社招 | talent.catl.com/social-recruitment/catlhr/96144 | 2,722 | 904 | 33% |
+| 浙江吉利控股集团 | 社招 | app.mokahr.com/social-recruitment/geely/96123 | 3,213 | 712 | 22% |
+| 江苏恒瑞医药 | 社招 | app.mokahr.com/social-recruitment/hengrui/145996 | 1,546 | 561 | 36% |
+| 安踏体育用品集团 | 社招 | app.mokahr.com/social-recruitment/antahr/146041 | 2,075 | 452 | 22% |
+| SHEIN | 社招 | app.mokahr.com/apply/shein/2933 | 1,117 | 435 | 39% |
+| 东风汽车 | 社招 | app.mokahr.com/social-recruitment/dfmc/168368 | 1,997 | 423 | 21% |
+| 药明生物 | 社招 | app.mokahr.com/social-recruitment/wuxibiologics/99960 | 884 | 390 | 44% |
+| 滴滴 | 社招 | app.mokahr.com/social-recruitment/didiglobal/6222 | 1,032 | 385 | 37% |
+| 吉利汽车 | 校招 | campus.geely.com/campus-recruitment/geely/78436 | 2,637 | 355 | 13% |
+| 特斯拉 | 社招 | app.mokahr.com/social-recruitment/tesla/46129 | 1,166 | 257 | 22% |
+| 舜宇集团 | 社招 | app.mokahr.com/social-recruitment/sunnyoptical/45601 | 946 | 245 | 26% |
+| 李宁 | 社招 | app.mokahr.com/social-recruitment/lining/166080 | 331 | 167 | 50% |
+| 宁德时代 CATL | 校招 | app.mokahr.com/campus-recruitment/catlhr/148948 | 645 | 150 | 23% |
+| 百济神州 | 社招 | app.mokahr.com/social-recruitment/beigene/98934 | 633 | 144 | 23% |
+| 康龙化成（北京）新药技术股份有限公司 | 校招 | app.mokahr.com/campus-recruitment/pharmaron/44352 | 727 | 143 | 20% |
+| 恒瑞医药 | 校招 | app.mokahr.com/campus-recruitment/hengrui/145997 | 1,090 | 140 | 13% |
+| 作业帮 Zuoyebang | 社招 | app.mokahr.com/social-recruitment/zuoyebang/41328 | 358 | 127 | 35% |
+| 宁波均胜电子 | 社招 | app.mokahr.com/social-recruitment/joyson/94310 | 421 | 113 | 27% |
+| 九号公司 | 社招 | app.mokahr.com/social-recruitment/ninebot/45626 | 486 | 89 | 18% |
+| 徐工集团 | 校招 | app.mokahr.com/campus-recruitment/xcmg/148091 | 658 | 70 | 11% |
+| 牧原实业集团 | 社招 | app.mokahr.com/social-recruitment/muyuan/70115 | 220 | 69 | 31% |
+| 鹰角网络 Hypergryph | 社招 | app.mokahr.com/apply/hypergryph/26325 | 412 | 61 | 15% |
+| 锐捷网络 | 社招 | app.mokahr.com/social-recruitment/ruijie/26518 | 677 | 58 | 9% |
+| 特斯拉 | 校招 | app.mokahr.com/campus-recruitment/tesla/41460 | 486 | 56 | 12% |
+| 岚图汽车科技有限公司 | 社招 | app.mokahr.com/social-recruitment/voyah/146292 | 1,397 | 47 | 3% |
+| 徐工机械 | 社招 | app.mokahr.com/social-recruitment/xcmg/148090 | 847 | 45 | 5% |
+| 伊顿电气（上海）有限公司 | 社招 | app.mokahr.com/social-recruitment/eaton/147226 | 171 | 41 | 24% |
+| 完美世界 | 社招 | app.mokahr.com/social-recruitment/pwrd/142341 | 329 | 41 | 12% |
+| 云顶新耀医疗科技有限公司 | 社招 | app.mokahr.com/social-recruitment/everestmedicines/150886 | 213 | 39 | 18% |
+| 正泰集团 | 社招 | app.mokahr.com/social-recruitment/chint/40744 | 332 | 36 | 11% |
+| 大疆创新 | 社招 | apply.careers.dji.com/social-recruitment/dji/170070 | 537 | 31 | 6% |
+| 牧原实业集团 | 校招 | app.mokahr.com/campus-recruitment/muyuan/70116 | 504 | 31 | 6% |
+| 华测检测认证集团股份有限公司 | 社招 | app.mokahr.com/social-recruitment/cti/145979 | 438 | 27 | 6% |
+| Shopee | 社招 | app.mokahr.com/apply/shopee/2963 | 472 | 22 | 5% |
+| 滴滴 | 校招 | app.mokahr.com/campus-recruitment/didiglobal/96064 | 126 | 15 | 12% |
+| 特步 | 校招 | app.mokahr.com/campus-recruitment/xtep/148871 | 115 | 15 | 13% |
+| 阳光电源 Sungrow | 校招 | app.mokahr.com/campus-recruitment/sungrow/94416 | 219 | 14 | 6% |
+| 法国圣戈班（中国）投资有限公司 | 社招 | app.mokahr.com/social-recruitment/saint-gobain/142246 | 74 | 13 | 18% |
+| 宝洁 | 社招 | app.mokahr.com/social-recruitment/pg/91934#/candidateHome/applications | 48 | 12 | 25% |
+| 富途控股 | 社招 | app.mokahr.com/social-recruitment/futu5/141927 | 146 | 11 | 8% |
+| 特步 | 社招 | app.mokahr.com/social-recruitment/xtep/148870 | 108 | 10 | 9% |
+| 远景能源 Envision | 校招 | app.mokahr.com/campus_apply/envisiongroup/43123 | 367 | 10 | 3% |
+| 光子跳动 Photon Dance | 社招 | app.mokahr.com/social-recruitment/guangzi/142129 | 51 | 9 | 18% |
+| 上海保隆汽车科技股份有限公司 | 社招 | app.mokahr.com/social-recruitment/baolong/45811 | 142 | 8 | 6% |
+| 宝洁 | 校招 | app.mokahr.com/campus-recruitment/pg/91935 | 16 | 8 | 50% |
+| 毕马威中国 | 校招 | app.mokahr.com/campus-recruitment/kpmg/74356 | 196 | 8 | 4% |
+| 菲尼克斯（南京）智能制造技术工程有限公司 | 社招 | app.mokahr.com/social-recruitment/phoenixcontact/99349 | 86 | 7 | 8% |
+| 中微公司 AMEC | 校招 | app.mokahr.com/campus_apply/amec/4362 | 185 | 6 | 3% |
+| 中控技术 | 社招 | app.mokahr.com/social-recruitment/supcon/78261 | 120 | 6 | 5% |
+| 新浪集团 | 社招 | app.mokahr.com/social-recruitment/sina/43535 | 187 | 6 | 3% |
+| 松下 | 社招 | app.mokahr.com/apply/panasonic/5215 | 84 | 6 | 7% |
+| 阳光电源 | 社招 | app.mokahr.com/social-recruitment/sungrow/94415 | 433 | 6 | 1% |
+| 九毛九 | 社招 | app.mokahr.com/social-recruitment/jiumaojiu/72282 | 38 | 5 | 13% |
+| 华东医药 | 校招 | app.mokahr.com/campus-recruitment/eastchinapharm/67935 | 84 | 5 | 6% |
+| 唯品会 VIP.com | 社招 | app-tc.mokahr.com/social-recruitment/vipshophr/10038 | 101 | 5 | 5% |
+| 宁波均胜电子 | 校招 | app.mokahr.com/campus-recruitment/joyson/94311 | 134 | 5 | 4% |
+| 森马集团 | 社招 | app.mokahr.com/social-recruitment/senma/95960 | 57 | 5 | 9% |
+| 正泰集团 | 校招 | app.mokahr.com/campus-recruitment/chint/40745 | 208 | 5 | 2% |
+| 猿辅导 | 社招 | app.mokahr.com/social-recruitment/fenbi/45505 | 139 | 5 | 4% |
+| 移远通信 | 社招 | app.mokahr.com/social-recruitment/quectel/24304 | 618 | 5 | 1% |
+| 药明合联生物技术有限公司 | 社招 | app.mokahr.com/social-recruitment/wuxixdc/164235 | 219 | 5 | 2% |
+| 华润万象生活 | 社招 | app.mokahr.com/social-recruitment/crland/143066 | 273 | 4 | 1% |
+| 华润置地 | 校招 | app.mokahr.com/campus-recruitment/crland/168540 | 445 | 4 | 1% |
+| 虎牙 Huya | 社招 | app.mokahr.com/apply/huya/4111 | 106 | 4 | 4% |
+| 九号公司 | 校招 | app.mokahr.com/campus-recruitment/ninebot/45627 | 268 | 3 | 1% |
+| 作业帮 | 校招 | app.mokahr.com/campus-recruitment/zuoyebang/39595 | 72 | 3 | 4% |
+| 太古地产有限公司 | 社招 | app.mokahr.com/social-recruitment/swireproperties/126011 | 103 | 3 | 3% |
+| 希望学 | 校招 | app.mokahr.com/campus-recruitment/xiwang/146380 | 33 | 3 | 9% |
+| 思摩尔国际控股有限公司 | 社招 | app.mokahr.com/social-recruitment/smoore/126055 | 79 | 3 | 4% |
+| 沐曦集成电路 | 校招 | app.mokahr.com/campus-recruitment/metax-tech/58131 | 97 | 3 | 3% |
+| 西山居 | 校招 | app.mokahr.com/campus-recruitment/xishanju/37430 | 44 | 3 | 7% |
+| 雅迪科技集团 | 社招 | app.mokahr.com/social-recruitment/yadea/26984 | 37 | 3 | 8% |
+| 中兴通讯股份有限公司 | 社招 | app.mokahr.com/social-recruitment/zte/47588 | 241 | 2 | 1% |
+| 亚朵酒店 | 社招 | app.mokahr.com/social-recruitment/atour/151068 | 113 | 2 | 2% |
+| 安踏 ANTA | 校招 | app.mokahr.com/campus-recruitment/antahr/142914 | 178 | 2 | 1% |
+| 岚图汽车 | 校招 | app.mokahr.com/campus-recruitment/voyah/146293 | 75 | 2 | 3% |
+| 巨人网络 | 社招 | app.mokahr.com/social-recruitment/ztgame/37485 | 91 | 2 | 2% |
+| 广州万孚生物技术股份有限公司 | 社招 | app.mokahr.com/social-recruitment/wondfo/19912 | 78 | 2 | 3% |
+| 广立微电子科技（杭州）有限公司 | 社招 | app.mokahr.com/social-recruitment/semitronix/140042 | 107 | 2 | 2% |
+| 晨光文具 | 社招 | app.mokahr.com/social-recruitment/mg/142712 | 34 | 2 | 6% |
+| 月之暗面 Kimi | 社招 | app.mokahr.com/apply/moonshot/148506 | 102 | 2 | 2% |
+| 沐曦集成电路 | 社招 | app.mokahr.com/social-recruitment/metax-tech/58147 | 76 | 2 | 3% |
+| 涂鸦智能 | 社招 | app.mokahr.com/social-recruitment/tuya/3236 | 102 | 2 | 2% |
+| 科华数据 | 社招 | app.mokahr.com/social-recruitment/kehua/116137 | 253 | 2 | 1% |
+| 紫光同芯 Tsinghua IC | 社招 | app.mokahr.com/social-recruitment/tsinghuaic/39655 | 20 | 2 | 10% |
+| 老板电器 | 社招 | app.mokahr.com/social-recruitment/robam/27897 | 65 | 2 | 3% |
+| 药明生物 | 校招 | app.mokahr.com/campus-recruitment/wuxibiologics/99961 | 195 | 2 | 1% |
+| 诺亚控股 | 校招 | app.mokahr.com/campus-recruitment/noah/26537 | 21 | 2 | 10% |
+| 58同城 | 社招 | jobs.58.com/social-recruitment/58/150952 | 470 | 1 | 0% |
+| SHEIN | 校招 | app.mokahr.com/campus-recruitment/shein/2932 | 70 | 1 | 1% |
+| 三七互娱 | 校招 | app.mokahr.com/campus-recruitment/37/58016 | 23 | 1 | 4% |
+| 东方财富 | 校招 | app.mokahr.com/campus-recruitment/eastmoney/92400 | 102 | 1 | 1% |
+| 众安保险 | 社招 | app.mokahr.com/social-recruitment/zhongan/102015 | 84 | 1 | 1% |
+| 佛吉亚（中国）投资有限公司 | 社招 | app.mokahr.com/social-recruitment/faurecia/146092 | 146 | 1 | 1% |
+| 元戎启行科技有限公司 | 社招 | app.mokahr.com/social-recruitment/deeproute/143885 | 90 | 1 | 1% |
+| 兆易创新 | 校招 | app.mokahr.com/campus_apply/gigadevice/92215 | 44 | 1 | 2% |
+| 光迅科技 | 社招 | app.mokahr.com/social-recruitment/accelink/139972 | 51 | 1 | 2% |
+| 北京微步在线科技有限公司 | 社招 | app.mokahr.com/social-recruitment/threatbook/27229 | 33 | 1 | 3% |
+| 嘉会国际医院 | 社招 | app.mokahr.com/social-recruitment/jiahui/2126 | 78 | 1 | 1% |
+| 天数智芯（上海）半导体有限公司 | 社招 | app.mokahr.com/social-recruitment/iluvatar/98705 | 68 | 1 | 1% |
+| 宇通集团 | 校招 | app.mokahr.com/campus-recruitment/yutong/172567 | 39 | 1 | 3% |
+| 巨人网络 | 校招 | app.mokahr.com/campus-recruitment/ztgame/92438 | 38 | 1 | 3% |
+| 广东培正学院控股有限公司旗下广州中望龙腾软件股份有限公司 | 社招 | app.mokahr.com/social-recruitment/zwcad/28355 | 63 | 1 | 2% |
+| 广东联塑科技实业 | 社招 | app.mokahr.com/social-recruitment/lesso/70302 | 57 | 1 | 2% |
+| 延锋 | 社招 | app.mokahr.com/social-recruitment/yanfeng/45085 | 492 | 1 | 0% |
+| 无忧传媒 | 校招 | app.mokahr.com/campus_apply/joymedia/7674 | 22 | 1 | 5% |
+| 极智嘉 Geek+ | 社招 | app.mokahr.com/apply/geekplus/5030 | 61 | 1 | 2% |
+| 江南布衣 | 社招 | app.mokahr.com/social-recruitment/jnby/53908 | 91 | 1 | 1% |
+| 深信服 | 社招 | app.mokahr.com/social-recruitment/sangfor/5367 | 91 | 1 | 1% |
+| 温氏食品集团 | 社招 | app.mokahr.com/social-recruitment/wens/92365 | 70 | 1 | 1% |
+| 炎魂网络 | 校招 | app.mokahr.com/campus-recruitment/yanhun/24017 | 60 | 1 | 2% |
+| 申通快递 | 社招 | app.mokahr.com/social-recruitment/sto/42337 | 128 | 1 | 1% |
+| 速腾聚创 | 校招 | app.mokahr.com/campus-recruitment/robosense/69887 | 101 | 1 | 1% |
+| 金赛药业 | 社招 | app.mokahr.com/social-recruitment/gensci/43519 | 48 | 1 | 2% |
+| 顾家家居股份有限公司 | 校招 | app.mokahr.com/campus-recruitment/kuka/172508 | 53 | 1 | 2% |
+
+## 十一、落库（2026-10-14 晚，创始人「同意，落库」）
+
+**写库那一轮**（run 38586264097，apply=true、占比上限 0.6，UTC 15:05~16:17）：382 条源里 373 条可核，候选 7,180 行，
+**下架 7,124 行**（114 条源，写 expired，次日 02:30 purge 时立墓碑），读到在招 15 行，判不了 0 行；撤岗事件 CLOSED 同样 7,124 条。
+回读库：门户列表超过 3 天没见到、却还显示在招的 Moka 岗（每日体检 `jobs.moka_stale_active` 的口径）从约 7 千降到 **54**。
+
+**三方逐行对：** 下架的 7,124 行全部在 CI 只报数那一轮的 7,176 行点名里（点名外下架 0 行），且**每一行都有「已停止招聘」的真渲染证据**
+（6,890 行 10-12 渲染、234 行 10-14 渲染）。点名了却没下架的 52 行：伊顿 41 行（见下）、9 行写库前已被浏览器巡检下架、2 行这次读到在招。
+
+**伊顿被闸拦下（control_failed）——闸门在按设计工作，不是误判：** 那一轮列表（10-13 22:47 UTC）里见到的 12 个岗，10-14 白天再问，
+4 个读到已停。真渲染 4 / 4 写着「该职位已停止招聘」；本机重抓它当时的列表是 125 个岗（前一晚 130），这 4 个不在列表里、读到在招的 2 个在。
+即对方在列表之后又撤了一批，列表与详情口径一致；闸门分不清「接口坏了」和「这期间又撤了」，于是整条源这一轮不下架，等下一轮列表之后再核。
+⚠️ 白天撤岗勤的源会偶尔这样被跳过一天（定时排在北京 11:10，HR 已上班）——代价是晚下架一天，不会误下架。
+
+**不属于撤岗的 26 行**（锐捷旧地址 7、巨人旧地址 8、乐元素 7、宝洁台湾岗 4）：`remove-jobs-by-url-prefix.yml` 七次运行合计标 removed 26 行（可逆，purge 不删）。
+作业帮 3 行、中兴校招 1 行按 9 月「只在停用门户出现的岗不动」口径没标。
+
+**此后：** 定时每天 UTC 03:10 写库，占比上限 0.5；体检 `pipeline.moka_liveness_ran`（当天有没有跑成）与 `jobs.moka_stale_active`（≤150）。
+
+**次日回读（2026-10-15）：**
+- 清理：purge 07:39 UTC 跑过（定时 02:30，被 GitHub 推迟），这 7,124 行全部删掉、墓碑正好 7,124 条，「既没删也没墓碑」0 行，删后同链接又插回来的在招行 0 行。
+  有 4 条墓碑记着 `reopen_count=1`，是 9-14 ~ 10-12 之间那一次「关了又重开」留下的，不是这两天的事。
+- 第一轮定时（run 38703914775，08:11 UTC，定时 03:10 被推迟约 5 小时）：可核 373 条源，候选 326 行，**下架 326 行**（59 条源），被闸拦下 0 条；
+  伊顿 53 行（含前一天被拦的 41 行）这轮补上。326 行**逐个真渲染，326 / 326 写着「已停止招聘」**，读到在招 0。
+- 陈旧在招 Moka 岗：54（10-14 晚）→ 43（10-15 体检时）→ **4**（这轮之后）。
+- 体检 `pipeline.moka_liveness_ran` 10-15 记 breach（值 0），符合设计：体检北京 08:50 跑，当天的核验被推迟到下午，体检只看得到前一晚那轮，
+  那轮因伊顿被拦记的是 failed。10-15 下午那轮记 success，10-16 的体检窗口含 10-15，应转绿——**要是 10-16 仍红，才是真问题**。

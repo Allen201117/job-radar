@@ -248,7 +248,7 @@ app-route 模板把同一个 promise 既交给 waitUntil 又交给 sendResponse�
 
 | 组件 | 在哪 | 干什么 |
 |---|---|---|
-| 期望清单 | `crawler/audit_contract.yaml`（90 条：数据 14 / 体验 22 / 链路 37 / 老告警桥接 17；原写 85 条是 09-19 上线时的数，09-23 复核更正为 87；10-04 加规则 Q 时实数已是 89、加完 90；10-10 体验层再加「现查派发失败」「公告页读取上限」两条，实数 92；10-11 数据层加「公司画像撞名」两条，实数 94；同日再加「公司名带渠道后缀」两条（招聘来源 / 在招岗各一条），实数 96；10-12 加比亚迪撤岗两条（核验有没有跑成 / 陈旧在招岗个数），实数 98；同日数据层加「Workday 同一个岗位挂着两个链接」一条，实数 99） | 每条声明 `normal`；`name/why/action` 是**人话**，晨报直接念 |
+| 期望清单 | `crawler/audit_contract.yaml`（90 条：数据 14 / 体验 22 / 链路 37 / 老告警桥接 17；原写 85 条是 09-19 上线时的数，09-23 复核更正为 87；10-04 加规则 Q 时实数已是 89、加完 90；10-10 体验层再加「现查派发失败」「公告页读取上限」两条，实数 92；10-11 数据层加「公司画像撞名」两条，实数 94；同日再加「公司名带渠道后缀」两条（招聘来源 / 在招岗各一条），实数 96；10-12 加比亚迪撤岗两条（核验有没有跑成 / 陈旧在招岗个数），实数 98；同日数据层加「Workday 同一个岗位挂着两个链接」一条，实数 99；10-14 加 Moka 撤岗两条（核验有没有跑成 / 陈旧在招岗个数），实数 101） | 每条声明 `normal`；`name/why/action` 是**人话**，晨报直接念 |
 | 执行器 | `crawler/audit_runner.py` + `structural-audit.yml`（每日北京 08:50） | 逐条量，写 `audit_results`（Supabase，迁移 281/282）；`unique(check_id, run_date)` 一天一行 = 趋势表。可选 `detail_sql` 列出「具体是哪几处」进 `detail.findings`，晨报 ⑤⑦ 据此点名；它失败不改数值与判定 |
 | 覆盖率差集 | `crawler/audit_coverage.py` + `audit_exemptions.yaml` | 左边**自动枚举**（带 cron 的 workflow / 写 ops_runs 的模块 / jobs 表列 / 走查指标），减去有期望的；上线时 68 条 → 现 14 条（全是 jobs 列） |
 | 老告警桥接 | `ops_watchdog.py` 的 `publish_audit_bridge` | 16 条规则**判定与阈值一字未动**，只把每条的命中数 + 明细写进同一张表（`detail.findings[].title` 与 issue 标题逐字一致） |
@@ -872,7 +872,10 @@ adapter 里 `normalizer.location_in_source_regions(location, self.regions)` 一�
      蔚来当天不带头 2,087 / 公开门户 1,794，多出的 591/591 已下线。上线后存量下架 11,092、补进 2,521、误杀 0，
      下架后 12 家各抽 1 岗浏览器实开 12/12 已下线。「不带头 ⊇ 门户」也不成立（超级猩猩 6 / 17，美宜佳 10 / 96）。
   ✅ 防：`adapters/feishu._httpx_fetch_main`——主门户 = 租户首页自报 `website_info.path` ∪ index，都带头取，
-     每行按它真在线的门户拼 jd_url；index 门户不存在（接口回 `-9000003 site not exist`）算空门户；拿不到自报门户不标抓全。
+     每行按它真在线的门户拼 jd_url；index 门户不存在（接口回 `-9000003 site not exist`）算空门户。
+     📌 纠错（2026-10-14）：此处原写「拿不到自报门户不标抓全」——那时只问 index：index 不存在的租户（106 条主门户源里 17 家）
+     就记成「成功 0 岗」（歌尔丹拿 10-03、10-04 两轮），index 开着的只抓到一小部分（智元 79 / 正常 510）也记成功。
+     现在首页读不到自报门户（请求出错 / 5xx / 429 重取三次，原因写进报错）、或自报门户的列表没打通，这一轮记失败。
      回归钉在 `crawler/test_feishu_httpx.MainPortalTest`。存量死链堆积时跑 `feishu-portal-reconcile.yml`
      （逐岗读状态、只下架读到 0 的、每源阳性对照 + 全局对照，默认 dry-run）。
   📌 纠错（2026-10-14）：此处原写「小米私有部署偶尔无视 website-path 头返回全集（09-23 newretailing

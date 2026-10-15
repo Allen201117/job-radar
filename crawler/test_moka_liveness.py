@@ -628,9 +628,17 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertRegex(self.text, r'apply:\s*\n\s*description:[^\n]*\n\s*required: false\s*\n\s*default: "false"')
         self.assertIn('if [ "${APPLY:-}" = "true" ]; then args+=(--apply); fi', self.text)
 
-    def test_not_scheduled_until_the_founder_approves_writes(self):
-        # 定时 + 落库要等创始人同意后再加（届时同一个提交里补体检期望，见 audit_coverage 的差集规则）
-        self.assertNotRegex(self.text, r"(?m)^\s*-\s*cron\s*:")
+    def test_scheduled_runs_write_with_the_default_share_gate(self):
+        # 定时轮次写库（创始人同意落库后加）；占比上限用默认值——清存量时的放宽只给手动那一次
+        self.assertRegex(self.text, r'(?m)^\s*-\s*cron\s*:\s*"[^"]+"')
+        self.assertIn("APPLY: ${{ github.event_name == 'schedule' && 'true' || github.event.inputs.apply }}", self.text)
+        self.assertIn('--max-expire-fraction "${MAX_EXPIRE_FRACTION:-0.5}"', self.text)
+
+    def test_schedule_runs_after_the_nightly_heavy_crawl(self):
+        # Moka 在重档里抓：cron 写 UTC 18:00，实际 21:00~23:35 才开跑、最长 180 分钟。
+        # 排在它后面才核得到当晚那一轮；还在跑的源本轮会跳过（run_in_progress），排太早就整晚白跑。
+        hour = int(re.search(r'cron:\s*"\d+ (\d+) \* \* \*"', self.text).group(1))
+        self.assertTrue(3 <= hour <= 6, hour)
 
     def test_single_flight(self):
         self.assertRegex(self.text, r"concurrency:\s*\n\s*group: moka-liveness\s*\n\s*cancel-in-progress: false")
