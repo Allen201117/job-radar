@@ -10,6 +10,7 @@
 import json
 import logging
 import re
+import time
 from typing import List, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -88,16 +89,26 @@ def compose_job_type(category: str, label: str) -> str:
     return label
 
 
-# ── 共享租户：同一个岗挂在两家公司的门户上，只归一家 ─────────────────────────────────────────
-# host → {让出的门户: 归属门户}。「让出的门户」那条源抓的时候剔掉也挂在「归属门户」上的岗，库里已有的由
-# run.py 按 retire_jd_urls 下架成 removed（可逆）。不剔 = 同一个岗两张卡、两个公司名（同北森孪生门户）。
+# ── 同一个岗挂在同一租户的两个门户上（各有一条源），只留一行 ──────────────────────────────────
+# host → {让出的门户: 归属门户 / None}。「让出的门户」那条源抓的时候剔掉也挂在「归属门户」上的岗，库里已有的由
+# run.py 按 retire_jd_urls 下架成 removed（可逆）。不剔 = 同一个岗两张卡（链接前缀不同，唯一索引拦不住），
+# 两家公司共用租户时还是两个公司名（同北森孪生门户）。
+# 值为 None = 登记过、自己留着：主门户源取的门户（自报 ∪ index）必须全部登记，否则整轮不写（见 _yield_to_owner_portal）。
 #   · global-intco（租户名只写「英科」，集团共用；2026-10-12 三个门户翻全、逐岗带头读状态）：
 #       index  = 英科再生社会招聘官网 87 岗      757263 = 英科医疗社会招聘官网 326 岗（英科医疗官网「社会招聘」链到这里）
 #     两边都挂、两边都在线的 17 个：14 个淮北「-凯泽」（安徽凯泽新材料，英科医疗持股 65%，公告 2026-051）、
 #     九江安环主管（江西英科医疗厂址）、国毅 / 公益基金会运营各 1 → 归英科医疗。index ∩ 840753（英科医疗校招）= 0。
+#   · asiainfo-sec（亚信安全；2026-10-15 各门户翻全、逐岗带头读状态）：首页自报 campus（校园招聘 12 岗），
+#       index = 「社招官网（旧版）」12 岗，全部也挂在新社招门户 social（「亚信安全社招」71 岗）上、两边都在线 → 归 social。
+#       主门户源与 campus 子门户源取的是同一批 campus 岗、同一个链接（库里是同一行），不算一岗两行。
+#   · iq（爱奇艺；同日）：主门户自报 job（社招）∪ index；新接的 intern（「实习生官网」97 岗）与已有两条子门户源各重 1 个
+#       （campus「数据标注实习生」、internship「Social Media & Content Intern」），两边都在线 → 归 intern。
+#       campus ∩ index 那 1 个是接入前就有的重复，没登记（index 是主门户源取的，让出要另核）。
 # ⚠️ 登记在代码里、源的启停在库里：停用归属门户那条源之前先撤掉这里的登记，否则让出的岗两边都没人接。
 _SHARED_TENANT_PORTAL_OWNER = {
     "global-intco.jobs.feishu.cn": {"index": "757263"},
+    "asiainfo-sec.jobs.feishu.cn": {"index": "social", "campus": None},
+    "iq.jobs.feishu.cn": {"campus": "intern", "internship": "intern", "job": None, "index": None},
 }
 
 
@@ -159,6 +170,9 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
     # （2026-09-04 crawl_runs 实测），且这七家全部 ≤8000，抬档一次就能抓全。
     _MAX_JOBS = DEFAULT_LIST_CAP
     _HTTPX_TIMEOUT = 20
+    _HOME_ATTEMPTS = 3        # 读租户首页自报门户的次数（见 _discover_detail_prefix）
+    _HOME_RETRY_SLEEP = 1.5   # 第 n 次重取前等 n × 这么多秒
+    _home_read_note = ""      # 上一次首页没读到自报门户的原因（进 _httpx_fetch_main 的报错）
 
     # list-absence 探活：feishu posts API 返**全量在招岗**（非夹带已关闭岗），且本类按 count 翻全；
     # 故抓全时「上次在、这次没了」可判下架。仅 fetch_complete=True 时生效（见 run.py 兜底）。
@@ -255,17 +269,18 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
         """见 _SHARED_TENANT_PORTAL_OWNER：剔掉也挂在归属门户上的岗，把它们的链接记进 retire_jd_urls。
 
         归属门户的列表没取全 → 抛错、本轮不写。静默全收就是一岗两行；按半截列表剔，漏掉的那些同样是一岗两行。
-        不在登记表里的门户（含归属门户自己那条源）零额外请求、原样返回。"""
+        子门户源：不在登记表里、或登记为 None 的门户（含归属门户自己那条源）零额外请求、原样返回。
+        主门户源：取到登记表里没有的门户 → 抛错、本轮不写（见下）。"""
         owners = _SHARED_TENANT_PORTAL_OWNER.get(host) or {}
         if getattr(self, "_main_portal", False):
-            # 主门户源取的是「租户首页自报的门户 ∪ index」。登记时自报的就是让出的那个门户；对方哪天把首页换成
+            # 主门户源取的是「租户首页自报的门户 ∪ index」，登记时这两个门户都核过（让出或留着）；对方哪天把首页换成
             # 别的门户（最坏是归属门户本身），这条源会把别家的岗整批收进来 → 认不出的门户一律不写，等人重新核。
             stray = sorted({self._row_portal(p) for p in rows} - set(owners))
             if stray:
                 raise RuntimeError(
                     f"feishu shared tenant {host}: main source now lists portal(s) {stray} that are not "
-                    "registered as yielding; re-verify the tenant's portal layout before writing")
-        needed = sorted({owners[self._row_portal(p)] for p in rows if self._row_portal(p) in owners})
+                    "registered; re-verify the tenant's portal layout before writing")
+        needed = sorted({o for o in (owners.get(self._row_portal(p)) for p in rows) if o})
         if not needed:
             return rows, total
         owned = {}
@@ -296,26 +311,39 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
 
         每行打上 `_portal`（它挂在哪个门户上），`_map` 用它拼 jd_url——同一个租户两个门户
         都开着时（莉莉丝 career 119 / index 57），岗必须用它真在线的那个门户前缀，否则详情页「已下线」。
-        返回的 total：两个门户都翻全且首页自报了门户 → 合并后的条数（= 抓全）；否则 None（不许
-        list-absence 据此判撤岗——拿不到自报门户时我们不能确定手里的是不是这个租户的全部公开岗）。"""
+        返回的 total：两个门户都翻全 → 合并后的条数（= 抓全）；否则 None。
+
+        🚫 首页读不到自报门户 → 抛错；自报门户的列表没打通 → 按「没打通」交回。两种都让这一轮记失败（2026-10-14 改）。
+        ❌ 原来退回「只问 index」：index 不存在的租户（2026-10-14 普查 106 条启用的主门户源里 17 家：商汤 / 拓竹 /
+           Momenta / 海底捞 / 歌尔丹拿…）只拿到 index 的「站点不存在」，记成「成功 0 岗」——歌尔丹拿 10-03、10-04
+           两轮就是这样；index 存在的（智元 / VAST / 莉莉丝…）只抓到 index 那一小部分，同样记成功。
+        ✅ 依据：普查时 106 家首页全都自报了门户，读不到只可能是首页没取到或页面变了，不是「这家没有门户」。
+           没抓全本来就不会下架岗位，所以记失败不丢数据，只是不再把故障报成绿灯；一直读不到由「连续失败」告警接住。
+        """
         declared = self._discover_detail_prefix(host)
         # 自报门户就是这个租户唯一有效的 URL 前缀（见 _discover_detail_prefix）；详情模板跟着它走。
         # 每次都重设（拿不到就清空）：probe.probe_one 共用单例，上一家的前缀不许漏到下一家。
         self._detail_prefix_override = declared or ""
         self._apply_website_path("")
-        portals = [p for p in dict.fromkeys([declared, "index"]) if p]
+        if not declared:
+            raise RuntimeError(
+                f"feishu {host}: tenant homepage did not declare its public portal (website_info.path) "
+                f"[{self._home_read_note or 'no detail'}]; "
+                "not falling back to index alone (it would report 0 or a partial list as success)")
         merged: List[dict] = []
         seen: set = set()
-        reached_any = False
-        complete = bool(declared)
-        for portal in portals:
+        complete = True
+        for portal in dict.fromkeys([declared, "index"]):
             # 自报门户之外的 index 门户**可以不存在**（小马智行 / 商汤 / 海底捞：接口回 -9000003 site not exist）
             # → 当空门户算，不当「没打通」，否则这些租户永远标不了抓全。自报门户本身不许这样放过。
             rows, total, reached = self._httpx_fetch_portal(host, portal, missing_ok=(portal != declared))
             if not reached:
+                if portal == declared:
+                    # 按「没打通」交回去：should_skip 预取到这里时 fetch() 还会再取一次，仍不通才记失败。
+                    # 不许拿 index 那半边凑数（index 不存在时只剩一个「站点不存在」，会被记成成功 0 岗）。
+                    return [], None, False
                 complete = False
                 continue
-            reached_any = True
             if total is None or len(rows) < (total or 0):
                 complete = False
             for post in rows:
@@ -323,7 +351,7 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
                 if pid and pid not in seen:
                     seen.add(pid)
                     merged.append({**post, "_portal": portal})
-        return merged, (len(merged) if complete else None), reached_any
+        return merged, (len(merged) if complete else None), True
 
     _SITE_NOT_EXIST = -9000003   # 带了一个租户没有的 website-path：200 + code=-9000003 "site not exist"，data=None
 
@@ -363,6 +391,10 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
                     if not isinstance(data, dict):
                         if missing_ok and isinstance(jj, dict) and jj.get("code") == self._SITE_NOT_EXIST:
                             return [], 0, True
+                        body = jj if isinstance(jj, dict) else {}
+                        logger.warning("%s: %s 门户 %s offset=%d 接口没给列表（code=%s %s），已抓 %d 条",
+                                       self.name, host, prefix, offset, body.get("code"),
+                                       str(body.get("message"))[:80], len(rows))
                         break
                     reached = True
                     if total is None:
@@ -419,18 +451,39 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
 
         飞书租户首页内嵌 `"website_info":{…,"path":"exp"}`，那是这个租户**唯一有效的
         URL 前缀**；`index` 只是我们的历史默认值，并非所有租户都认。
+
+        请求出错 / 5xx / 429 重取，最多 _HOME_ATTEMPTS 次：读不到时主门户源整轮记失败（见 _httpx_fetch_main），
+        一次网络抖动不值得赔上一轮。其它状态码与「200 但页面里没有 website_info」是确定答复，不重取。
         """
-        try:
-            html = httpx.get(
-                f"https://{host}/",
-                timeout=self._HTTPX_TIMEOUT,
-                follow_redirects=True,
-                headers={"User-Agent": _UA},
-            ).text
-        except Exception:
-            return ""
-        m = re.search(r'"website_info":\{.*?"path":"([^"]{1,32})"', html, re.S)
-        return m.group(1) if m else ""
+        note = ""
+        for attempt in range(self._HOME_ATTEMPTS):
+            if attempt:
+                time.sleep(self._HOME_RETRY_SLEEP * attempt)
+            try:
+                r = httpx.get(
+                    f"https://{host}/",
+                    timeout=self._HTTPX_TIMEOUT,
+                    follow_redirects=True,
+                    headers={"User-Agent": _UA},
+                )
+            except Exception as exc:
+                note, definitive = exc_brief(exc), False
+            else:
+                if r.status_code == 200:
+                    m = re.search(r'"website_info":\{.*?"path":"([^"]{1,32})"', r.text, re.S)
+                    if m:
+                        self._home_read_note = ""
+                        return m.group(1)
+                    note = "HTTP 200 without website_info"
+                else:
+                    note = f"HTTP {r.status_code}"
+                # 404 / 403 / 页面里没有 website_info 是确定答复，重取也一样
+                definitive = r.status_code < 500 and r.status_code != 429
+            logger.warning("%s: %s 首页第 %d 次没读到自报门户：%s", self.name, host, attempt + 1, note)
+            if definitive:
+                break
+        self._home_read_note = note
+        return ""
 
     def _repair_detail_template(self, host: str, post: dict) -> bool:
         """`index` 前缀的详情页 404 时，改用租户自报的门户前缀再试一次；成功则重绑模板。

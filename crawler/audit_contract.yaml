@@ -436,6 +436,24 @@ checks:
     why: 比亚迪撤掉的岗位，官网详情页只剩一个空白页、没有任何提示，常规的页面巡检认不出来，要靠每天对照官网在招名单来下架。这个数涨上去，说明那条每日核验没在起作用，用户点开比亚迪的岗位会看到空白页。2026-10-12 之前它攒到过五千多个。
     action: 把这条转给 Claude，让它看比亚迪撤岗核验最近一次运行是被哪道安全闸拦下的，或者为什么没跑
 
+  # Moka 撤岗：岗从门户列表里消失后，由 moka-liveness.yml 每天逐个问对方确认已停才下架（crawler/moka_liveness.py）。
+  # 清存量之前（2026-10-14）这个数是 6,742；按当时那轮核验点名的行扣掉，剩 42 行（重新开放还没回到列表的 /
+  # 所在源停用或这一轮没抓全的 / 宝洁台湾岗）。正则只认带门户号的 Moka 岗位链接（含租户自己的域名）。
+  - id: jobs.moka_stale_active
+    name: Moka 门户的岗位里「超过 3 天没在门户列表上再见到、却还显示在招」的个数
+    layer: data
+    db: jobs
+    owner: .github/workflows/moka-liveness.yml
+    sql: >
+      select count(*) from jobs where status = 'active'
+        and jd_url ~ '^https?://[^/]+/(social-recruitment|campus-recruitment|campus_apply|apply)/[^/#?]+/[0-9]+[^#]*#/job/'
+        and last_seen_at < now() - interval '3 days'
+    normal: "<= 150"              # 2026-10-14 按核验点名扣完是 42；每天核验在跑的话只剩重新开放和源坏掉的那几十行
+    severity: warn
+    calibrated: false
+    why: 宁德时代、吉利、恒瑞、SHEIN 这些公司用的招聘门户，岗位撤掉后页面写「已停止招聘」，以前要等页面巡检轮到它才下架，一轮要好几个月，库里攒过近七千个这样的岗。现在每天逐个确认后下架。这个数涨上去，说明那条每日核验没在起作用，用户点开这些公司的岗位会看到已停止招聘。
+    action: 把这条转给 Claude，让它看 Moka 撤岗核验最近一次运行是被哪道安全闸拦下的，或者为什么没跑
+
   # Workday：对方改了帖子的主地点，链接里的地点段跟着变，旧链接照样能开（对方只按链接最后一段找帖子）
   # → 列表按新链接插一行，旧行逐岗探活每次都回 200，同一个帖子两行都在招。
   # 写库时已经认旧链接（jobs_db.plan_moved_postings，2026-10-12）；这条盯着那套机制有没有在起作用。
@@ -1296,6 +1314,23 @@ checks:
     why: >
       比亚迪撤掉的岗位全靠这条任务每天对照官网在招名单下架。它没跑，或者跑了但被安全闸整轮拦下
       （官网名单没取全、官网接口异常、一次要下架的太多），已撤的岗位就继续挂着，用户点开是空白页。2026-10-12 上线。
+    action: 看这条任务最近一次运行；把结果转给 Claude，让它查是没跑还是被哪道安全闸拦下的
+
+  - id: pipeline.moka_liveness_ran
+    name: Moka 撤岗核验最近有没有跑成
+    subject: Moka 撤岗核验
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/moka-liveness.yml
+    sql: >
+      select count(*) from ops_runs where module = 'moka_liveness' and status = 'success'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 1"                # 每天一轮，窗口含昨天和今天；有源被安全闸拦下、或能核的源不到一半的轮次记的是失败，不算数
+    severity: warn
+    calibrated: false
+    why: >
+      宁德时代、吉利、恒瑞、SHEIN 这些公司用的招聘门户，撤掉的岗位全靠这条任务每天逐个确认后下架。它没跑，或者跑了但被安全闸拦下
+      （对方接口异常、门户列表没抓全、一次要下架的太多），已停止招聘的岗位就继续挂着，用户点开是「已停止招聘」。2026-10-14 上线。
     action: 看这条任务最近一次运行；把结果转给 Claude，让它查是没跑还是被哪道安全闸拦下的
 
   - id: pipeline.campus_lane_ran

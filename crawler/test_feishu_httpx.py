@@ -45,6 +45,11 @@ def _page(ids, count):
     return {"data": {"job_post_list": [{"id": str(x), "title": f"T{x}"} for x in ids], "count": count}}
 
 
+def _http(code, text=""):
+    """假的 httpx.get 响应（只用到 status_code / text）。"""
+    return type("Response", (), {"status_code": code, "text": text})()
+
+
 def _patch_client(pages):
     return mock.patch.object(feishu.httpx, "Client", lambda **kw: _FakeClient(pages))
 
@@ -190,17 +195,64 @@ class MainPortalTest(unittest.TestCase):
         self.assertEqual(calls, ["index"])
         self.assertEqual((len(rows), total), (1, 1))
 
-    def test_unknown_declared_portal_is_never_complete(self):
-        """首页拿不到自报门户 → 只取 index，但**不许**标抓全：否则 list-absence 会按它判撤岗。"""
+    def test_unknown_declared_portal_records_failure_not_zero(self):
+        """首页没读到自报门户 → 不去猜 index，整轮抛错记失败，一个列表请求都不发；should_skip 与 fetch 两条路都一样。
+        旧代码只问 index：歌尔丹拿（自报 641372、没有 index）10-03 / 10-04 两轮记成「成功 0 岗」；
+        智元 / VAST / 莉莉丝（自报别的、index 也开着）只抓到 index 那一小部分，同样记成功。"""
+        for entry in ("should_skip", "fetch"):
+            a = self._a()
+            with mock.patch.object(a, "_httpx_fetch_portal") as list_portal, \
+                    mock.patch.object(a, "_discover_detail_prefix", return_value=""):
+                with self.assertRaisesRegex(RuntimeError, "did not declare its public portal", msg=entry):
+                    getattr(a, entry)("https://nio.jobs.feishu.cn/index/position")
+            list_portal.assert_not_called()
+
+    def test_homepage_failure_reason_is_in_the_error(self):
+        """读不到的原因（状态码 / 异常）要进报错——crawl_runs 只存报错文字，光一句「没自报」查不了是被拦还是页面变了。"""
         a = self._a()
-        with mock.patch.object(feishu.httpx, "Client", self._client_by_portal({"index": [_page([1], 1)]})), \
-                mock.patch.object(a, "_discover_detail_prefix", return_value=""):
-            rows, total, reached = a._httpx_fetch("nio.jobs.feishu.cn")
-            a._prefetched = (rows, total, reached)
-            a.fetch("https://nio.jobs.feishu.cn/index/position")
-        self.assertEqual([r["id"] for r in rows], ["1"])
-        self.assertIsNone(total)
-        self.assertFalse(a.fetch_complete)
+        with mock.patch.object(feishu.httpx, "get", return_value=_http(403, "Forbidden")), \
+                mock.patch.object(a, "_httpx_fetch_portal") as list_portal:
+            with self.assertRaisesRegex(RuntimeError, r"did not declare.*\[HTTP 403\]"):
+                a._httpx_fetch("nio.jobs.feishu.cn")
+        list_portal.assert_not_called()
+
+    def test_declared_portal_unreachable_does_not_fall_back_to_index(self):
+        """自报门户的列表没打通 → 交回「没打通」（fetch 会抛错记失败），不拿 index 那半边凑数。"""
+        a = self._a()
+
+        def factory(**kw):
+            portal = (kw.get("headers") or {}).get("website-path")
+            if portal == "career":
+                return _FakeClient([{"code": 500, "message": "boom", "data": None}])
+            return _FakeClient([_page([4, 5], 2)])
+
+        with mock.patch.object(feishu.httpx, "Client", factory), \
+                mock.patch.object(a, "_discover_detail_prefix", return_value="career"):
+            self.assertEqual(a._httpx_fetch("nio.jobs.feishu.cn"), ([], None, False))
+            with self.assertRaisesRegex(RuntimeError, "list API unreachable"):
+                a.fetch("https://nio.jobs.feishu.cn/index/position")
+
+    def test_declared_portal_blip_in_should_skip_recovers_in_fetch(self):
+        """自报门户在 should_skip 预取时抖了一下 → should_skip 不跳过、不抛错；fetch 再取一次，通了照常抓全。"""
+        a = self._a()
+        attempts = {"career": 0}
+
+        def factory(**kw):
+            portal = (kw.get("headers") or {}).get("website-path")
+            if portal == "career":
+                attempts["career"] += 1
+                if attempts["career"] == 1:
+                    return _FakeClient([{"code": 500, "message": "boom", "data": None}])
+                return _FakeClient([_page([1, 2], 2)])
+            return _FakeClient([{"code": -9000003, "message": "site not exist", "data": None}])
+
+        with mock.patch.object(feishu.httpx, "Client", factory), \
+                mock.patch.object(a, "_discover_detail_prefix", return_value="career"):
+            self.assertIsNone(a.should_skip("https://nio.jobs.feishu.cn/index/position"))
+            payload = json.loads(a.fetch("https://nio.jobs.feishu.cn/index/position"))
+        self.assertEqual(attempts["career"], 2)
+        self.assertEqual(len(payload["_intercepted"][0]["data"]["job_post_list"]), 2)
+        self.assertTrue(a.fetch_complete)
 
     def test_one_portal_not_fully_paged_is_not_complete(self):
         a = self._a()
@@ -220,7 +272,8 @@ class MainPortalTest(unittest.TestCase):
         self.assertIn("/exp/position/", a.detail_template)
         with mock.patch.object(feishu.httpx, "Client", self._client_by_portal({})), \
                 mock.patch.object(a, "_discover_detail_prefix", return_value=""):
-            a._httpx_fetch("nio.jobs.feishu.cn")
+            with self.assertRaises(RuntimeError):   # 没自报门户 → 这一轮记失败（见上面几条），但前缀照样要清掉
+                a._httpx_fetch("nio.jobs.feishu.cn")
         self.assertIn("/index/position/", a.detail_template)
 
     def test_missing_index_portal_counts_as_empty_not_unreached(self):
@@ -239,13 +292,16 @@ class MainPortalTest(unittest.TestCase):
         self.assertEqual((len(rows), total, reached), (2, 2, True))
 
     def test_missing_declared_portal_is_not_waved_through(self):
-        """自报门户本身回 site not exist 是异常，不许当空门户（否则会把全源判成 0 岗、抓全）。"""
+        """自报门户本身回 site not exist 是异常，不许当空门户（否则会把全源判成 0 岗、抓全）。
+        index 也不存在时旧代码交回 ([], None, True) = 「成功 0 岗」；现在交回「没打通」，fetch 抛错记失败。"""
         a = self._a()
         with mock.patch.object(feishu.httpx, "Client",
                                lambda **kw: _FakeClient([{"code": -9000003, "data": None}])), \
                 mock.patch.object(a, "_discover_detail_prefix", return_value="exp"):
             rows, total, reached = a._httpx_fetch("x.jobs.feishu.cn")
-        self.assertIsNone(total)
+            self.assertEqual((rows, total, reached), ([], None, False))
+            with self.assertRaisesRegex(RuntimeError, "list API unreachable"):
+                a.fetch("https://x.jobs.feishu.cn/index/position")
 
     def test_declared_portal_with_zero_jobs_is_a_real_zero(self):
         """海底捞：自报门户（校园招聘 072846）0 岗、没有 index 门户、不带头却回 151 个
@@ -262,6 +318,31 @@ class MainPortalTest(unittest.TestCase):
                 mock.patch.object(a, "_discover_detail_prefix", return_value="072846"):
             rows, total, reached = a._httpx_fetch("haidilao.jobs.feishu.cn")
         self.assertEqual((rows, total, reached), ([], 0, True))
+
+    def test_homepage_read_retries_before_giving_up(self):
+        """首页请求出错 / 5xx / 429 就重取；三次都不行才交空串（主门户源随之记失败）。
+        404 / 403 / 「200 但没有 website_info」是确定答复，不重取。"""
+        host = "k13pqewe7i.jobs.feishu.cn"
+        page = _http(200, '"website_info":{"id":"1","path":"641372"}')
+        step = feishu.FeishuRecruitAdapter._HOME_RETRY_SLEEP
+        cases = [   # (名字, 依次回的响应 / 异常, 期望的前缀, 期望请求次数, 期望的等待序列)
+            ("healthy", [page], "641372", 1, []),
+            ("404 definitive", [_http(404, "Not Found")], "", 1, []),
+            ("403 definitive", [_http(403, "Forbidden")], "", 1, []),
+            ("200 without website_info", [_http(200, "<html>no portal info</html>")], "", 1, []),
+            ("blip then ok", [OSError("dns"), _http(502), page], "641372", 3, [step, 2 * step]),
+            ("429 then ok", [_http(429), page], "641372", 2, [step]),
+            ("all 503", [_http(503)] * 3, "", 3, [step, 2 * step]),   # 最后一次之后不再等
+        ]
+        for name, answers, want, calls, sleeps in cases:
+            with self.subTest(name):
+                a = self._a()
+                with mock.patch.object(feishu.time, "sleep") as sleep, \
+                        mock.patch.object(feishu.httpx, "get", side_effect=answers) as g:
+                    self.assertEqual(a._discover_detail_prefix(host), want)
+                self.assertEqual(g.call_count, calls)
+                self.assertEqual([c.args[0] for c in sleep.call_args_list], sleeps)
+        self.assertEqual(a._home_read_note, "HTTP 503")
 
     def test_detail_check_uses_the_rows_own_portal(self):
         a = self._a()
@@ -623,7 +704,9 @@ class SharedTenantPortalTest(unittest.TestCase):
 
     def test_registry_has_no_chains_and_other_tenants_are_untouched(self):
         for host, owners in feishu._SHARED_TENANT_PORTAL_OWNER.items():
-            self.assertFalse(set(owners) & set(owners.values()), host)   # 归属门户自己不再让给别人
+            yielding = {portal for portal, owner in owners.items() if owner}
+            self.assertTrue(yielding, host)                               # 全是 None 的登记什么也不剔，只多一道门
+            self.assertFalse(yielding & set(owners.values()), host)       # 归属门户自己不再让给别人（登记成 None 留着可以）
         a = feishu.NioAdapter()
         a._bind_website_path("https://nio.jobs.feishu.cn/index/position")
         calls = []
@@ -631,6 +714,76 @@ class SharedTenantPortalTest(unittest.TestCase):
                 mock.patch.object(a, "_discover_detail_prefix", return_value="index"):
             rows, total, _reached = a._httpx_fetch("nio.jobs.feishu.cn")
         self.assertEqual((calls, len(rows), total, a.retire_jd_urls), (["index"], 1, 1, ()))
+
+
+class SameCompanyPortalOverlapTest(unittest.TestCase):
+    """同一家公司的两个门户挂着同一个岗、两个门户各有一条源：只留一行（2026-10-15，亚信安全 / 爱奇艺）。
+
+    碑文（各门户翻全 + 逐岗带各自门户的 website-path 读 channel_online_status，全集）：
+      · 亚信安全：首页自报 campus（12 岗）；index 是「社招官网（旧版）」12 岗，12 个全部也挂在新社招门户 social（71 岗）上，
+        两边都在线 → 主门户源把这 12 个让给 social，自报的 campus 登记为 None（留着）。
+      · 爱奇艺：新接的 intern（97 岗）与已有的 campus / internship 子门户源各重 1 个，两边都在线 → 都让给 intern；
+        主门户源取的 job / index 登记为 None。
+      · 登记表的值为 None = 留着、不取别的门户；主门户源取到的门户必须全部登记，认不出的照旧整轮不写。
+    """
+
+    @staticmethod
+    def _a(host, path):
+        url = f"https://{host}/{path}/position"
+        a = feishu.FeishuGenericAdapter()
+        a._bind_host(url)
+        a._bind_website_path(url)
+        a._PAGE_SIZE = 50
+        return a
+
+    _factory = staticmethod(SharedTenantPortalTest._factory)
+
+    def test_main_source_keeps_registered_none_portal_and_yields_the_old_one(self):
+        host = "asiainfo-sec.jobs.feishu.cn"
+        a = self._a(host, "index")
+        calls = []
+        pages = {"campus": [_page([1, 2], 2)], "index": [_page([3, 4], 2)], "social": [_page([4, 5, 6], 3)]}
+        with mock.patch.object(feishu.httpx, "Client", self._factory(pages, calls)), \
+                mock.patch.object(a, "_discover_detail_prefix", return_value="campus"):
+            rows, total, reached = a._httpx_fetch(host)
+        self.assertEqual(calls, ["campus", "index", "social"])     # 只为让出的 index 多取一次 social
+        self.assertEqual(([(r["id"], r["_portal"]) for r in rows], total, reached),
+                         ([("1", "campus"), ("2", "campus"), ("3", "index")], 3, True))
+        self.assertEqual(a.retire_jd_urls, (f"https://{host}/index/position/4/detail",))
+
+    def test_sub_portal_yields_to_owner_while_kept_portals_ask_nothing_extra(self):
+        host = "iq.jobs.feishu.cn"
+        pages = {"campus": [_page([1, 2], 2)], "internship": [_page([3, 4], 2)],
+                 "intern": [_page([2, 4, 9], 3)], "job": [_page([7], 1)], "index": [_page([8], 1)]}
+        for path, kept, retired, extra in (("campus", ["1"], ["2"], ["intern"]),
+                                           ("internship", ["3"], ["4"], ["intern"]),
+                                           ("intern", ["2", "4", "9"], [], [])):
+            a = self._a(host, path)
+            calls = []
+            with mock.patch.object(feishu.httpx, "Client", self._factory(pages, calls)):
+                rows, total, _reached = a._httpx_fetch(host)
+            self.assertEqual(calls, [path] + extra, path)
+            self.assertEqual(([r["id"] for r in rows], total), (kept, len(kept)), path)
+            self.assertEqual(a.retire_jd_urls,
+                             tuple(f"https://{host}/{path}/position/{i}/detail" for i in retired), path)
+        a = self._a(host, "index")
+        calls = []
+        with mock.patch.object(feishu.httpx, "Client", self._factory(pages, calls)), \
+                mock.patch.object(a, "_discover_detail_prefix", return_value="job"):
+            rows, total, _reached = a._httpx_fetch(host)
+        self.assertEqual((calls, sorted(r["id"] for r in rows), total, a.retire_jd_urls),
+                         (["job", "index"], ["7", "8"], 2, ()))
+
+    def test_main_source_still_refuses_an_unregistered_portal(self):
+        host = "iq.jobs.feishu.cn"
+        a = self._a(host, "index")
+        calls = []
+        pages = {"graduate": [_page([1], 1)], "index": [_page([8], 1)]}
+        with mock.patch.object(feishu.httpx, "Client", self._factory(pages, calls)), \
+                mock.patch.object(a, "_discover_detail_prefix", return_value="graduate"):
+            with self.assertRaises(RuntimeError):
+                a._httpx_fetch(host)
+        self.assertEqual((calls, a.retire_jd_urls), (["graduate", "index"], ()))
 
 
 if __name__ == "__main__":

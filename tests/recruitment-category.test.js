@@ -57,6 +57,21 @@ test("P1-D: url 拼音路径 + 源名信号补全校招/实习（治 59% 空 job
   assert.equal(recruitmentCategory({ title: "后端开发", company: "字节跳动" }), "社招");
 });
 
+test("飞书实习门户路径 /internship/ 是渠道自报实习（2026-10-16，小米实习门户 95 行原判校招 54 / 社招 41）", () => {
+  const url = "https://xiaomi.jobs.f.mioffice.cn/internship/position/7670002824176158982/detail";
+  // 标题只写届别、正文没写实习：门户就是实习门户，对方逐行自报「校招 > 实习」
+  assert.equal(recruitmentCategory({ title: "产品经理-2027届", jd_url: url }), "实习");
+  assert.equal(recruitmentCategory({ title: "交付体验助理", jd_url: url }), "实习");
+  assert.equal(recruitmentCategory({ title: "交付体验助理", jd_url: "https://x.com/internship?id=1" }), "实习");
+  assert.equal(hasExplicitRecruitmentType({ title: "交付体验助理", jd_url: url }), true);
+  // 渠道级声明照旧让位给岗位自己写明的年限（层2）
+  assert.equal(recruitmentCategory({ title: "算法工程师", summary: "3年以上相关工作经验", jd_url: url }), "社招");
+  // 只认整段 internship：international / internal / internet 路径段不算
+  for (const seg of ["international-tax-manager", "internal-audit", "internet-technologies", "internships-overview"]) {
+    assert.equal(recruitmentCategory({ title: "Manager", jd_url: `https://x.com/${seg}/1` }), "社招", seg);
+  }
+});
+
 test("公司名不是招聘类型信号（2026-10-11 拆层6）：名字里带「校招 / 实习」也不改判，也不算「类型明确」", () => {
   // 原层6 会把这三行判成 校招 / 实习 / 实习。源名已不带渠道后缀（迁移 320），公司名里再出现这两个字只会是公司自己的名字。
   for (const company of ["华润电力 CR Power 校招", "TCL 实习", "实习僧", "神州信息—AI实习生", "某某校园招聘服务有限公司"]) {
