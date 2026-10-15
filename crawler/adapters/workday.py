@@ -118,6 +118,9 @@ def _is_facet_in_regions(desc: str, regions) -> bool:
 
 
 _GREATER_CHINA_CODES = frozenset({"CN", "HK", "MO"})
+# 地点里单独出现的「中国」国别码：在华城市叶子判定前先去掉，见 _loose_cn_facet_candidates。
+# geo 只把单独的 cn / prc 当中国；HK 不去——geo 认「HK, , , CHEK, LAP, KOK」这种开头国别码是香港，去了就收不到。
+_GC_COUNTRY_CODE_TOKEN_RE = re.compile(r"(?<![A-Za-z])(?:CN|CHN|PRC)(?![A-Za-z])", re.I)
 
 
 def _declared_country(info) -> Optional[str]:
@@ -289,6 +292,7 @@ class WorkdayAdapter(BaseAdapter):
         seen = set()
         any_capped = self._collect_facet_posts(source_url, headers, candidates, seen, trusted)
 
+        text_posts: List[dict] = []
         # 2b) 城市级 US 叶子宽松通道：不少租户的 location facet 只有城市级叶子，且不写国名全称——
         # 'Austin, TX, US'（Postman）/ 'US, Oregon, Hillsboro'（Intel）/ 'Beaverton, Oregon'（Nike）/
         # 'San Jose, CA'（Micron）。上面的字面关键词一个都认不出，而第 3 步的文本兜底只在 facet 取到 <25 岗
@@ -296,16 +300,19 @@ class WorkdayAdapter(BaseAdapter):
         # 各只抓到 1 个、Nike 0 个）。这里交给 geo 的美国地名词典（州全称/州缩写，有双向回归测试）认叶子。
         # ⚠️ 这些岗**不进 trusted**：叶子是 geo 猜的不是租户声明的，逐岗再过 regions（同文本兜底），
         #    宁可漏判不可错放。⚠️ 已有国家级 US facet 的源不走这条（见 _has_us_country_facet）。
-        text_posts: List[dict] = []
-        loose = self._loose_us_facet_candidates(facets, regions)
-        if loose:
+        # 2c) 城市 / 省级在华叶子（见 _loose_cn_facet_candidates）：和 2b 同一种补充召回、同一套出错兜底。
+        # 在华的排在前面：第 4 步逐岗补正文按 text_posts 的顺序取前 300 个，美国宽松岗多的租户会把名额占满。
+        for kind, loose in (("CN", self._loose_cn_facet_candidates(facets, regions)),
+                            ("US", self._loose_us_facet_candidates(facets, regions))):
+            if not loose:
+                continue
             try:
                 any_capped = self._collect_facet_posts(source_url, headers, loose, seen, text_posts) or any_capped
             except Exception as e:
                 # 这条是补充召回：它一次断连就 raise，会把前面已抓到的在华岗连同整源一起扔掉（同顺丰那块碑）。
                 # 2026-09-23 对拍时 Regeneron 真撞过一次 Server disconnected。保住已抓的，如实记没抓全。
-                logger.warning("workday %s: city-level US facet pass failed, kept %d posts: %r",
-                               self._host, len(text_posts), e)
+                logger.warning("workday %s: city-level %s facet pass failed, kept %d posts: %r",
+                               self._host, kind, len(text_posts), e)
                 any_capped = True
 
         # 3) searchText 文本补充：部分租户的在华地点埋在**嵌套/截断**的 location facet 里，facet 只露出
@@ -313,7 +320,7 @@ class WorkdayAdapter(BaseAdapter):
         # （<25，或压根没 facet）就用 Workday searchText 按 'China'/'Hong Kong'/'Macau' 文本召回把漏的捞回；
         # 这些是**待过滤**岗（searchText 会带入母国/描述含 China 的非华岗），由 parse 按 is_china_location 严格过滤。
         # facet 已足够多（NVIDIA/BMS 数百岗）则跳过补充：补充只增不减、out ⊇ trusted，绝不回退召回。
-        # 门槛只数 trusted、不数 2b 的宽松岗——保证加了 2b 之后，原来会跑兜底的源照旧跑。
+        # 门槛只数 trusted、不数 2b / 2c 的宽松岗——保证加了它们之后，原来会跑兜底的源照旧跑。
         if len(trusted) < 25:
             for q in _search_texts_for_regions(regions):
                 # 文本召回超过 2000 条时不切块：它带进来的是「正文提到 China / United States」的全球岗，
@@ -601,23 +608,48 @@ class WorkdayAdapter(BaseAdapter):
         return False
 
     @staticmethod
+    def _loose_location_leaves(facets, accept) -> dict:
+        """地点类 param 下、accept(叶子描述) 为真的叶子 id，按 param 分组（2b / 2c 共用）。"""
+        groups: dict = {}
+        for param, v in WorkdayAdapter._iter_facet_values(facets):
+            if not (param and v.get("id") and _LOCATION_PARAM.search(param)):
+                continue
+            if not accept(v.get("descriptor") or ""):
+                continue
+            ids = groups.setdefault(param, [])
+            if v["id"] not in ids:
+                ids.append(v["id"])
+        return groups
+
+    @staticmethod
     def _loose_us_facet_candidates(facets, regions) -> dict:
         """城市级 US 叶子：地点类 param 下、字面关键词没认出、但 geo 判为 US 的叶子 id，按 param 分组。
         regions 不含 US 或租户已有国家级 US facet 时返回空。"""
         regions = normalizer.source_regions(regions)
         if "US" not in regions or WorkdayAdapter._has_us_country_facet(facets):
             return {}
-        groups: dict = {}
-        for param, v in WorkdayAdapter._iter_facet_values(facets):
-            desc = v.get("descriptor") or ""
-            if not (param and v.get("id") and _LOCATION_PARAM.search(param)):
-                continue
-            if _is_facet_in_regions(desc, regions) or derive_country_code(desc) != "US":
-                continue
-            ids = groups.setdefault(param, [])
-            if v["id"] not in ids:
-                ids.append(v["id"])
-        return groups
+        return WorkdayAdapter._loose_location_leaves(
+            facets, lambda d: not _is_facet_in_regions(d, regions) and derive_country_code(d) == "US")
+
+    @staticmethod
+    def _loose_cn_facet_candidates(facets, regions) -> dict:
+        """城市 / 省级的在华叶子：地点类 param 下、字面关键词（china / 中国 / hong kong / macau）没认出、
+        但 geo 判为大陆 / 香港 / 澳门的叶子 id，按 param 分组。regions 不含 CN 时返回空。
+
+        为什么要有：不少租户的在华地点叶子不写国名——罗氏「Shanghai」、GE 医疗「BeiJing」、默沙东「CHN - Beijing -
+        Beijing (Wangjing Park)」、玛氏「CHN-Anhui-Bengbu」、阿斯利康「Beijing Yizhuang」。字面关键词一个都认不出，
+        以前全靠第 3 步的「China / Hong Kong / Macau」文本兜底捞；2026-07-02 地区放开到 {CN,US,SG,Remote} 之后
+        分组取到的岗（含美国）一下超过 25 个，兜底不再跑，这些在华岗从那天起再没被列表看到。
+        2026-10-14 实测：14 个源 135 个在招的在华岗列表不给，其中 115 个从没进过库。
+        和 2b 一样不进 trusted：叶子是 geo 认的、不是租户声明的，逐岗再过 regions。
+        ⚠️ 只认「去掉国别码之后仍是大中华」的叶子：geo 把单独的 CN / PRC 当中国，奥的斯「OTIS CN IDF - Campus
+        Arboretum - … 92000 NANTERRE, France」会被认成中国（同次实测 15 个法国岗，detail 自报 FR）。叶子里得有中国地名。"""
+        regions = normalizer.source_regions(regions)
+        if "CN" not in regions:
+            return {}
+        return WorkdayAdapter._loose_location_leaves(
+            facets, lambda d: not _is_facet_in_regions(d, regions)
+            and derive_country_code(_GC_COUNTRY_CODE_TOKEN_RE.sub(" ", d)) in _GREATER_CHINA_CODES)
 
     _DETAIL_CAP = 300  # 单源逐岗 detail 抓取上限：覆盖绝大多数源；超大租户部分覆盖，避免拖垮夜间全量
 

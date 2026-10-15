@@ -739,6 +739,15 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #     「Remote - Belgium」这类别国远程分组整组收进来、不逐岗复核地点，帖子去掉远程地点后掉出列表、链接不变。
                          #     腾讯那条源（tencent adapter）的海外岗 PostURL 就是 Workday 链接、没有 postId：以前 `_detail_tencent`
                          #     取不到 postId 直接 return ""，有正文的行被盖「在招」章、永远判不死；现在这类行改问 Workday 详情。
+                         #     ✅ ① 的修法（2026-10-15，`_loose_cn_facet_candidates`，「2c」那一步）：不在中国分组里的在华岗，叶子是不写国名的
+                         #     城市 / 省名——罗氏「Shanghai」、GE 医疗「BeiJing」、默沙东「CHN - Beijing - …」、玛氏「CHN-Anhui-Bengbu」、
+                         #     阿斯利康「Beijing Yizhuang」、强生「CN016 Harbin」。字面关键词认不出，geo 认得出 → 和美国城市叶子（2b）同一种补抓，
+                         #     逐岗再过 regions。没改「trusted < 25 才跑文本兜底」这道门：一律跑兜底要多 ~761 次请求、只多 135 个岗（亿滋一家翻 98 页
+                         #     只多 0 个），城市叶子补抓多 256 次请求、多 780 个岗。
+                         #     ⚠️ 叶子要去掉单独的国别码（CN / CHN / HK / MO…）之后仍是大中华才算：奥的斯「OTIS CN IDF - Campus Arboretum - …
+                         #     92000 NANTERRE, France」geo 会认成中国，第一版因此多收了 15 个法国岗（detail 自报 FR）。
+                         #     全量（101 源旧 → 新 → 旧背靠背）：57 源有这种叶子，新代码多 780 个岗、少 0 个（两轮旧代码之间对方自己的上下架 6 行）；
+                         #     780 个逐个打 detail，自报国家全是 CN；库里 759 个从没进过、21 个是一直没被刷新的在招行。抓全标记 57 源前后不变。
                          #     ⚠️ 地点取列表每行的 `locationsText`（对方原文），**不从 externalPath 的地点段还原**（2026-10-12 改）：
                          #     地点段是原文的 slug（空白 → 连字符，逗号等标点直接删）：2026-10-12 抓回 101 个租户，39,062 个单地点岗逐条核过；
                          #     还原时分不出哪个连字符是分隔、哪个是词间空格，旧实现全换成逗号 → 「New, York, NY」「US, , , California」

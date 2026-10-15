@@ -180,6 +180,107 @@ class WorkdayLooseUsFacetTest(unittest.TestCase):
         )
 
 
+class WorkdayLooseCnFacetTest(unittest.TestCase):
+    """城市 / 省级的在华叶子（2026-10-14）：叶子不写国名，字面关键词认不出；以前靠文本兜底捞，
+    2026-07-02 放开地区后兜底不再跑 → 14 个源 135 个在华岗列表不给（115 个从没进过库）。"""
+
+    REGIONS = {"CN", "US", "SG", "Remote"}
+
+    def test_city_level_cn_leaves_are_picked_up(self):
+        facets = _location_facets([
+            "Shanghai",                                   # 罗氏
+            "BeiJing",                                    # GE 医疗
+            "CHN - Beijing - Beijing (Wangjing Park)",    # 默沙东
+            "CHN-Anhui-Bengbu",                           # 玛氏
+            "Beijing Yizhuang",                           # 阿斯利康
+            "Guangdong",                                  # 省级叶子（飞利浦 locationHierarchy2）
+            "CN016 Harbin",                               # 强生：国别码 + 地名
+            "cn, shanghai",                               # 小写国别码 + 地名
+            "HK, Kwun Tong",                              # 开头国别码 HK：geo 认它是香港，HK 不去
+        ])
+        got = WorkdayAdapter._loose_cn_facet_candidates(facets, self.REGIONS)
+        self.assertEqual(got, {"locations": [f"id-{i}" for i in range(9)]})
+
+    def test_keyword_taiwan_and_foreign_leaves_are_left_alone(self):
+        facets = _location_facets([
+            "Shanghai, China", "Hong Kong Island",       # 字面关键词已认出 → 走原 trusted 通道
+            "Taipei", "Taiwan, Taipei", "Hsinchu",       # 台湾：不抓
+            "Austin, TX, US", "Bangalore, India", "Kowloon Bay Business Park, Singapore",
+            # 奥的斯法国厂区：只有国别码样子的「CN」、没有中国地名（detail 自报 FR）
+            "OTIS CN IDF - Campus Arboretum - 1 place des Papeteries 92000 NANTERRE, France",
+            "PRC Office, Lyon, France",                  # 同理：geo 把单独的 PRC 也当中国
+            "HKG - Central",                             # geo 认不出地方：不收
+        ])
+        self.assertEqual(WorkdayAdapter._loose_cn_facet_candidates(facets, self.REGIONS), {})
+
+    def test_regions_without_cn_get_nothing(self):
+        facets = _location_facets(["Shanghai"])
+        self.assertEqual(WorkdayAdapter._loose_cn_facet_candidates(facets, {"US", "SG", "Remote"}), {})
+
+    def test_non_location_param_is_ignored(self):
+        facets = [{"facetParameter": "jobFamilyGroup", "values": [
+            {"id": "jf", "descriptor": "Shanghai R&D"},
+        ]}]
+        self.assertEqual(WorkdayAdapter._loose_cn_facet_candidates(facets, self.REGIONS), {})
+
+
+class WorkdayLooseCnFetchTest(unittest.TestCase):
+    SOURCE_URL = "https://tenant.wd5.myworkdayjobs.com/wday/cxs/tenant/site/jobs"
+
+    def _run(self, cn_leaf_error=None):
+        # 30 个带国名的在华叶子（trusted 已超过 25，文本兜底不跑）+ 1 个只写「Shanghai」的叶子
+        facets = _location_facets([f"Beijing {i}, China" for i in range(30)] + ["Shanghai"])
+        cn_leaf = "id-30"
+        searched = []
+
+        def post_side_effect(url, json=None, headers=None, timeout=None):
+            body = json or {}
+            applied = (body.get("appliedFacets") or {}).get("locations")
+            if body.get("limit") == 1:
+                return _response(200, {"facets": facets})
+            if body.get("offset", 0) > 0:
+                return _response(200, {"jobPostings": []})
+            if body.get("searchText"):
+                searched.append(body["searchText"])
+                return _response(200, {"jobPostings": []})
+            if applied == [cn_leaf] and cn_leaf_error is not None:
+                raise cn_leaf_error
+            if applied == [cn_leaf]:
+                # 叶子是 geo 认的：混进来的境外岗必须被逐岗过滤掉
+                return _response(200, {"jobPostings": [
+                    {"title": "SH Role", "locationsText": "Shanghai", "externalPath": "/job/Shanghai/SH-Role_1"},
+                    {"title": "Leak Role", "locationsText": "Bangalore, India",
+                     "externalPath": "/job/Bangalore-India/Leak-Role_2"},
+                ]})
+            return _response(200, {"jobPostings": [
+                {"title": f"BJ Role {i}", "externalPath": f"/job/China-Beijing/BJ-Role_{i}"}
+                for i in range(len(applied or []))
+            ]})
+
+        adapter = WorkdayAdapter()
+        adapter.regions = frozenset({"CN", "US", "SG", "Remote"})
+        with mock.patch("adapters.workday.httpx.post", side_effect=post_side_effect), \
+                mock.patch("adapters.workday.httpx.get", side_effect=RuntimeError("no detail in test")):
+            html = adapter.fetch(self.SOURCE_URL)
+        self.adapter = adapter
+        return adapter.parse(html), json.loads(html), searched
+
+    def test_city_leaf_posts_are_collected_and_filtered_per_job(self):
+        jobs, data, searched = self._run()
+        titles = {j.title for j in jobs}
+        self.assertIn("SH Role", titles)
+        self.assertNotIn("Leak Role", titles)
+        self.assertNotIn("SH Role", {p["title"] for p in data["trusted_posts"]})
+        self.assertEqual(searched, [])  # trusted 已超过 25：文本兜底照旧不跑，补抓全靠城市叶子
+        self.assertTrue(self.adapter.fetch_complete)
+
+    def test_city_leaf_failure_keeps_trusted_posts_and_marks_incomplete(self):
+        with self.assertLogs("adapters.workday", level="WARNING"):
+            jobs, _, _ = self._run(cn_leaf_error=httpx.RemoteProtocolError("Server disconnected"))
+        self.assertEqual(sum(1 for j in jobs if j.title.startswith("BJ Role")), 30)
+        self.assertFalse(self.adapter.fetch_complete)
+
+
 class WorkdayLooseUsFetchTest(unittest.TestCase):
     SOURCE_URL = "https://tenant.wd5.myworkdayjobs.com/wday/cxs/tenant/site/jobs"
 
