@@ -411,11 +411,11 @@ function legacyRecruitmentSuperset(jobType: string): string {
       // 绝不可能再被判成校招，所以从校招超集里剔掉是安全的。
       // ⚠️ intern 必须**两侧**词边界（PG 用 \y）：否则 international / internal / internet 会被当实习剔掉
       //    ——同款裸子串坑在 crawler 上实锤误标过 27,824 个岗。
-      // ⚠️ url 只认**路径段** /shixi /intern，不认 `?postType=intern`：实测 wecruit 有 10 个「27届」
+      // ⚠️ url 只认**路径段** /shixi /intern /internship，不认 `?postType=intern`：实测 wecruit 有 10 个「27届」
       //    真校招岗带该参数，按查询参数算会被误杀。
       " and not (coalesce(job_type,'') ~* '(实习|\\yintern(ship)?s?\\y)'" +
       " or coalesce(title,'') ~ '(实习|shixi)' or coalesce(title,'') ~* '\\yintern(ship)?s?\\y'" +
-      " or coalesce(nullif(jd_url,''), apply_url, '') ~* '/(shixi|intern)(/|\\?|$)'))"
+      " or coalesce(nullif(jd_url,''), apply_url, '') ~* '/(shixi|intern|internship)(/|\\?|$)'))"
     );
   }
   if (jobType === "实习") {

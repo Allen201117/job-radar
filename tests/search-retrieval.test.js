@@ -419,7 +419,7 @@ test("jobs-store 校招：下推剔除实习，且 intern 必须两侧词边界"
   // 逐字对齐 recruitmentCategory 层1 的三个来源：job_type / title / url 路径段。
   assert.match(sql, /coalesce\(job_type,''\) ~\* '\(实习\|/);
   assert.match(sql, /coalesce\(title,''\) ~ '\(实习\|shixi\)'/);
-  assert.match(sql, /\/\(shixi\|intern\)\(\/\|/, "url 只认路径段");
+  assert.match(sql, /\/\(shixi\|intern\|internship\)\(\/\|/, "url 只认路径段（与 URL_INTERN_PATH_RE 同一组令牌）");
 
   // ⚠️ 最关键的一条：intern 必须**两侧**词边界（PG 的 \y），否则 international / internal /
   // internet 会把全职岗当实习剔掉 —— 同款裸子串坑在 crawler 上实锤误标过 27,824 个岗。
