@@ -371,5 +371,8 @@
   "absen.zhiye.com": {
     "ssr": true
   },
-  "51talk.zhiye.com": "https://51talk.zhiye.com/social/detail"
+  "51talk.zhiye.com": "https://51talk.zhiye.com/social/detail",
+  "zhaoxin.zhiye.com": {
+    "ssr": true
+  }
 }
