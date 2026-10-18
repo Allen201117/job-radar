@@ -374,5 +374,8 @@
   "51talk.zhiye.com": "https://51talk.zhiye.com/social/detail",
   "zhaoxin.zhiye.com": {
     "ssr": true
+  },
+  "xiaoman.zhiye.com": {
+    "ssr": true
   }
 }
