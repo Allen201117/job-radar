@@ -27,6 +27,7 @@ body {orgId, jobId, siteId, locale}，匿名可发。回包是 {data: 密文, ne
 安全闸（任何一道不过，这条源本轮一行都不下架；有源被拦 → 进程退出码 2 → workflow 变红）：
   · 对照：这条源这一轮见到的岗里取 CONTROL_SAMPLE 个（只取它自己门户下的），必须全读到在招；再问一个不存在的岗位 id，
     必须读到已停。开头过一遍、每探 PROBE_CHUNK 个之后再过一遍——接口中途退化时它对在招岗也可能回短密文。
+    读到已停的阳性对照可以换备用行顶上，最多 MAX_CONTROL_GONE 个（昨晚在列、白天刚关的岗，2026-10-21 起）；判不了的不换。
   · 「没见到却读到在招」的行 ≤ max(LIVE_UNLISTED_MIN, 在招行数 × MAX_LIVE_UNLISTED_FRACTION)：多了说明这条源的列表
     不是全集（没抓全却记了抓全 / 源地址带了我们没认出来的筛选）。2026-10-12 特斯拉一个白天重新开放了 12 个岗（在招 1,161）。
   · 占比闸：拟下架 > 在招行数 × --max-expire-fraction（默认 0.5，与 jobs_db.plan_absence_sweep 同一个函数、同一个下限）
@@ -68,6 +69,7 @@ DETAIL_PATH = "/api/outer/ats-apply/website/job"
 GONE_LEN = 152
 LIVE_MIN_LEN = 1000
 CONTROL_SAMPLE = 3
+MAX_CONTROL_GONE = 1
 PROBE_CHUNK = 500
 MAX_RUN_AGE_HOURS = 36
 MIN_SEEN_FRACTION = 0.9
@@ -164,14 +166,33 @@ def usable_blocked_reason(n_sources, n_usable):
     return None
 
 
-def controls_ok(control_refs, probe_fn, misses=None):
-    """阳性：这一轮见到的岗必须全读到在招；阴性：同门户下不存在的岗位 id 必须读到已停。没有阳性对照 → False。
-    misses：传一个 list 进来，没过时往里记是哪一个对照、读到了什么（日志 / 报告用，不影响判定）。"""
+def controls_ok(control_refs, probe_fn, misses=None, swapped=None):
+    """阳性：按顺序从这一轮见到的岗里凑 CONTROL_SAMPLE 个读到在招的（池子不足 CONTROL_SAMPLE 个就要池子全部）；
+    阴性：同门户下不存在的岗位 id 必须读到已停。没有阳性对照 → False。
+
+    读到「已停」的阳性对照可以换池子里的备用行顶上，最多 MAX_CONTROL_GONE 个、没有备用行就不换：昨晚还在列表、白天刚被
+    关掉的岗会读成已停，这不是接口坏了（2026-10-21 森马实测）。接口真坏了时在招岗普遍读成短密文，换一个救不回来，照样拦。
+    读到判不了的一个都不换。
+    swapped 跨多次检查传同一个 list（一轮里开头 + 每块之后各查一遍）：一轮里换掉的必须始终是同一个岗——真关掉的岗不会
+    忽而在招忽而已停，换来换去说明接口不可靠。misses 记没过的那一个（日志 / 报告用）。"""
     if not control_refs:
         return False
+    need = min(CONTROL_SAMPLE, len(control_refs))
+    swaps_left = min(MAX_CONTROL_GONE, len(control_refs) - need)
+    earlier = set(swapped or ())
+    live = 0
     for ref in control_refs:
+        if live == need:
+            break
         state = probe_fn(ref)
-        if state != "live":
+        if state == "live":
+            live += 1
+        elif state == "gone" and swaps_left and (ref.job_id in earlier or len(earlier) < MAX_CONTROL_GONE):
+            swaps_left -= 1
+            earlier.add(ref.job_id)
+            if swapped is not None:
+                swapped.append(ref.job_id)
+        else:
             if misses is not None:
                 misses.append(f"{ref.job_id}={state}")
             return False
@@ -276,25 +297,29 @@ def reconcile_source(source, run, *, active, seen, candidates, controls, probe_f
     to_probe = sorted({ref for ref in (detail_ref(url) for _row_id, url in own) if ref})
     states = {}
     if to_probe:
+        # 多带 MAX_CONTROL_GONE 行备用：读到已停的对照换下一行顶上（controls_ok 只在凑够之前才往后探，平时不多发请求）
         control_refs = [ref for ref in (detail_ref(url) for url in controls)
-                        if ref and ref[:3] == portal][:CONTROL_SAMPLE]
+                        if ref and ref[:3] == portal][:CONTROL_SAMPLE + MAX_CONTROL_GONE]
         if not control_refs:
             rec["skipped"] = "no_listed_rows"   # 这一轮一个岗都没见到（门户清空了）：没有阳性对照，不替它下结论
             return rec, False
 
-        misses = []
+        misses, swapped = [], []
 
         def control():
-            return controls_ok(control_refs, probe_fn, misses)
+            return controls_ok(control_refs, probe_fn, misses, swapped)
 
         first, ok = probe_all(to_probe, probe_fn, control, threads=threads)
         second = {}
         gone_once = [ref for ref, state in first.items() if state == "gone"]
         if ok and gone_once:
             second, ok = probe_all(gone_once, probe_fn, control, check_first=False, threads=threads)
+        if swapped:
+            rec["control_swapped"] = sorted(set(swapped))   # 换掉过的对照：频繁出现要回头看是不是接口在退化
         if not ok:
             rec["blocked"] = "control_failed"
-            rec["control_miss"] = misses[-1] if misses else None   # 哪个对照没过、读到了什么：红了要能看出为什么红
+            if misses:
+                rec["control_miss"] = misses[-1]
             return rec, True
         states = settle(first, second)
 

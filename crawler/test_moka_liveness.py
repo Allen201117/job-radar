@@ -169,6 +169,77 @@ class ControlsTest(unittest.TestCase):
     def test_fail_without_any_listed_row(self):
         self.assertFalse(L.controls_ok([], lambda ref: "gone"))
 
+    def _pool(self, n, **bad):
+        """n 个对照，默认全读在招；bad={行号: 回答}。返回 (对照列表, 回答表)。"""
+        refs = [_ref(i) for i in range(1, n + 1)]
+        states = {r: "live" for r in refs}
+        states.update({_ref(int(k[1:])): v for k, v in bad.items()})
+        states[L.fake_ref(refs[0])] = "gone"
+        return refs, states
+
+    def test_one_closed_control_is_swapped_for_a_spare(self):
+        # 2026-10-21 森马：昨晚在列的对照白天被关掉，读到已停；换下一行顶上，接口是好的就该放行
+        refs, states = self._pool(4, r2="gone")
+        misses, swapped = [], []
+        self.assertTrue(L.controls_ok(refs, states.get, misses, swapped))
+        self.assertEqual((misses, swapped), ([], [_ref(2).job_id]))
+
+    def test_closed_control_without_a_spare_still_fails(self):
+        refs, states = self._pool(3, r2="gone")
+        misses = []
+        self.assertFalse(L.controls_ok(refs, states.get, misses))
+        self.assertEqual(misses, [f"{_ref(2).job_id}=gone"])
+
+    def test_only_one_closed_control_is_tolerated(self):
+        # 接口真坏了时在招岗普遍读成已停：换掉一个之后又来一个 → 拦
+        refs, states = self._pool(5, r1="gone", r3="gone")
+        misses, swapped = [], []
+        self.assertFalse(L.controls_ok(refs, states.get, misses, swapped))
+        self.assertEqual((misses, swapped), ([f"{_ref(3).job_id}=gone"], [_ref(1).job_id]))
+
+    def test_an_undeterminable_control_is_never_swapped(self):
+        refs, states = self._pool(4, r2="unknown")
+        misses = []
+        self.assertFalse(L.controls_ok(refs, states.get, misses))
+        self.assertEqual(misses, [f"{_ref(2).job_id}=unknown"])
+
+    def test_after_a_swap_the_spare_must_read_live(self):
+        for spare in ("gone", "unknown"):
+            refs, states = self._pool(4, r2="gone", r4=spare)
+            misses = []
+            self.assertFalse(L.controls_ok(refs, states.get, misses), spare)
+            self.assertEqual(misses, [f"{_ref(4).job_id}={spare}"], spare)
+
+    def test_the_same_closed_control_can_be_swapped_on_every_check_of_a_round(self):
+        refs, states = self._pool(4, r2="gone")
+        swapped = []
+        for _ in range(3):   # 开头 + 每块之后各查一遍
+            self.assertTrue(L.controls_ok(refs, states.get, [], swapped))
+        self.assertEqual(set(swapped), {_ref(2).job_id})
+
+    def test_a_different_control_reading_closed_later_in_the_round_fails(self):
+        # 第一遍 r2 已停（换掉），第二遍 r2 又读在招、r3 读已停：真关掉的岗不会这样来回，说明接口不可靠
+        refs = [_ref(i) for i in range(1, 5)]
+        prober = _Prober({_ref(1): "live", _ref(2): ["gone", "live"], _ref(3): ["live", "gone"], _ref(4): "live",
+                          L.fake_ref(_ref(1)): "gone"})
+        misses, swapped = [], []
+        self.assertTrue(L.controls_ok(refs, prober, misses, swapped))
+        self.assertFalse(L.controls_ok(refs, prober, misses, swapped))
+        self.assertEqual((misses, swapped), ([f"{_ref(3).job_id}=gone"], [_ref(2).job_id]))
+
+    def test_the_spare_is_not_asked_when_the_first_three_read_live(self):
+        refs, states = self._pool(4)
+        prober = _Prober(states)
+        self.assertTrue(L.controls_ok(refs, prober))
+        self.assertEqual(prober.asked, [_ref(1), _ref(2), _ref(3), L.fake_ref(_ref(1))])
+
+    def test_swapping_does_not_excuse_the_negative_control(self):
+        refs, states = self._pool(4, r2="gone")
+        states[L.fake_ref(refs[0])] = "unknown"
+        misses = []
+        self.assertFalse(L.controls_ok(refs, states.get, misses))
+        self.assertEqual(misses, ["negative=unknown"])
+
     def test_fake_ref_keeps_the_portal_and_is_a_uuid_that_is_not_the_real_one(self):
         fake = L.fake_ref(_ref(7))
         self.assertEqual((fake.origin, fake.org, fake.site_id), (_ref(7).origin, _ref(7).org, _ref(7).site_id))
@@ -359,6 +430,25 @@ class ReconcileSourceTest(unittest.TestCase):
         prober = _Prober({**_answers(), L.fake_ref(_ref(900)): "unknown", _ref(1): "gone"})
         rec, _blocked, _expired = self._go(prober, candidates=[("r1", _url(1))])
         self.assertEqual(rec["control_miss"], "negative=unknown")
+
+    def test_a_closed_control_with_a_spare_does_not_block_the_source(self):
+        prober = _Prober({**_answers(), _ref(902): "live", _ref(903): "live", _ref(901): "gone", _ref(1): "gone"})
+        rec, blocked, expired = self._go(prober, candidates=[("r1", _url(1))],
+                                         controls=(_url(900), _url(901), _url(902), _url(903)))
+        self.assertFalse(blocked)
+        self.assertEqual(expired, [("s1", ["r1"], RUN_START)])
+        self.assertEqual(rec["control_swapped"], [_ref(901).job_id])
+        self.assertNotIn("control_miss", rec)
+
+    def test_swapping_a_different_control_later_in_the_round_blocks_the_source(self):
+        # 开头那遍换掉 901；探完再过一遍时 901 又读在招、902 读已停 → 一轮里换了两个不同的岗 → 拦
+        prober = _Prober({**_answers(), _ref(901): ["gone", "live"], _ref(902): ["live", "gone"], _ref(903): "live",
+                          _ref(1): "gone"})
+        rec, blocked, expired = self._go(prober, candidates=[("r1", _url(1))],
+                                         controls=(_url(900), _url(901), _url(902), _url(903)))
+        self.assertEqual((rec["blocked"], blocked, expired), ("control_failed", True, []))
+        self.assertEqual((rec["control_miss"], rec["control_swapped"]),
+                         (f"{_ref(902).job_id}=gone", [_ref(901).job_id]))
 
     def test_control_that_degrades_while_probing_blocks_the_whole_source(self):
         # 对照开头是好的，探完再过一遍时在招岗读成了已停（接口中途退化）→ 这一轮读到的都不算数
