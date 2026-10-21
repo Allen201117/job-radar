@@ -15,9 +15,10 @@ const { STALE_ON_ARRIVAL_DAYS, staleOnArrival, noveltyAgeMs, isNewWithinDays, SQ
 const DAY = 86_400_000;
 const NOW = Date.parse("2026-10-12T12:00:00Z");
 const iso = (ms) => new Date(ms).toISOString();
-const job = (seenDaysAgo, postedDaysAgo) => ({
-  first_seen_at: iso(NOW - seenDaysAgo * DAY),
-  posted_at: postedDaysAgo === null ? null : iso(NOW - postedDaysAgo * DAY),
+// now 默认用写死的 NOW，只给「被测函数自己显式收 nowMs」的用例用；被测代码读真实时钟的，传 Date.now() 进来。
+const job = (seenDaysAgo, postedDaysAgo, now = NOW) => ({
+  first_seen_at: iso(now - seenDaysAgo * DAY),
+  posted_at: postedDaysAgo === null ? null : iso(now - postedDaysAgo * DAY),
 });
 
 test("没有发布日 → 照旧按首见算", () => {
@@ -98,9 +99,12 @@ test("岗位库打分 / 粗排 / 候选收窄用的是同一个判据", () => {
   const scoring = loadTs(path.join(ROOT, "lib", "scoring.ts"));
   const prefs = { target_roles: [], target_keywords: [], target_locations: [], target_companies: [], exclude_keywords: [] };
   const base = { id: "j1", company: "某公司", title: "岗位", summary: "", location: "", status: "active" };
-  const fresh = scoring.scoreJob({ ...base, ...job(1, null) }, prefs, []);
-  const freshPosted = scoring.scoreJob({ ...base, ...job(1, 2) }, prefs, []);
-  const old = scoring.scoreJob({ ...base, ...job(1, 60) }, prefs, []);
+  // scoreJob 判「近 7 天新增」读真实时钟（isNewWithinDays 不传 nowMs），样本必须按真实的现在造。
+  // 曾按写死的 NOW（10-12）造：10-18 起 fresh 拿 0 分、CI 必红；old 拿 0 分也成了白测（首见本身就出了 7 天窗口）。
+  const realNow = Date.now();
+  const fresh = scoring.scoreJob({ ...base, ...job(1, null, realNow) }, prefs, []);
+  const freshPosted = scoring.scoreJob({ ...base, ...job(1, 2, realNow) }, prefs, []);
+  const old = scoring.scoreJob({ ...base, ...job(1, 60, realNow) }, prefs, []);
   assert.equal(fresh.score, 10);
   assert.equal(freshPosted.score, 10);
   assert.equal(old.score, 0, "进来时就已经发布 60 天的岗不拿「近 7 天新增」的分");
