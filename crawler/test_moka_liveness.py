@@ -352,6 +352,14 @@ class ReconcileSourceTest(unittest.TestCase):
         rec, blocked, expired = self._go(prober, candidates=[("r1", _url(1))])
         self.assertEqual((rec["blocked"], blocked, expired), ("control_failed", True, []))
 
+    def test_failed_control_reports_which_control_and_what_it_read(self):
+        prober = _Prober({**_answers(), _ref(901): "gone", _ref(1): "gone"})
+        rec, _blocked, _expired = self._go(prober, candidates=[("r1", _url(1))])
+        self.assertEqual(rec["control_miss"], f"{_ref(901).job_id}=gone")
+        prober = _Prober({**_answers(), L.fake_ref(_ref(900)): "unknown", _ref(1): "gone"})
+        rec, _blocked, _expired = self._go(prober, candidates=[("r1", _url(1))])
+        self.assertEqual(rec["control_miss"], "negative=unknown")
+
     def test_control_that_degrades_while_probing_blocks_the_whole_source(self):
         # 对照开头是好的，探完再过一遍时在招岗读成了已停（接口中途退化）→ 这一轮读到的都不算数
         prober = _Prober({**_answers(), _ref(900): ["live", "gone"], _ref(1): "gone"})

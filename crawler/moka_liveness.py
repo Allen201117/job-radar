@@ -164,13 +164,21 @@ def usable_blocked_reason(n_sources, n_usable):
     return None
 
 
-def controls_ok(control_refs, probe_fn):
-    """阳性：这一轮见到的岗必须全读到在招；阴性：同门户下不存在的岗位 id 必须读到已停。没有阳性对照 → False。"""
+def controls_ok(control_refs, probe_fn, misses=None):
+    """阳性：这一轮见到的岗必须全读到在招；阴性：同门户下不存在的岗位 id 必须读到已停。没有阳性对照 → False。
+    misses：传一个 list 进来，没过时往里记是哪一个对照、读到了什么（日志 / 报告用，不影响判定）。"""
     if not control_refs:
         return False
-    if any(probe_fn(ref) != "live" for ref in control_refs):
-        return False
-    return probe_fn(fake_ref(control_refs[0])) == "gone"
+    for ref in control_refs:
+        state = probe_fn(ref)
+        if state != "live":
+            if misses is not None:
+                misses.append(f"{ref.job_id}={state}")
+            return False
+    state = probe_fn(fake_ref(control_refs[0]))
+    if state != "gone" and misses is not None:
+        misses.append(f"negative={state}")
+    return state == "gone"
 
 
 def probe_all(refs, probe_fn, control_fn, *, chunk=PROBE_CHUNK, check_first=True, threads=THREADS):
@@ -274,8 +282,10 @@ def reconcile_source(source, run, *, active, seen, candidates, controls, probe_f
             rec["skipped"] = "no_listed_rows"   # 这一轮一个岗都没见到（门户清空了）：没有阳性对照，不替它下结论
             return rec, False
 
+        misses = []
+
         def control():
-            return controls_ok(control_refs, probe_fn)
+            return controls_ok(control_refs, probe_fn, misses)
 
         first, ok = probe_all(to_probe, probe_fn, control, threads=threads)
         second = {}
@@ -284,6 +294,7 @@ def reconcile_source(source, run, *, active, seen, candidates, controls, probe_f
             second, ok = probe_all(gone_once, probe_fn, control, check_first=False, threads=threads)
         if not ok:
             rec["blocked"] = "control_failed"
+            rec["control_miss"] = misses[-1] if misses else None   # 哪个对照没过、读到了什么：红了要能看出为什么红
             return rec, True
         states = settle(first, second)
 
