@@ -480,6 +480,13 @@ app-route 模板把同一个 promise 既交给 waitUntil 又交给 sendResponse�
 - 新迁移文件继续放 `supabase/migrations/`，前缀按序递增（如 `023_xxx.sql`），push 即自动应用。
 - 加新迁移后若 BASELINE 已过期，更新 `scripts/db-migrate.sh` 的 `BASELINE`。
 - **命名规约**：seed 类迁移（纯 `insert` sources 数据）文件名必须带 `_seed_` 标识；新前缀必须先 `ls supabase/migrations` 确认未被占用。前缀「纯数字 + 无新增重复」由 `scripts/check-migrations.sh` 在 CI apply 前硬校验（历史重复前缀已在脚本 GRANDFATHERED 白名单豁免，勿改名已应用文件）。
+- 🔒 **新建 public 表：同一个迁移文件里开 RLS + 写 grant（2026-10-21 立，Supabase 2026-10-30 起生效）**：
+  ❌ Supabase 10-30 起新表不再自动授权 anon / authenticated / **service_role**——不写 grant，网站（supabase-js）和爬虫（supabase-py，走 service_role）读写新表直接 42501；
+  反过来给了 anon / authenticated 读权限却没开 RLS = Security Advisor 的 `rls_disabled_in_public`（公开 key 能读改删整表）。
+  ✅ 写法照 281：`alter table public.x enable row level security;` + `revoke all … from anon, authenticated;`（按需）+ `grant select, insert, update, delete on public.x to service_role;`，登录用户要读写再 grant authenticated + 写 policy。
+  ✅ 自增主键用 identity 列（不用给序列授权）；用 bigserial 必须再 `grant usage, select on sequence public.x_id_seq to service_role;`（10-21 生产回滚事务实测：不给插不进去）。
+  ✅ `check-migrations.sh` 第 ④ 条拦前缀 > 335 的新文件（`tests/check-migrations-explicit-grants.test.js`）；只走 psql 的表在建表语句里加注释 `-- no-data-api` 免授权检查，RLS 照开。存量 37 张表线上都有授权，不受影响。
+  📌 `schema_migrations`（db-migrate.sh 的记账表）6 月起一直没开 RLS，公开 key 能读能改，Supabase 每周发信告警；10-21 起由 db-migrate.sh 每次启动时开 RLS + 撤 anon / authenticated 权限（postgres 角色 bypassrls，迁移照常读写）。
 - ⚠️ **seed 迁移里一行违反 CHECK，整批一起回滚（2026-09-03 踩）**：单个迁移文件是一个事务。
   211 给京东那条写了 `crawl_method='browser'`（该列 CHECK 只认 `http` / `playwright` / `manual`），
   结果**前面三条合法的 insert 一起没进去** —— 线上现象是「这批源一条都没有」，

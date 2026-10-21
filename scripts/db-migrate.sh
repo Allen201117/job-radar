@@ -16,8 +16,14 @@ DB="$SUPABASE_DB_URL"
 BASELINE="022"           # 截至此前缀已手动迁移到位；只登记
 MIG_DIR="supabase/migrations"
 
+# 记账表在 public 里，Data API 看得见：不开 RLS，拿公开 anon key 就能读改删它（Security Advisor 的 rls_disabled_in_public）；
+# 删掉几行，下次 push 就会把那几份老迁移在生产上重跑。本脚本走 postgres 角色（bypassrls），开 RLS 不影响这里读写。
+# 每次都跑：幂等，重建的库也锁住。lock_timeout：ALTER 要拿排他锁，被别的长事务挡住就报错，别白等到 job 超时。
 psql "$DB" -v ON_ERROR_STOP=1 -c \
-  "create table if not exists schema_migrations(version text primary key, applied_at timestamptz default now());"
+  "set lock_timeout = '10s';
+   create table if not exists schema_migrations(version text primary key, applied_at timestamptz default now());
+   alter table public.schema_migrations enable row level security;
+   revoke all on table public.schema_migrations from public, anon, authenticated;"
 
 for f in $(ls "$MIG_DIR"/*.sql | sort); do
   v="$(basename "$f")"

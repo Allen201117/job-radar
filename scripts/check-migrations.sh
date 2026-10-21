@@ -98,8 +98,71 @@ done <<EOF
 $names
 EOF
 
+# ④ 新迁移在 public 建表：同一个文件里开 RLS + 写 grant；bigserial 列再给序列授权（identity 列不用）。
+#    Supabase 2026-10-30 起新表不再自动授权 anon / authenticated / service_role，不写 grant 网站和爬虫读写就 42501；
+#    给了读权限却没开 RLS = Security Advisor 的 rls_disabled_in_public。来龙去脉见 CLAUDE.md「数据库迁移」。
+#    只走 psql 的表在建表语句那几行里加注释 -- no-data-api，免授权检查（RLS 照开）。只查前缀 > 基线的新文件。
+GRANT_BASELINE=335
+NO_API='__no_data_api__'
+create_re='(^|[^a-z0-9_])create[[:space:]]+(unlogged[[:space:]]+)?table[[:space:]]+(if[[:space:]]+not[[:space:]]+exists[[:space:]]+)?[a-z0-9_."]+'
+grant_re='(^|[^a-z0-9_])grant[[:space:]]'
+non_table_grant_re='[[:space:]]on[[:space:]]+(function|procedure|routine|sequence|schema|type|domain|database|language|all)[[:space:]]'
+all_tables_re='on[[:space:]]+all[[:space:]]+tables[[:space:]]+in[[:space:]]+schema[[:space:]]+public'
+rls_re='enable[[:space:]]+row[[:space:]]+level[[:space:]]+security'
+serial_re='[a-z0-9_"][[:space:]]+(small|big)?serial([^a-z0-9_]|$)'   # 只认「列名 + serial」的类型位置，叫 serial 的列不算
+# 不用 grep -q：pipefail 下 grep 提前退出会让 printf 吃 SIGPIPE，大文件里会误判成「没写」。
+has() { printf '%s\n' "$1" | grep -E "$2" >/dev/null; }
+while IFS= read -r name; do
+  [ -z "$name" ] && continue
+  prefix="${name%%_*}"
+  case "$prefix" in '' | *[!0-9]*) continue ;; esac
+  [ "$((10#$prefix))" -gt "$GRANT_BASELINE" ] || continue
+  # 小写 → 去注释（只认行首或空白后的 --，URL 里的 Analyst--Wealth 不是注释；no-data-api 标记换成占位词挪到行首，
+  # 免得写在分号后面被切进下一句）→ 整份连成一行再按分号切成一句一行（建表语句常跨行）。
+  stmts="$(LC_ALL=C tr 'A-Z' 'a-z' < "$MIG_DIR/$name" \
+             | LC_ALL=C sed -E -e "s/^([[:space:]]*[^-[:space:]].*[[:space:]])--[[:space:]]*no-data-api.*\$/ $NO_API \\1/" \
+                               -e 's/(^|[[:space:]])--.*$/\1/' \
+             | LC_ALL=C tr '\n;' ' \n')"
+  creates="$(printf '%s\n' "$stmts" | grep -E "$create_re" || true)"
+  [ -n "$creates" ] || continue
+  grants="$(printf '%s\n' "$stmts" | grep -E "$grant_re" || true)"
+  table_grants="$(printf '%s\n' "$grants" | grep -vE "$non_table_grant_re" || true)"
+  rls="$(printf '%s\n' "$stmts" | grep -E "$rls_re" || true)"
+  while IFS= read -r stmt; do
+    [[ $stmt =~ $create_re ]] || continue
+    ident="${BASH_REMATCH[0]##*[[:space:]]}"
+    ident="${ident//\"/}"
+    case "$ident" in
+      *.*) [ "${ident%%.*}" = "public" ] || continue; t="${ident#*.}" ;;
+      *) t="$ident" ;;
+    esac
+    word="(^|[^a-z0-9_])${t}([^a-z0-9_]|\$)"
+    if ! has "$rls" "$word"; then
+      echo "ERROR: $name 在 public 建了表 $t，没开 RLS。加：alter table public.$t enable row level security;（迁移里临时用的表改用 create temp table）"
+      fail=1
+    fi
+    case "$stmt" in *"$NO_API"*) continue ;; esac
+    if ! has "$table_grants" "$word" && ! has "$grants" "$all_tables_re"; then
+      echo "ERROR: $name 在 public 建了表 $t，没写 grant（Supabase 2026-10-30 起新表不再自动授权）。"
+      echo "       按谁要用来写，例如：grant select, insert, update, delete on public.$t to service_role;"
+      echo "       网站登录用户要读写再加 authenticated，未登录要读再加 anon。只走 psql 的表在建表语句里加注释 -- no-data-api。"
+      fail=1
+    fi
+    if has "$stmt" "$serial_re" \
+       && ! has "$grants" "on[[:space:]]+(sequence[[:space:]].*[^a-z0-9_]${t}_|all[[:space:]]+sequences)"; then
+      echo "ERROR: $name 的表 $t 用了 serial 自增列，没给序列授权（不给插不进去）。"
+      echo "       加：grant usage, select on sequence public.${t}_id_seq to service_role;（列名不是 id 就换成对应序列名），或改用 identity 列。"
+      fail=1
+    fi
+  done <<INNER
+$creates
+INNER
+done <<EOF
+$names
+EOF
+
 if [ "$fail" -ne 0 ]; then
   echo "[check-migrations] 失败：迁移文件有问题（见上）。"
   exit 1
 fi
-echo "[check-migrations] 通过：$(printf '%s\n' "$names" | grep -c .) 个迁移文件，前缀纯数字、无新增重复、新文件没有带渠道后缀的公司名。"
+echo "[check-migrations] 通过：$(printf '%s\n' "$names" | grep -c .) 个迁移文件，前缀纯数字、无新增重复、新文件没有带渠道后缀的公司名、新建的 public 表都开了 RLS 并写了授权。"
