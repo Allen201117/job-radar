@@ -377,5 +377,6 @@
   },
   "xiaoman.zhiye.com": {
     "ssr": true
-  }
+  },
+  "mediatek.zhiye.com": "https://mediatek.zhiye.com/campus/detail"
 }
